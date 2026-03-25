@@ -14,16 +14,28 @@ A loyalty and community app for houseofbeers.nl. This is a new project built fro
   /config              → Django settings, urls, wsgi
   /users               → User model, auth, Shopify service
   /loyalty             → Points, rewards, notifications
+  /recommendations     → Beer recommendations, taste profiles, favorites
   /templates           → Password reset web page
 
 /mobile
   /app
     /(auth)            → Login, register, forgot-password screens
-    /(tabs)            → Main app tabs (home, orders, loyalty, profile)
+    /(tabs)            → Main app tabs
+      index.tsx        → Home screen with notifications & beer journey menu
+      favorites.tsx    → Favorites tab
+      loyalty.tsx      → Loyalty points tab
+      profile.tsx      → Profile hub with navigation
+      /(profile)       → Profile sub-screens (Stack navigator inside tabs)
+        recommendations.tsx  → Personalized beer recommendations
+        taste-profile.tsx    → Taste wheel and style distribution
+        favorites.tsx        → Manage favorite beers
+        orders.tsx           → Shopify order history
+        connect-untappd.tsx  → Link/unlink Untappd account
     reset-password.tsx → Password reset screen (unused, web version in backend)
     _layout.tsx        → Root layout with providers
   /src
     /api               → API client and endpoint functions
+      recommendations.ts → Recommendations API (Untappd, favorites, taste profile)
     /context           → AuthContext, LanguageContext
     /i18n              → Translations (en.ts, nl.ts)
     /theme             → Colors and spacing
@@ -166,6 +178,27 @@ eas submit --platform android --profile production
 - [x] Automatic token refresh in mobile app
 - [x] Password reset web page
 
+### Phase 7: Beer Recommendations & Personalization ✅
+- [x] Untappd profile integration (link/unlink account)
+- [x] Taste profile analysis from Untappd check-ins or order history
+- [x] Personalized beer recommendations from store inventory
+- [x] Discovery picks (try something new)
+- [x] Tried beers (beers you've had before)
+- [x] Favorites system with heart button on beer cards
+- [x] Add favorites to Shopify cart (generates cart permalink)
+- [x] Taste wheel visualization (radar chart with style preferences)
+- [x] Style distribution chart
+- [x] Top breweries list
+- [x] ABV profile analysis
+
+### Phase 8: UI/UX Improvements ✅
+- [x] Reorganized navigation: Profile as hub with sub-screens
+- [x] "Jouw Bierreis" (Your Beer Journey) menu on home and profile
+- [x] Favorites tab in bottom navbar with badge count
+- [x] Clickable logo returns to home from any screen
+- [x] Bottom navbar stays visible on profile sub-screens (nested Stack in tabs)
+- [x] Consistent header with logo across all screens
+
 ---
 
 ## Current App Structure
@@ -173,12 +206,19 @@ eas submit --platform android --profile production
 ### Backend Apps
 - `users/` - User model, authentication, Shopify service, account deletion
 - `loyalty/` - Points rules, rewards, balances, transactions, redemptions, notifications
+- `recommendations/` - Beer recommendations, Untappd integration, favorites, taste profiles
 
 ### Mobile Tabs
-- **Home** - Welcome message, notifications
-- **Orders** - Shopify order history
+- **Home** - Welcome message, notifications, "Your Beer Journey" menu
+- **Favorites** - Beer wishlist with cart integration (badge shows count)
 - **Loyalty** - Points balance, rewards, transactions, redemption codes
-- **Profile** - User info, Shopify sync, language picker, logout
+- **Profile** - User hub with navigation to:
+  - Recommendations - Personalized beer picks
+  - Taste Profile - Taste wheel, style distribution, top breweries
+  - Favorites - Manage favorite beers
+  - Orders - Shopify order history
+  - Connect Untappd - Link/unlink Untappd account
+  - Settings - Shopify sync, language picker, logout
 
 ---
 
@@ -241,6 +281,19 @@ function MyComponent() {
 | POST | `/api/loyalty/sync/` | Sync points from orders |
 | GET | `/api/loyalty/notifications/` | Active notifications |
 | POST | `/api/loyalty/notifications/<id>/dismiss/` | Dismiss notification |
+
+### Recommendations
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/recommendations/` | Get personalized recommendations |
+| GET | `/api/recommendations/profile/` | Get taste profile analysis |
+| GET | `/api/recommendations/untappd/` | Get linked Untappd profile |
+| POST | `/api/recommendations/untappd/link/` | Link Untappd username |
+| POST | `/api/recommendations/untappd/unlink/` | Unlink Untappd account |
+| GET | `/api/recommendations/favorites/` | Get user's favorite beers |
+| POST | `/api/recommendations/favorites/` | Add beer to favorites |
+| DELETE | `/api/recommendations/favorites/<id>/` | Remove from favorites |
+| POST | `/api/recommendations/favorites/cart-link/` | Generate Shopify cart URL |
 
 ### Web Pages
 | URL | Description |
@@ -371,6 +424,48 @@ npx expo start
 - Product browsing from Shopify
 - Loyalty tiers/levels
 - iOS App Store release
+
+---
+
+## Recommendations System
+
+### How It Works
+The recommendations system analyzes user taste preferences to suggest beers from the House of Beers inventory.
+
+**Data Sources (in priority order):**
+1. **Untappd profile** - If linked, scrapes public check-ins to build taste profile
+2. **Order history** - Falls back to Shopify purchase history if no Untappd
+
+**Recommendation Types:**
+- **Recommendations** - Best matches based on style preferences
+- **Discovery Picks** - Beers outside comfort zone to try something new
+- **Tried Beers** - Beers from inventory that user has already consumed
+
+### Taste Profile Analysis
+- **Radar Chart (Taste Wheel)** - Visual representation of style preferences
+- **Style Distribution** - Bar chart of top beer styles
+- **Top Breweries** - Favorite breweries by count
+- **ABV Profile** - Preferred alcohol strength range
+
+### Favorites & Cart Integration
+- Users can favorite beers from recommendations
+- Favorites stored in backend with beer metadata
+- "Add to Cart" generates Shopify cart permalink with selected variants
+- Cart link opens in browser, ready for checkout
+
+### Mobile Navigation Pattern
+Profile sub-screens use a nested Stack navigator inside the tabs:
+```
+/(tabs)
+  /(profile)           → Stack navigator (hidden from tab bar)
+    _layout.tsx        → Stack with logo header
+    recommendations.tsx
+    taste-profile.tsx
+    favorites.tsx
+    orders.tsx
+    connect-untappd.tsx
+```
+This keeps the bottom tab bar visible while navigating profile screens.
 
 ---
 
