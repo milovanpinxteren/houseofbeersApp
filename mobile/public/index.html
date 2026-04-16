@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+  <!-- Primary Meta Tags -->
+  <title>House of Beers</title>
+  <meta name="title" content="House of Beers">
+  <meta name="description" content="Loyalty & community app for House of Beers - Rebels in Drinks">
+
+  <!-- PWA Meta Tags -->
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#000000">
+  <meta name="background-color" content="#000000">
+
+  <!-- iOS PWA Meta Tags -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="House of Beers">
+
+  <!-- iOS Icons -->
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="apple-touch-icon" sizes="152x152" href="/icons/apple-touch-icon-152.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon-180.png">
+  <link rel="apple-touch-icon" sizes="167x167" href="/icons/apple-touch-icon-167.png">
+
+  <!-- iOS Splash Screens -->
+  <link rel="apple-touch-startup-image" href="/icons/splash-1170x2532.png" media="(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3)">
+  <link rel="apple-touch-startup-image" href="/icons/splash-1284x2778.png" media="(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3)">
+  <link rel="apple-touch-startup-image" href="/icons/splash-1179x2556.png" media="(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3)">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png">
+  <link rel="shortcut icon" href="/favicon.ico">
+
+  <!-- Prevent telephone number detection -->
+  <meta name="format-detection" content="telephone=no">
+
+  <!-- Styles for loading state -->
+  <style>
+    html {
+      height: 100%;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      min-height: 100%;
+      height: 100%;
+      background-color: #000000;
+      overflow-x: hidden;
+    }
+
+    #root {
+      display: flex;
+      flex-direction: column;
+      min-height: 100%;
+      height: 100%;
+    }
+
+    /* Fix for React Native Web flex layout */
+    #root > div {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 100%;
+    }
+
+    /* Loading spinner */
+    .loading-container {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      background-color: #000000;
+      z-index: 9999;
+    }
+
+    .loading-logo {
+      width: 120px;
+      height: 120px;
+      margin-bottom: 24px;
+    }
+
+    .loading-spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid rgba(213, 200, 173, 0.3);
+      border-top-color: #d5c8ad;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+  </style>
+</head>
+<body>
+  <div id="root">
+    <noscript>
+      <div style="display: flex; justify-content: center; align-items: center; height: 100vh; color: #d5c8ad; text-align: center; padding: 20px;">
+        <p>JavaScript is required to run this app.</p>
+      </div>
+    </noscript>
+  </div>
+
+  <!-- Loading overlay - will be removed when React mounts -->
+  <div id="loading-overlay" class="loading-container">
+    <img src="/icons/icon-192.png" alt="House of Beers" class="loading-logo">
+    <div class="loading-spinner"></div>
+  </div>
+
+  <!-- Service Worker Registration -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function() {
+        navigator.serviceWorker.register('/service-worker.js')
+          .then(function(registration) {
+            console.log('ServiceWorker registered: ', registration.scope);
+          })
+          .catch(function(error) {
+            console.log('ServiceWorker registration failed: ', error);
+          });
+      });
+    }
+
+    // Hide loading overlay once the app is ready
+    // React will mount into #root, replacing the noscript
+    // We use a MutationObserver to detect when React has rendered
+    (function() {
+      var observer = new MutationObserver(function(mutations) {
+        var root = document.getElementById('root');
+        if (root && root.children.length > 0 && !root.querySelector('noscript')) {
+          var overlay = document.getElementById('loading-overlay');
+          if (overlay) {
+            overlay.style.opacity = '0';
+            overlay.style.transition = 'opacity 0.3s ease';
+            setTimeout(function() {
+              overlay.remove();
+            }, 300);
+          }
+          observer.disconnect();
+        }
+      });
+
+      observer.observe(document.getElementById('root'), {
+        childList: true,
+        subtree: true
+      });
+
+      // Fallback: hide after 10 seconds regardless
+      setTimeout(function() {
+        var overlay = document.getElementById('loading-overlay');
+        if (overlay) overlay.remove();
+      }, 10000);
+    })();
+  </script>
+</body>
+</html>

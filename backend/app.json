@@ -1,0 +1,28 @@
+{
+  "name": "House of Beers API",
+  "description": "Backend API for House of Beers loyalty app",
+  "scripts": {
+    "dokku": {
+      "postdeploy": "python manage.py migrate --noinput && python manage.py collectstatic --noinput"
+    }
+  },
+  "env": {
+    "SECRET_KEY": {
+      "description": "Django secret key for cryptographic signing",
+      "generator": "secret"
+    },
+    "DEBUG": {
+      "description": "Django debug mode (set to False in production)",
+      "value": "False"
+    },
+    "ALLOWED_HOSTS": {
+      "description": "Comma-separated list of allowed hostnames",
+      "required": true
+    },
+    "DATABASE_URL": {
+      "description": "PostgreSQL connection URL (auto-set by Dokku postgres plugin)",
+      "required": true
+    }
+  },
+  "addons": ["dokku-postgres"]
+}

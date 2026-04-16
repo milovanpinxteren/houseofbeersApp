@@ -1,0 +1,50 @@
+{
+  "expo": {
+    "name": "House of Beers",
+    "slug": "house-of-beers",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "scheme": "houseofbeers",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#000000"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "nl.houseofbeers.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#000000",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "package": "nl.houseofbeers.app",
+      "versionCode": 4
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro",
+      "output": "single",
+      "name": "House of Beers",
+      "shortName": "HoB",
+      "description": "Loyalty & community app for House of Beers",
+      "backgroundColor": "#000000",
+      "themeColor": "#000000"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store"
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "9d2ad88e-c03b-4973-9cf6-66ec5e2822ad"
+      }
+    },
+    "owner": "milovp"
+  }
+}
