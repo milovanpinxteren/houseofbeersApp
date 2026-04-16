@@ -6,7 +6,9 @@
       "Bash(cat:*)",
       "Bash(python:*)",
       "WebFetch(domain:shopify.dev)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(npx expo export:*)",
+      "Bash(npm run build:web:*)"
     ],
     "deny": [],
     "ask": []
