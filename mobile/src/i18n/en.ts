@@ -44,6 +44,14 @@ export default {
     learnMore: 'Learn more',
   },
 
+  // iOS Install Prompt
+  install: {
+    title: 'Install the App',
+    description: 'Add House of Beers to your home screen for quick access',
+    step1: 'Tap the Share button',
+    step2: 'Tap "Add to Home Screen"',
+  },
+
   // Orders screen
   orders: {
     title: 'Orders',
@@ -166,6 +174,8 @@ export default {
     triedBeers: 'Beers you know',
     noRecommendations: 'No recommendations yet',
     noDiscovery: 'No discovery picks yet',
+    maxPrice: 'Max price',
+    allPrices: 'All',
 
     // Taste Profile
     tasteProfile: 'Taste Profile',

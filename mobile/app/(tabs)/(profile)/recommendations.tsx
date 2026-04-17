@@ -26,6 +26,10 @@ import {
   Favorite,
 } from '../../../src/api/recommendations';
 import { colors, spacing, borderRadius } from '../../../src/theme/colors';
+import PriceSlider from '../../../src/components/PriceSlider';
+
+const MIN_PRICE = 0;
+const MAX_PRICE = 100;
 
 export default function RecommendationsScreen() {
   const { language } = useLanguage();
@@ -38,11 +42,21 @@ export default function RecommendationsScreen() {
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
   const [loadingFavorite, setLoadingFavorite] = useState<string | null>(null);
 
-  const loadData = useCallback(async () => {
+  // Price filter state (MAX_PRICE means no limit)
+  const [maxPrice, setMaxPrice] = useState(MAX_PRICE);
+  const [isFiltering, setIsFiltering] = useState(false);
+
+  const loadData = useCallback(async (priceMax?: number) => {
     try {
       setError('');
+      const priceFilter = priceMax !== undefined ? priceMax : maxPrice;
+      // Only apply filter if not at max (no limit)
+      const filterValue = priceFilter >= MAX_PRICE ? undefined : priceFilter;
       const [recsData, untappdData, favoritesData] = await Promise.all([
-        getRecommendations({ limit: 10 }),
+        getRecommendations({
+          limit: 10,
+          price_max: filterValue,
+        }),
         getUntappdProfile(),
         getFavorites(),
       ]);
@@ -56,8 +70,9 @@ export default function RecommendationsScreen() {
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
+      setIsFiltering(false);
     }
-  }, []);
+  }, [maxPrice]);
 
   useEffect(() => {
     loadData();
@@ -66,6 +81,15 @@ export default function RecommendationsScreen() {
   function handleRefresh() {
     setIsRefreshing(true);
     loadData();
+  }
+
+  function handlePriceChange(value: number) {
+    setMaxPrice(value);
+  }
+
+  function handlePriceChangeEnd(value: number) {
+    setIsFiltering(true);
+    loadData(value);
   }
 
   async function toggleFavorite(beer: ScoredBeer['beer']) {
@@ -262,6 +286,32 @@ export default function RecommendationsScreen() {
           </View>
         )}
 
+        {/* Price Filter */}
+        <View style={styles.filterCard}>
+          <View style={styles.filterHeader}>
+            <View style={styles.filterLabelRow}>
+              <Ionicons name="pricetag-outline" size={18} color={colors.primary} />
+              <Text style={styles.filterLabel}>{t('recommendations.maxPrice')}</Text>
+            </View>
+            <View style={styles.priceValueRow}>
+              {isFiltering && (
+                <ActivityIndicator size="small" color={colors.primary} style={styles.filterSpinner} />
+              )}
+              <Text style={styles.priceValue}>
+                {maxPrice >= MAX_PRICE ? t('recommendations.allPrices') : `€${maxPrice}`}
+              </Text>
+            </View>
+          </View>
+          <PriceSlider
+            min={MIN_PRICE}
+            max={MAX_PRICE}
+            value={maxPrice}
+            step={5}
+            onChange={handlePriceChange}
+            onChangeEnd={handlePriceChangeEnd}
+          />
+        </View>
+
         {/* Recommendations */}
         {renderBeerCarousel(
           t('recommendations.recommendedForYou'),
@@ -386,6 +436,45 @@ const styles = StyleSheet.create({
     width: 1,
     backgroundColor: colors.tertiary + '30',
     marginHorizontal: spacing.md,
+  },
+
+  // Price Filter
+  filterCard: {
+    backgroundColor: colors.surface,
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.md,
+    padding: spacing.md,
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: colors.tertiary + '30',
+  },
+  filterHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.md,
+  },
+  filterLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  filterLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.text,
+  },
+  priceValueRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  filterSpinner: {
+    marginRight: spacing.xs,
+  },
+  priceValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.primary,
   },
 
   // Sections

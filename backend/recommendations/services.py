@@ -79,8 +79,8 @@ class RecommendationService:
         else:
             payload['username'] = username
 
-        if price_max:
-            payload['price_max'] = price_max
+        if price_max is not None:
+            payload['price_max'] = float(price_max)
         if style_filter:
             payload['style_filter'] = style_filter
 

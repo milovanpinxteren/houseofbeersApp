@@ -127,9 +127,15 @@ export async function getRecommendations(params?: {
   style_filter?: string;
 }): Promise<RecommendationsResponse> {
   const queryParams = new URLSearchParams();
-  if (params?.limit) queryParams.set('limit', params.limit.toString());
-  if (params?.price_max) queryParams.set('price_max', params.price_max.toString());
-  if (params?.style_filter) queryParams.set('style_filter', params.style_filter);
+  if (params?.limit && params.limit > 0) {
+    queryParams.set('limit', params.limit.toString());
+  }
+  if (params?.price_max && params.price_max > 0) {
+    queryParams.set('price_max', params.price_max.toFixed(2));
+  }
+  if (params?.style_filter) {
+    queryParams.set('style_filter', params.style_filter);
+  }
 
   const query = queryParams.toString();
   const endpoint = '/recommendations/' + (query ? '?' + query : '');

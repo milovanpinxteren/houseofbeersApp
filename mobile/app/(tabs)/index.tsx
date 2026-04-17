@@ -25,6 +25,7 @@ import {
   getFavorites,
   UntappdProfile,
 } from '../../src/api/recommendations';
+import IOSInstallPrompt from '../../src/components/IOSInstallPrompt';
 
 const notificationIcons: Record<string, keyof typeof Ionicons.glyphMap> = {
   announcement: 'megaphone',
@@ -191,6 +192,8 @@ export default function HomeScreen() {
         </Text>
         <Text style={styles.subtitle}>House of Beers</Text>
       </View>
+
+      <IOSInstallPrompt />
 
       {loading ? (
         <ActivityIndicator size="large" color={colors.primary} style={styles.loader} />

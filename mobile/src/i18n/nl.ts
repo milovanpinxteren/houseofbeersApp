@@ -44,6 +44,14 @@ export default {
     learnMore: 'Meer info',
   },
 
+  // iOS Install Prompt
+  install: {
+    title: 'Installeer de App',
+    description: 'Voeg House of Beers toe aan je beginscherm voor snelle toegang',
+    step1: 'Tik op de Deel-knop',
+    step2: 'Tik op "Zet op beginscherm"',
+  },
+
   // Orders screen
   orders: {
     title: 'Bestellingen',
@@ -166,6 +174,8 @@ export default {
     triedBeers: 'Bieren die je kent',
     noRecommendations: 'Nog geen aanbevelingen',
     noDiscovery: 'Nog geen ontdekkingen',
+    maxPrice: 'Max prijs',
+    allPrices: 'Alle',
 
     // Taste Profile
     tasteProfile: 'Smaakprofiel',
