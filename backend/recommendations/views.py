@@ -62,6 +62,9 @@ class RecommendationsView(APIView):
             result['profile_source'] = profile_source
             result['profile_identifier'] = profile_identifier
 
+            from analytics.tracker import track
+            track('recommendations', user=user, source=profile_source)
+
             return Response(result)
 
         except RecommendationAPIError as e:
@@ -115,6 +118,9 @@ class TasteProfileView(APIView):
                 )
                 result['profile_source'] = 'shopify'
                 result['profile_identifier'] = user.email
+
+            from analytics.tracker import track
+            track('taste_profile', user=user)
 
             return Response(result)
 
@@ -186,6 +192,9 @@ class UntappdProfileView(APIView):
             }
         )
 
+        from analytics.tracker import track
+        track('untappd_link', user=request.user, username=username)
+
         return Response({
             'success': True,
             'untappd': UntappdProfileSerializer(profile).data,
@@ -196,6 +205,8 @@ class UntappdProfileView(APIView):
         try:
             profile = request.user.untappd_profile
             profile.delete()
+            from analytics.tracker import track
+            track('untappd_unlink', user=request.user)
             return Response({
                 'success': True,
                 'message': 'Untappd account unlinked'
@@ -254,6 +265,9 @@ class FavoritesListView(APIView):
             **serializer.validated_data
         )
 
+        from analytics.tracker import track
+        track('favorite_add', user=request.user, beer=serializer.validated_data.get('title', ''))
+
         return Response({
             'success': True,
             'favorite': FavoriteSerializer(favorite).data
@@ -267,7 +281,10 @@ class FavoriteDetailView(APIView):
     def delete(self, request, favorite_id):
         try:
             favorite = Favorite.objects.get(id=favorite_id, user=request.user)
+            title = favorite.title
             favorite.delete()
+            from analytics.tracker import track
+            track('favorite_remove', user=request.user, beer=title)
             return Response({'success': True})
         except Favorite.DoesNotExist:
             return Response(
@@ -298,6 +315,9 @@ class FavoritesCartLinkView(APIView):
         items = [f"{fav.variant_id}:1" for fav in favorites]
         cart_path = ','.join(items)
         cart_url = f"https://houseofbeers.nl/cart/{cart_path}"
+
+        from analytics.tracker import track
+        track('cart_link', user=request.user, item_count=len(items))
 
         return Response({
             'cart_url': cart_url,
@@ -345,6 +365,9 @@ class FavoritesSelectedCartLinkView(APIView):
         items = [f"{fav.variant_id}:1" for fav in favorites]
         cart_path = ','.join(items)
         cart_url = f"https://houseofbeers.nl/cart/{cart_path}"
+
+        from analytics.tracker import track
+        track('cart_link', user=request.user, item_count=len(items))
 
         return Response({
             'cart_url': cart_url,

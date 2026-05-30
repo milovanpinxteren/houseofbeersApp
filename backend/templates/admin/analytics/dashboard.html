@@ -1,0 +1,357 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block title %}Usage Analytics Dashboard{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">Home</a> &rsaquo; Usage Analytics Dashboard
+</div>
+{% endblock %}
+
+{% block content %}
+<style>
+    .dashboard { max-width: 1200px; }
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 16px;
+        margin-bottom: 30px;
+    }
+    .stat-card {
+        background: #fff;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 20px;
+        text-align: center;
+    }
+    .stat-card .number {
+        font-size: 32px;
+        font-weight: bold;
+        color: #417690;
+        line-height: 1.2;
+    }
+    .stat-card .label {
+        font-size: 13px;
+        color: #666;
+        margin-top: 4px;
+    }
+    .stat-card.highlight .number { color: #28a745; }
+    .stat-card.warn .number { color: #ffc107; }
+
+    .section {
+        background: #fff;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 24px;
+    }
+    .section h2 {
+        margin: 0 0 16px 0;
+        font-size: 18px;
+        color: #333;
+        border-bottom: 2px solid #417690;
+        padding-bottom: 8px;
+    }
+
+    .bar-chart-row {
+        display: flex;
+        align-items: center;
+        margin-bottom: 8px;
+    }
+    .bar-chart-row .label {
+        width: 180px;
+        font-size: 13px;
+        color: #333;
+        flex-shrink: 0;
+    }
+    .bar-chart-row .bar-container {
+        flex: 1;
+        height: 24px;
+        background: #f0f0f0;
+        border-radius: 4px;
+        overflow: hidden;
+        margin: 0 12px;
+    }
+    .bar-chart-row .bar {
+        height: 100%;
+        background: #417690;
+        border-radius: 4px;
+        transition: width 0.3s;
+    }
+    .bar-chart-row .count {
+        width: 50px;
+        text-align: right;
+        font-weight: bold;
+        font-size: 14px;
+        color: #333;
+        flex-shrink: 0;
+    }
+
+    .daily-chart {
+        display: flex;
+        align-items: flex-end;
+        gap: 2px;
+        height: 120px;
+        padding: 0;
+        border-bottom: 1px solid #ddd;
+        margin-bottom: 4px;
+    }
+    .daily-chart .day {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-end;
+        height: 100%;
+    }
+    .daily-chart .day .bar {
+        width: 100%;
+        background: #417690;
+        border-radius: 2px 2px 0 0;
+        min-height: 1px;
+    }
+    .daily-chart .day .bar.secondary {
+        background: #79aec8;
+    }
+    .chart-labels {
+        display: flex;
+        gap: 2px;
+    }
+    .chart-labels .day-label {
+        flex: 1;
+        text-align: center;
+        font-size: 9px;
+        color: #999;
+    }
+    .chart-legend {
+        display: flex;
+        gap: 20px;
+        margin-bottom: 12px;
+        font-size: 13px;
+    }
+    .chart-legend span::before {
+        content: '';
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 2px;
+        margin-right: 6px;
+        vertical-align: middle;
+    }
+    .chart-legend .legend-users::before { background: #417690; }
+    .chart-legend .legend-events::before { background: #79aec8; }
+
+    .two-col {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 24px;
+    }
+    @media (max-width: 900px) {
+        .two-col { grid-template-columns: 1fr; }
+    }
+
+    .recent-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+    }
+    .recent-table th {
+        text-align: left;
+        padding: 8px;
+        border-bottom: 2px solid #ddd;
+        color: #666;
+        font-weight: 600;
+    }
+    .recent-table td {
+        padding: 8px;
+        border-bottom: 1px solid #eee;
+    }
+    .event-badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 11px;
+        font-weight: 600;
+        background: #e8f4f8;
+        color: #417690;
+    }
+    .top-user-row {
+        display: flex;
+        align-items: center;
+        margin-bottom: 6px;
+        font-size: 13px;
+    }
+    .top-user-row .rank {
+        width: 24px;
+        font-weight: bold;
+        color: #999;
+        flex-shrink: 0;
+    }
+    .top-user-row .email {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .top-user-row .user-count {
+        font-weight: bold;
+        color: #417690;
+        margin-left: 8px;
+    }
+</style>
+
+<div class="dashboard">
+
+    <!-- Overview stats -->
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="number">{{ total_users }}</div>
+            <div class="label">Total Users</div>
+        </div>
+        <div class="stat-card">
+            <div class="number">{{ users_with_shopify }}</div>
+            <div class="label">Shopify Linked</div>
+        </div>
+        <div class="stat-card highlight">
+            <div class="number">{{ active_today }}</div>
+            <div class="label">Active Today</div>
+        </div>
+        <div class="stat-card highlight">
+            <div class="number">{{ active_7d }}</div>
+            <div class="label">Active (7 days)</div>
+        </div>
+        <div class="stat-card">
+            <div class="number">{{ active_30d }}</div>
+            <div class="label">Active (30 days)</div>
+        </div>
+        <div class="stat-card">
+            <div class="number">{{ total_events }}</div>
+            <div class="label">Total Events</div>
+        </div>
+    </div>
+
+    <!-- Feature adoption -->
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="number">{{ total_favorites }}</div>
+            <div class="label">Total Favorites</div>
+        </div>
+        <div class="stat-card">
+            <div class="number">{{ total_untappd }}</div>
+            <div class="label">Untappd Linked</div>
+        </div>
+        <div class="stat-card">
+            <div class="number">{{ total_redemptions }}</div>
+            <div class="label">Rewards Redeemed</div>
+        </div>
+    </div>
+
+    <!-- Daily activity chart -->
+    <div class="section">
+        <h2>Daily Activity (Last 30 Days)</h2>
+        <div class="chart-legend">
+            <span class="legend-users">Active Users</span>
+            <span class="legend-events">Total Events</span>
+        </div>
+        <div class="daily-chart">
+            {% for day in chart_days %}
+            <div class="day" title="{{ day.label }}: {{ day.active_users }} users, {{ day.events }} events">
+                <div class="bar secondary" style="height: {{ day.event_bar_height }}%;"></div>
+            </div>
+            <div class="day">
+                <div class="bar" style="height: {{ day.user_bar_height }}%;"></div>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="chart-labels">
+            {% for day in chart_days %}
+            {% if forloop.counter0|divisibleby:5 %}
+            <div class="day-label" style="flex: 2;">{{ day.label }}</div>
+            {% else %}
+            {% if forloop.counter0|divisibleby:5 == False and forloop.counter|divisibleby:5 == False %}
+            {% endif %}
+            {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Events breakdown -->
+    <div class="two-col">
+        <div class="section">
+            <h2>Feature Usage (Last 7 Days)</h2>
+            {% for event in events_by_type_7d %}
+            <div class="bar-chart-row">
+                <div class="label">{{ event.label }}</div>
+                <div class="bar-container">
+                    <div class="bar" style="width: {{ event.bar_width }}%;"></div>
+                </div>
+                <div class="count">{{ event.count }}</div>
+            </div>
+            {% empty %}
+            <p style="color: #999; font-style: italic;">No events recorded yet.</p>
+            {% endfor %}
+        </div>
+
+        <div class="section">
+            <h2>Feature Usage (Last 30 Days)</h2>
+            {% for event in events_by_type_30d %}
+            <div class="bar-chart-row">
+                <div class="label">{{ event.label }}</div>
+                <div class="bar-container">
+                    <div class="bar" style="width: {{ event.bar_width }}%;"></div>
+                </div>
+                <div class="count">{{ event.count }}</div>
+            </div>
+            {% empty %}
+            <p style="color: #999; font-style: italic;">No events recorded yet.</p>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Bottom row -->
+    <div class="two-col">
+        <!-- Top users -->
+        <div class="section">
+            <h2>Most Active Users (Last 30 Days)</h2>
+            {% for user in top_users %}
+            <div class="top-user-row">
+                <div class="rank">{{ forloop.counter }}.</div>
+                <div class="email">{{ user.user__email }}</div>
+                <div class="user-count">{{ user.count }} events</div>
+            </div>
+            {% empty %}
+            <p style="color: #999; font-style: italic;">No activity recorded yet.</p>
+            {% endfor %}
+        </div>
+
+        <!-- Recent activity -->
+        <div class="section">
+            <h2>Recent Activity</h2>
+            <table class="recent-table">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Event</th>
+                        <th>User</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for event in recent_events %}
+                    <tr>
+                        <td>{{ event.timestamp|timesince }} ago</td>
+                        <td><span class="event-badge">{{ event.get_event_type_display }}</span></td>
+                        <td>{{ event.user.email|default:"-" }}</td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="3" style="color: #999; font-style: italic;">No events recorded yet.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+</div>
+{% endblock %}

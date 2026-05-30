@@ -34,6 +34,7 @@ export default {
     favorites: 'Favorieten',
     loyalty: 'Loyaliteit',
     profile: 'Profiel',
+    community: 'Community',
   },
 
   // Home screen
@@ -221,5 +222,85 @@ export default {
     untappdConnected: 'Je Untappd account is gekoppeld!',
     untappdDisconnected: 'Je Untappd account is ontkoppeld.',
     disconnectError: 'Untappd ontkoppelen mislukt',
+  },
+
+  // Community
+  community: {
+    feed: 'Community',
+    emptyFeed: 'Nog geen berichten. Wees de eerste!',
+    newPost: 'Nieuw Bericht',
+    writePost: 'Wat drink je?',
+    postPlaceholder: 'Deel een bierreview of zeg hoi...',
+    shareReview: 'Bierreview',
+    shareBeer: 'Deel een Bier',
+    textPost: 'Tekstbericht',
+    post: 'Plaatsen',
+    deletePost: 'Bericht verwijderen',
+    deletePostConfirm: 'Weet je zeker dat je dit bericht wilt verwijderen?',
+    likes: 'likes',
+    like: 'like',
+    comments: 'reacties',
+    comment: 'reactie',
+    addComment: 'Reageer...',
+    send: 'Verstuur',
+    attachBeer: 'Bier toevoegen',
+    selectBeer: 'Selecteer een bier uit favorieten',
+    noBeerToAttach: 'Voeg eerst bieren toe aan favorieten',
+    ago: 'geleden',
+
+    members: 'Leden',
+    noMembers: 'Nog geen community leden',
+    beersTried: 'bieren geprobeerd',
+    favorites: 'favorieten',
+    viewProfile: 'Bekijk Profiel',
+
+    communityProfile: 'Community Profiel',
+    displayName: 'Weergavenaam',
+    bio: 'Bio',
+    bioPlaceholder: 'Vertel over je bierreis...',
+    visibility: 'Zichtbaar in Community',
+    visibilityHint: 'Andere leden kunnen je profiel en berichten zien',
+    hiddenHint: 'Je bent verborgen voor de community',
+    editProfile: 'Profiel Bewerken',
+
+    messages: 'Berichten',
+    noMessages: 'Nog geen gesprekken',
+    noMessagesHint: 'Start een gesprek met een community lid',
+    sendMessage: 'Stuur Bericht',
+    messagePlaceholder: 'Typ een bericht...',
+    shareBeerInMessage: 'Deel een bier',
+    you: 'Jij',
+
+    recentCheckins: 'Recente Check-ins',
+    noCheckins: 'Geen check-in data beschikbaar',
+    recentPosts: 'Recente Berichten',
+    noPosts: 'Nog geen berichten',
+
+    // Groups
+    groups: 'Groepen',
+    chats: 'Chats',
+    browseGroups: 'Groepen bekijken',
+    joinGroup: 'Deelnemen',
+    leaveGroup: 'Groep verlaten',
+    leaveGroupConfirm: 'Weet je zeker dat je deze groep wilt verlaten?',
+    groupMembers: 'Leden',
+    groupInfo: 'Groepsinfo',
+    noGroups: 'Nog geen groepen',
+    noGroupsHint: 'Bekijk beschikbare groepen om deel te nemen',
+    noChats: 'Nog geen chats',
+    noChatsHint: 'Start een gesprek of neem deel aan een groep',
+    joined: 'Lid',
+
+    // Replies
+    reply: 'Reageer',
+    replies: 'reacties',
+    replyTo: 'Reageer op',
+
+    // Search
+    searchPlaceholder: 'Zoeken...',
+
+    loadError: 'Community laden mislukt',
+    postError: 'Bericht plaatsen mislukt',
+    messageError: 'Bericht versturen mislukt',
   },
 };

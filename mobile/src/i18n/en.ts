@@ -34,6 +34,7 @@ export default {
     favorites: 'Favorites',
     loyalty: 'Loyalty',
     profile: 'Profile',
+    community: 'Community',
   },
 
   // Home screen
@@ -221,5 +222,85 @@ export default {
     untappdConnected: 'Your Untappd account has been connected!',
     untappdDisconnected: 'Your Untappd account has been disconnected.',
     disconnectError: 'Failed to disconnect Untappd',
+  },
+
+  // Community
+  community: {
+    feed: 'Community',
+    emptyFeed: 'No posts yet. Be the first to share!',
+    newPost: 'New Post',
+    writePost: 'What are you drinking?',
+    postPlaceholder: 'Share a beer review or say hi...',
+    shareReview: 'Beer Review',
+    shareBeer: 'Beer Share',
+    textPost: 'Text Post',
+    post: 'Post',
+    deletePost: 'Delete Post',
+    deletePostConfirm: 'Are you sure you want to delete this post?',
+    likes: 'likes',
+    like: 'like',
+    comments: 'comments',
+    comment: 'comment',
+    addComment: 'Add a comment...',
+    send: 'Send',
+    attachBeer: 'Attach a beer',
+    selectBeer: 'Select a beer from favorites',
+    noBeerToAttach: 'Add beers to favorites first',
+    ago: 'ago',
+
+    members: 'Members',
+    noMembers: 'No community members yet',
+    beersTried: 'beers tried',
+    favorites: 'favorites',
+    viewProfile: 'View Profile',
+
+    communityProfile: 'Community Profile',
+    displayName: 'Display Name',
+    bio: 'Bio',
+    bioPlaceholder: 'Tell us about your beer journey...',
+    visibility: 'Visible in Community',
+    visibilityHint: 'Other members can see your profile and posts',
+    hiddenHint: 'You are hidden from the community',
+    editProfile: 'Edit Profile',
+
+    messages: 'Messages',
+    noMessages: 'No conversations yet',
+    noMessagesHint: 'Start a conversation with a community member',
+    sendMessage: 'Send Message',
+    messagePlaceholder: 'Type a message...',
+    shareBeerInMessage: 'Share a beer',
+    you: 'You',
+
+    recentCheckins: 'Recent Check-ins',
+    noCheckins: 'No check-in data available',
+    recentPosts: 'Recent Posts',
+    noPosts: 'No posts yet',
+
+    // Groups
+    groups: 'Groups',
+    chats: 'Chats',
+    browseGroups: 'Browse Groups',
+    joinGroup: 'Join',
+    leaveGroup: 'Leave Group',
+    leaveGroupConfirm: 'Are you sure you want to leave this group?',
+    groupMembers: 'Members',
+    groupInfo: 'Group Info',
+    noGroups: 'No groups yet',
+    noGroupsHint: 'Browse available groups to join',
+    noChats: 'No chats yet',
+    noChatsHint: 'Start a conversation or join a group',
+    joined: 'Joined',
+
+    // Replies
+    reply: 'Reply',
+    replies: 'replies',
+    replyTo: 'Replying to',
+
+    // Search
+    searchPlaceholder: 'Search...',
+
+    loadError: 'Failed to load community data',
+    postError: 'Failed to create post',
+    messageError: 'Failed to send message',
   },
 };

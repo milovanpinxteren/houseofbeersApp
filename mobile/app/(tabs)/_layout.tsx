@@ -6,6 +6,7 @@ import { t } from '../../src/i18n';
 import { colors } from '../../src/theme/colors';
 import { useState, useEffect } from 'react';
 import { getFavorites } from '../../src/api/recommendations';
+import { getUnreadCount } from '../../src/api/community';
 
 function LogoTitle() {
   return (
@@ -22,10 +23,14 @@ function LogoTitle() {
 export default function TabsLayout() {
   const { language } = useLanguage();
   const [favoritesCount, setFavoritesCount] = useState(0);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
     getFavorites()
       .then((data) => setFavoritesCount(data.favorites.length))
+      .catch(() => {});
+    getUnreadCount()
+      .then((data) => setUnreadCount(data.unread_count))
       .catch(() => {});
   }, []);
 
@@ -74,6 +79,25 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="community"
+        options={{
+          title: 'Community',
+          tabBarLabel: t('tabs.community'),
+          tabBarIcon: ({ color, size }) => (
+            <View>
+              <Ionicons name="people" size={size} color={color} />
+              {unreadCount > 0 && (
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </Text>
+                </View>
+              )}
+            </View>
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="loyalty"
         options={{
           title: 'Loyalty',
@@ -95,6 +119,13 @@ export default function TabsLayout() {
       />
       <Tabs.Screen
         name="(profile)"
+        options={{
+          href: null,
+          headerShown: false,
+        }}
+      />
+      <Tabs.Screen
+        name="(community)"
         options={{
           href: null,
           headerShown: false,

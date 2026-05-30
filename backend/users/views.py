@@ -30,6 +30,18 @@ class EmailTokenObtainPairView(TokenObtainPairView):
     """Custom JWT login view that uses email instead of username."""
     serializer_class = EmailTokenObtainPairSerializer
 
+    def post(self, request, *args, **kwargs):
+        response = super().post(request, *args, **kwargs)
+        if response.status_code == 200:
+            from analytics.tracker import track
+            email = request.data.get('email', '')
+            try:
+                user = User.objects.get(email=email)
+                track('login', user=user)
+            except User.DoesNotExist:
+                pass
+        return response
+
 
 def password_reset_page(request):
     """Render the password reset page."""
@@ -54,6 +66,9 @@ class RegisterView(generics.CreateAPIView):
             shopify_linked = service.link_customer_to_user(user)
         except Exception as e:
             logger.error(f"Shopify linking failed for {user.email}: {e}")
+
+        from analytics.tracker import track
+        track('register', user=user)
 
         return Response(
             {
@@ -258,6 +273,9 @@ class UserOrdersView(APIView):
                     ],
                 }
                 formatted_orders.append(formatted_order)
+
+            from analytics.tracker import track
+            track('orders_view', user=user, order_count=len(formatted_orders))
 
             return Response({'orders': formatted_orders})
 

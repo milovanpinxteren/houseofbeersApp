@@ -86,6 +86,8 @@ class RedeemRewardView(APIView):
         )
 
         if result['success']:
+            from analytics.tracker import track
+            track('reward_redeem', user=request.user, reward_id=serializer.validated_data['reward_id'])
             return Response(result)
         return Response(result, status=status.HTTP_400_BAD_REQUEST)
 
@@ -128,6 +130,9 @@ class SyncPointsView(APIView):
 
             # Get updated balance
             balance = loyalty_service.get_or_create_balance(user)
+
+            from analytics.tracker import track
+            track('points_sync', user=user, points_awarded=result['total_awarded'])
 
             return Response({
                 'success': True,
@@ -191,5 +196,8 @@ class NotificationDismissView(APIView):
             user=request.user,
             notification=notification
         )
+
+        from analytics.tracker import track
+        track('notification_dismiss', user=request.user)
 
         return Response({'success': True})

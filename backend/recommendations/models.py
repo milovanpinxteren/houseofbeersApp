@@ -37,7 +37,7 @@ class Favorite(models.Model):
     price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     image_url = models.URLField(max_length=500, blank=True)
     product_url = models.URLField(max_length=500, blank=True)
-    untappd_rating = models.DecimalField(max_digits=3, decimal_places=2, null=True, blank=True)
+    untappd_rating = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     abv = models.DecimalField(max_digits=4, decimal_places=1, null=True, blank=True)
     style = models.CharField(max_length=100, blank=True)
 

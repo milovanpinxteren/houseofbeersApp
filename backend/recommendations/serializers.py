@@ -36,9 +36,9 @@ class AddFavoriteSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=255)
     vendor = serializers.CharField(max_length=255, required=False, allow_blank=True)
     price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True)
-    image_url = serializers.URLField(max_length=500, required=False, allow_blank=True)
-    product_url = serializers.URLField(max_length=500, required=False, allow_blank=True)
-    untappd_rating = serializers.DecimalField(max_digits=3, decimal_places=2, required=False, allow_null=True)
+    image_url = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    product_url = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    untappd_rating = serializers.FloatField(required=False, allow_null=True)
     abv = serializers.DecimalField(max_digits=4, decimal_places=1, required=False, allow_null=True)
     style = serializers.CharField(max_length=100, required=False, allow_blank=True)
 
