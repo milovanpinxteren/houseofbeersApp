@@ -4,6 +4,7 @@ from .models import (
     CommunityProfile, Post, PostLike, PostComment,
     Conversation, Message, CachedBeerCheckin,
     Group, GroupMembership, GroupMessage,
+    Suggestion, SuggestionVote, SuggestionComment,
 )
 
 
@@ -164,6 +165,57 @@ class GroupMessageAdmin(admin.ModelAdmin):
         return bool(obj.beer_id)
     has_beer.boolean = True
     has_beer.short_description = 'Beer'
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+# --- Suggestions (Forum) ---
+
+@admin.register(Suggestion)
+class SuggestionAdmin(admin.ModelAdmin):
+    list_display = ['title', 'author_display', 'tag', 'status', 'vote_count_display',
+                    'comment_count_display', 'created_at']
+    list_filter = ['status', 'created_at']
+    list_editable = ['status']
+    search_fields = ['title', 'content', 'tag', 'author__email']
+    readonly_fields = ['author', 'created_at', 'updated_at']
+    ordering = ['-created_at']
+
+    def author_display(self, obj):
+        return obj.author.email
+    author_display.short_description = 'Author'
+
+    def vote_count_display(self, obj):
+        return obj.votes.count()
+    vote_count_display.short_description = 'Votes'
+
+    def comment_count_display(self, obj):
+        return obj.comments.count()
+    comment_count_display.short_description = 'Comments'
+
+
+@admin.register(SuggestionComment)
+class SuggestionCommentAdmin(admin.ModelAdmin):
+    list_display = ['author_display', 'suggestion_title', 'content_preview', 'created_at']
+    search_fields = ['author__email', 'content']
+    readonly_fields = ['suggestion', 'author', 'created_at']
+    ordering = ['-created_at']
+
+    def author_display(self, obj):
+        return obj.author.email
+    author_display.short_description = 'Author'
+
+    def suggestion_title(self, obj):
+        return obj.suggestion.title[:60]
+    suggestion_title.short_description = 'Suggestion'
+
+    def content_preview(self, obj):
+        return obj.content[:80] + '...' if len(obj.content) > 80 else obj.content
+    content_preview.short_description = 'Content'
 
     def has_add_permission(self, request):
         return False

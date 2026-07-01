@@ -3,6 +3,7 @@ from .models import (
     CommunityProfile, Post, PostLike, PostComment,
     Conversation, Message, CachedBeerCheckin,
     Group, GroupMembership, GroupMessage,
+    Suggestion, SuggestionVote, SuggestionComment,
 )
 
 
@@ -235,3 +236,39 @@ class CachedBeerCheckinSerializer(serializers.ModelSerializer):
             'beer_title', 'beer_vendor', 'beer_style', 'beer_abv',
             'user_rating', 'checkin_date',
         ]
+
+
+# --- Suggestions (Forum) ---
+
+class SuggestionSerializer(serializers.ModelSerializer):
+    author = AuthorSerializer(read_only=True)
+    vote_count = serializers.IntegerField(read_only=True)
+    comment_count = serializers.IntegerField(read_only=True)
+    is_voted = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = Suggestion
+        fields = [
+            'id', 'author', 'title', 'content', 'tag', 'status',
+            'vote_count', 'comment_count', 'is_voted',
+            'created_at',
+        ]
+        read_only_fields = ['id', 'author', 'status', 'vote_count',
+                            'comment_count', 'is_voted', 'created_at']
+
+
+class CreateSuggestionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Suggestion
+        fields = ['title', 'content', 'tag']
+
+
+class SuggestionCommentSerializer(serializers.ModelSerializer):
+    author = AuthorSerializer(read_only=True)
+    vote_count = serializers.IntegerField(read_only=True, default=0)
+    is_voted = serializers.BooleanField(read_only=True, default=False)
+
+    class Meta:
+        model = SuggestionComment
+        fields = ['id', 'author', 'content', 'vote_count', 'is_voted', 'created_at']
+        read_only_fields = ['id', 'author', 'vote_count', 'is_voted', 'created_at']

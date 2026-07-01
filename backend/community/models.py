@@ -239,3 +239,73 @@ class CachedBeerCheckin(models.Model):
 
     def __str__(self):
         return f"{self.user.email}: {self.beer_title} ({self.user_rating})"
+
+
+class Suggestion(models.Model):
+    STATUS_CHOICES = [
+        ('open', 'Open'),
+        ('planned', 'Planned'),
+        ('done', 'Done'),
+        ('declined', 'Declined'),
+    ]
+
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='suggestions',
+    )
+    title = models.CharField(max_length=200)
+    content = models.TextField(max_length=1000)
+    tag = models.CharField(max_length=50, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='open')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.title} by {self.author.email}"
+
+
+class SuggestionVote(models.Model):
+    suggestion = models.ForeignKey(Suggestion, on_delete=models.CASCADE, related_name='votes')
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='suggestion_votes',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ['suggestion', 'user']
+
+
+class SuggestionComment(models.Model):
+    suggestion = models.ForeignKey(Suggestion, on_delete=models.CASCADE, related_name='comments')
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='suggestion_comments',
+    )
+    content = models.TextField(max_length=500)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"Comment by {self.author.email} on '{self.suggestion.title}'"
+
+
+class SuggestionCommentVote(models.Model):
+    comment = models.ForeignKey(SuggestionComment, on_delete=models.CASCADE, related_name='votes')
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='suggestion_comment_votes',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ['comment', 'user']

@@ -1,17 +1,19 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, Image, TextInput,
   RefreshControl, ActivityIndicator, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { useLanguage } from '../../src/context/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { t } from '../../src/i18n';
 import { colors, spacing, borderRadius } from '../../src/theme/colors';
 import {
   getFeed, toggleLike, deletePost, getGroups, getChats,
-  Post, Group, ChatItem,
+  getSuggestions, toggleSuggestionVote, deleteSuggestion,
+  Post, Group, ChatItem, Suggestion,
 } from '../../src/api/community';
 
 function timeAgo(dateStr: string): string {
@@ -25,7 +27,14 @@ function timeAgo(dateStr: string): string {
   return `${days}d`;
 }
 
-// --- Post Card (reused from before) ---
+const STATUS_COLORS: Record<string, string> = {
+  open: colors.primary,
+  planned: colors.warning,
+  done: colors.success,
+  declined: colors.textMuted,
+};
+
+// --- Post Card ---
 
 function PostCard({ post, userId, onLike, onDelete, onComment }: {
   post: Post;
@@ -123,7 +132,9 @@ function FeedTab({ userId }: { userId: number }) {
       const data = await getFeed();
       setPosts(data.results);
       setNextCursor(data.next);
-    } catch {} finally {
+    } catch {
+      Alert.alert(t('error'), t('community.loadError'));
+    } finally {
       setIsLoading(false);
       setIsRefreshing(false);
     }
@@ -139,7 +150,9 @@ function FeedTab({ userId }: { userId: number }) {
     } catch {} finally { setLoadingMore(false); }
   }, [nextCursor, loadingMore]);
 
-  useEffect(() => { loadFeed(); }, [loadFeed]);
+  useFocusEffect(
+    useCallback(() => { loadFeed(); }, [loadFeed])
+  );
 
   const handleLike = useCallback(async (postId: number) => {
     try {
@@ -197,10 +210,13 @@ function GroupsTab() {
 
   const load = useCallback(async () => {
     try { const data = await getGroups(); setGroups(data.groups); }
-    catch {} finally { setIsLoading(false); setIsRefreshing(false); }
+    catch { Alert.alert(t('error'), t('community.loadError')); }
+    finally { setIsLoading(false); setIsRefreshing(false); }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useFocusEffect(
+    useCallback(() => { load(); }, [load])
+  );
 
   if (isLoading) return <View style={styles.center}><ActivityIndicator size="large" color={colors.primary} /></View>;
 
@@ -256,10 +272,13 @@ function ChatsTab({ userId }: { userId: number }) {
 
   const load = useCallback(async () => {
     try { const data = await getChats(); setChats(data.chats); }
-    catch {} finally { setIsLoading(false); setIsRefreshing(false); }
+    catch { Alert.alert(t('error'), t('community.loadError')); }
+    finally { setIsLoading(false); setIsRefreshing(false); }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useFocusEffect(
+    useCallback(() => { load(); }, [load])
+  );
 
   const filteredChats = searchQuery
     ? chats.filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -346,17 +365,161 @@ function ChatsTab({ userId }: { userId: number }) {
   );
 }
 
+// --- Forum Tab ---
+
+function ForumTab({ userId }: { userId: number }) {
+  const { language } = useLanguage();
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [sortBy, setSortBy] = useState<'top' | 'new'>('top');
+
+  const load = useCallback(async () => {
+    try {
+      const data = await getSuggestions(1, sortBy);
+      setSuggestions(data.results);
+    } catch {
+      Alert.alert(t('error'), t('community.loadError'));
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
+    }
+  }, [sortBy]);
+
+  useFocusEffect(
+    useCallback(() => { load(); }, [load])
+  );
+
+  const handleVote = useCallback(async (id: number) => {
+    try {
+      const result = await toggleSuggestionVote(id);
+      setSuggestions(prev => prev.map(s =>
+        s.id === id ? { ...s, is_voted: result.voted, vote_count: result.vote_count } : s
+      ));
+    } catch {}
+  }, []);
+
+  const handleDelete = useCallback((id: number) => {
+    Alert.alert(t('community.deleteSuggestion'), t('community.deleteSuggestionConfirm'), [
+      { text: t('cancel'), style: 'cancel' },
+      { text: t('community.deleteSuggestion'), style: 'destructive', onPress: async () => {
+        try { await deleteSuggestion(id); setSuggestions(prev => prev.filter(s => s.id !== id)); } catch {}
+      }},
+    ]);
+  }, []);
+
+  const statusLabel = (s: string) => t(`community.status${s.charAt(0).toUpperCase() + s.slice(1)}`);
+
+  if (isLoading) return <View style={styles.center}><ActivityIndicator size="large" color={colors.primary} /></View>;
+
+  return (
+    <View style={{ flex: 1 }}>
+      {/* Sort toggle */}
+      <View style={styles.sortBar}>
+        {(['top', 'new'] as const).map(key => (
+          <TouchableOpacity
+            key={key}
+            style={[styles.sortBtn, sortBy === key && styles.sortBtnActive]}
+            onPress={() => { setSortBy(key); setIsLoading(true); }}
+          >
+            <Ionicons
+              name={key === 'top' ? 'trending-up' : 'time-outline'}
+              size={14}
+              color={sortBy === key ? colors.background : colors.textMuted}
+            />
+            <Text style={[styles.sortBtnText, sortBy === key && styles.sortBtnTextActive]}>
+              {t(`community.sort${key === 'top' ? 'Top' : 'New'}`)}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <FlatList
+        data={suggestions}
+        keyExtractor={(item) => item.id.toString()}
+        renderItem={({ item }) => {
+          const isOwn = item.author.user_id === userId;
+          return (
+            <TouchableOpacity
+              style={styles.suggestionCard}
+              onPress={() => router.push(`/(tabs)/(community)/suggestion-detail?suggestionId=${item.id}`)}
+              activeOpacity={0.7}
+            >
+              {/* Vote column */}
+              <TouchableOpacity style={styles.voteCol} onPress={() => handleVote(item.id)}>
+                <Ionicons
+                  name={item.is_voted ? 'arrow-up-circle' : 'arrow-up-circle-outline'}
+                  size={28}
+                  color={item.is_voted ? colors.primary : colors.textMuted}
+                />
+                <Text style={[styles.voteCount, item.is_voted && { color: colors.primary }]}>
+                  {item.vote_count}
+                </Text>
+              </TouchableOpacity>
+
+              {/* Content */}
+              <View style={styles.suggestionContent}>
+                <View style={styles.suggestionTopRow}>
+                  {item.tag ? (
+                    <View style={styles.tagBadge}>
+                      <Text style={styles.tagText}>{item.tag}</Text>
+                    </View>
+                  ) : null}
+                  {item.status !== 'open' && (
+                    <View style={[styles.statusBadge, { backgroundColor: (STATUS_COLORS[item.status] || colors.textMuted) + '25' }]}>
+                      <Text style={[styles.statusText, { color: STATUS_COLORS[item.status] || colors.textMuted }]}>
+                        {statusLabel(item.status)}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+                <Text style={styles.suggestionTitle} numberOfLines={2}>{item.title}</Text>
+                <Text style={styles.suggestionBody} numberOfLines={2}>{item.content}</Text>
+                <View style={styles.suggestionFooter}>
+                  <Text style={styles.suggestionMeta}>{item.author.display_name} · {timeAgo(item.created_at)}</Text>
+                  <View style={styles.commentCountRow}>
+                    <Ionicons name="chatbubble-outline" size={13} color={colors.textMuted} />
+                    <Text style={styles.suggestionMeta}>{item.comment_count}</Text>
+                  </View>
+                  {isOwn && (
+                    <TouchableOpacity onPress={() => handleDelete(item.id)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                      <Ionicons name="trash-outline" size={14} color={colors.textMuted} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            </TouchableOpacity>
+          );
+        }}
+        ListEmptyComponent={
+          <View style={styles.emptyState}>
+            <Ionicons name="bulb-outline" size={48} color={colors.textMuted} />
+            <Text style={styles.emptyText}>{t('community.noSuggestions')}</Text>
+            <Text style={styles.emptyHint}>{t('community.noSuggestionsHint')}</Text>
+          </View>
+        }
+        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={() => { setIsRefreshing(true); load(); }} tintColor={colors.primary} />}
+        contentContainerStyle={suggestions.length === 0 ? { flex: 1 } : { paddingBottom: spacing.lg }}
+      />
+      <TouchableOpacity style={styles.fab} onPress={() => router.push('/(tabs)/(community)/new-suggestion')} activeOpacity={0.8}>
+        <Ionicons name="add" size={28} color={colors.background} />
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 // --- Main Screen ---
 
 export default function CommunityScreen() {
   const { language } = useLanguage();
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<'feed' | 'groups' | 'chats'>('feed');
+  const [activeTab, setActiveTab] = useState<'feed' | 'groups' | 'chats' | 'forum'>('feed');
 
   const tabs = [
     { key: 'feed' as const, label: t('community.feed') },
     { key: 'groups' as const, label: t('community.groups') },
     { key: 'chats' as const, label: t('community.chats') },
+    { key: 'forum' as const, label: t('community.forum') },
   ];
 
   return (
@@ -378,6 +541,7 @@ export default function CommunityScreen() {
       {activeTab === 'feed' && <FeedTab userId={user?.id ?? 0} />}
       {activeTab === 'groups' && <GroupsTab />}
       {activeTab === 'chats' && <ChatsTab userId={user?.id ?? 0} />}
+      {activeTab === 'forum' && <ForumTab userId={user?.id ?? 0} />}
     </View>
   );
 }
@@ -390,7 +554,7 @@ const styles = StyleSheet.create({
   topTabBar: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: colors.tertiary + '30' },
   topTab: { flex: 1, alignItems: 'center', paddingVertical: spacing.md, borderBottomWidth: 2, borderBottomColor: 'transparent' },
   topTabActive: { borderBottomColor: colors.primary },
-  topTabText: { fontSize: 15, fontWeight: '600', color: colors.textMuted },
+  topTabText: { fontSize: 14, fontWeight: '600', color: colors.textMuted },
   topTabTextActive: { color: colors.primary },
 
   // Post card
@@ -438,6 +602,27 @@ const styles = StyleSheet.create({
   // Search
   searchBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, marginHorizontal: spacing.md, marginTop: spacing.sm, borderRadius: borderRadius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, gap: spacing.sm },
   searchInput: { flex: 1, color: colors.text, fontSize: 15 },
+
+  // Forum / Suggestions
+  sortBar: { flexDirection: 'row', gap: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
+  sortBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: spacing.md, paddingVertical: spacing.xs, borderRadius: borderRadius.sm, backgroundColor: colors.surface },
+  sortBtnActive: { backgroundColor: colors.primary },
+  sortBtnText: { fontSize: 13, fontWeight: '600', color: colors.textMuted },
+  sortBtnTextActive: { color: colors.background },
+  suggestionCard: { flexDirection: 'row', backgroundColor: colors.surface, marginHorizontal: spacing.md, marginTop: spacing.sm, borderRadius: borderRadius.md, padding: spacing.md },
+  voteCol: { alignItems: 'center', marginRight: spacing.md, minWidth: 36 },
+  voteCount: { color: colors.textMuted, fontSize: 14, fontWeight: '700', marginTop: 2 },
+  suggestionContent: { flex: 1 },
+  suggestionTopRow: { flexDirection: 'row', gap: spacing.xs, marginBottom: spacing.xs, flexWrap: 'wrap' },
+  tagBadge: { backgroundColor: colors.primary + '20', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 },
+  tagText: { color: colors.primary, fontSize: 11, fontWeight: '600' },
+  statusBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 },
+  statusText: { fontSize: 11, fontWeight: '600' },
+  suggestionTitle: { color: colors.text, fontSize: 15, fontWeight: '600', marginBottom: 4 },
+  suggestionBody: { color: colors.textMuted, fontSize: 13, lineHeight: 18, marginBottom: spacing.sm },
+  suggestionFooter: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  suggestionMeta: { color: colors.textMuted, fontSize: 12 },
+  commentCountRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
 
   // Empty & FAB
   emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: spacing.md },

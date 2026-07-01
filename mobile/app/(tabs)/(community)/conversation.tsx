@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity,
-  ActivityIndicator, KeyboardAvoidingView, Platform,
+  ActivityIndicator, KeyboardAvoidingView, Platform, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams } from 'expo-router';
@@ -26,14 +26,22 @@ export default function ConversationScreen() {
   const flatListRef = useRef<FlatList>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const loadMessages = useCallback(async () => {
+  const loadMessages = useCallback(async (isPolling = false) => {
     if (!convId) return;
     try {
       const data = await getMessages(convId);
-      setMessages(data.results);
+      setMessages(prev => {
+        if (isPolling && prev.length > 0) {
+          // Merge: keep existing messages, add any new ones from server
+          const existingIds = new Set(prev.map(m => m.id));
+          const newMsgs = data.results.filter(m => !existingIds.has(m.id));
+          return newMsgs.length > 0 ? [...prev, ...newMsgs] : prev;
+        }
+        return data.results;
+      });
       markConversationRead(convId).catch(() => {});
     } catch {
-      // silent
+      if (!isPolling) Alert.alert(t('error'), t('community.loadError'));
     } finally {
       setIsLoading(false);
     }
@@ -41,8 +49,8 @@ export default function ConversationScreen() {
 
   useEffect(() => {
     loadMessages();
-    // Poll every 15 seconds
-    pollRef.current = setInterval(loadMessages, 15000);
+    // Poll every 15 seconds (merge mode)
+    pollRef.current = setInterval(() => loadMessages(true), 15000);
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
@@ -57,7 +65,7 @@ export default function ConversationScreen() {
       setText('');
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
     } catch {
-      // silent
+      Alert.alert(t('error'), t('community.messageError'));
     } finally {
       setIsSending(false);
     }

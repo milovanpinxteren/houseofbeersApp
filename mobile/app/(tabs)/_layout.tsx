@@ -1,10 +1,11 @@
 import { Tabs, router } from 'expo-router';
 import { Image, StyleSheet, View, Text, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { useLanguage } from '../../src/context/LanguageContext';
 import { t } from '../../src/i18n';
 import { colors } from '../../src/theme/colors';
-import { useState, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import { getFavorites } from '../../src/api/recommendations';
 import { getUnreadCount } from '../../src/api/community';
 
@@ -25,14 +26,16 @@ export default function TabsLayout() {
   const [favoritesCount, setFavoritesCount] = useState(0);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  useEffect(() => {
-    getFavorites()
-      .then((data) => setFavoritesCount(data.favorites.length))
-      .catch(() => {});
-    getUnreadCount()
-      .then((data) => setUnreadCount(data.unread_count))
-      .catch(() => {});
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      getFavorites()
+        .then((data) => setFavoritesCount(data.favorites.length))
+        .catch(() => {});
+      getUnreadCount()
+        .then((data) => setUnreadCount(data.unread_count))
+        .catch(() => {});
+    }, [])
+  );
 
   return (
     <Tabs

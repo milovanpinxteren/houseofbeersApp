@@ -189,8 +189,16 @@ export async function getMemberProfile(userId: number): Promise<MemberProfileRes
 // --- Feed ---
 
 export async function getFeed(cursor?: string): Promise<PaginatedResponse<Post>> {
-  const url = cursor || '/community/feed/';
-  return apiFetch<PaginatedResponse<Post>>(url);
+  if (cursor) {
+    // DRF CursorPagination returns full URLs — extract the query string
+    try {
+      const parsed = new URL(cursor);
+      return apiFetch<PaginatedResponse<Post>>(`/community/feed/${parsed.search}`);
+    } catch {
+      return apiFetch<PaginatedResponse<Post>>(`/community/feed/?cursor=${cursor}`);
+    }
+  }
+  return apiFetch<PaginatedResponse<Post>>('/community/feed/');
 }
 
 export async function createPost(data: {
@@ -313,4 +321,70 @@ export async function sendGroupMessage(groupId: number, data: {
 
 export async function getChats(): Promise<{ chats: ChatItem[] }> {
   return apiFetch('/community/chats/');
+}
+
+// --- Suggestions (Forum) ---
+
+export interface Suggestion {
+  id: number;
+  author: PostAuthor;
+  title: string;
+  content: string;
+  tag: string;
+  status: 'open' | 'planned' | 'done' | 'declined';
+  vote_count: number;
+  comment_count: number;
+  is_voted: boolean;
+  created_at: string;
+}
+
+export interface SuggestionComment {
+  id: number;
+  author: PostAuthor;
+  content: string;
+  vote_count: number;
+  is_voted: boolean;
+  created_at: string;
+}
+
+export async function getSuggestions(page = 1, sort: 'top' | 'new' = 'top'): Promise<PaginatedResponse<Suggestion>> {
+  return apiFetch(`/community/suggestions/?page=${page}&sort=${sort}`);
+}
+
+export async function createSuggestion(data: {
+  title: string;
+  content: string;
+  tag?: string;
+}): Promise<Suggestion> {
+  return apiFetch('/community/suggestions/create/', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteSuggestion(id: number): Promise<void> {
+  await apiFetch(`/community/suggestions/${id}/`, { method: 'DELETE' });
+}
+
+export async function toggleSuggestionVote(id: number): Promise<{ voted: boolean; vote_count: number }> {
+  return apiFetch(`/community/suggestions/${id}/vote/`, { method: 'POST' });
+}
+
+export async function getSuggestionComments(id: number): Promise<{ comments: SuggestionComment[] }> {
+  return apiFetch(`/community/suggestions/${id}/comments/`);
+}
+
+export async function addSuggestionComment(id: number, content: string): Promise<SuggestionComment> {
+  return apiFetch(`/community/suggestions/${id}/comments/`, {
+    method: 'POST',
+    body: JSON.stringify({ content }),
+  });
+}
+
+export async function deleteSuggestionComment(commentId: number): Promise<void> {
+  await apiFetch(`/community/suggestions/comments/${commentId}/`, { method: 'DELETE' });
+}
+
+export async function toggleSuggestionCommentVote(commentId: number): Promise<{ voted: boolean; vote_count: number }> {
+  return apiFetch(`/community/suggestions/comments/${commentId}/vote/`, { method: 'POST' });
 }

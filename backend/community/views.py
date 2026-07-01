@@ -10,6 +10,7 @@ from .models import (
     CommunityProfile, Post, PostLike, PostComment,
     Conversation, Message, CachedBeerCheckin,
     Group, GroupMembership, GroupMessage,
+    Suggestion, SuggestionVote, SuggestionComment, SuggestionCommentVote,
 )
 from .serializers import (
     CommunityProfileSerializer, MemberDetailSerializer,
@@ -17,6 +18,7 @@ from .serializers import (
     ConversationSerializer, MessageSerializer, SendMessageSerializer,
     CachedBeerCheckinSerializer,
     GroupSerializer, GroupDetailSerializer, GroupMessageSerializer,
+    SuggestionSerializer, CreateSuggestionSerializer, SuggestionCommentSerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -136,7 +138,9 @@ class FeedView(APIView):
         ).values_list('user_id', flat=True)
 
         posts = _annotate_posts(
-            Post.objects.filter(author_id__in=visible_users),
+            Post.objects.filter(
+                Q(author_id__in=visible_users) | Q(author=request.user)
+            ),
             request.user,
         )
 
@@ -495,21 +499,34 @@ class UnifiedChatsView(APIView):
         user = request.user
         items = []
 
-        # DM conversations
+        # DM conversations — prefetch last message and profiles to avoid N+1
         conversations = (
             Conversation.objects
             .filter(Q(participant_1=user) | Q(participant_2=user))
-            .select_related('participant_1', 'participant_2')
+            .select_related(
+                'participant_1', 'participant_1__community_profile',
+                'participant_2', 'participant_2__community_profile',
+            )
+            .prefetch_related(
+                Prefetch(
+                    'messages',
+                    queryset=Message.objects.order_by('-created_at'),
+                    to_attr='prefetched_messages',
+                ),
+            )
         )
         for conv in conversations:
-            last_msg = conv.messages.order_by('-created_at').first()
+            last_msg = conv.prefetched_messages[0] if conv.prefetched_messages else None
             other = conv.get_other_user(user)
             profile = getattr(other, 'community_profile', None)
             display_name = (
                 profile.get_display_name() if profile
                 else other.first_name or other.email.split('@')[0]
             )
-            unread = conv.messages.filter(is_read=False).exclude(sender=user).count()
+            unread = sum(
+                1 for m in conv.prefetched_messages
+                if not m.is_read and m.sender_id != user.id
+            )
             items.append({
                 'type': 'dm',
                 'id': conv.id,
@@ -527,15 +544,23 @@ class UnifiedChatsView(APIView):
                 'member_count': None,
             })
 
-        # Group chats
+        # Group chats — prefetch last message and annotate member count
         memberships = (
             GroupMembership.objects
             .filter(user=user, group__is_active=True)
             .select_related('group')
+            .prefetch_related(
+                Prefetch(
+                    'group__messages',
+                    queryset=GroupMessage.objects.order_by('-created_at')[:1],
+                    to_attr='prefetched_messages',
+                ),
+            )
+            .annotate(group_member_count=Count('group__memberships'))
         )
         for membership in memberships:
             group = membership.group
-            last_msg = group.messages.order_by('-created_at').first()
+            last_msg = group.prefetched_messages[0] if group.prefetched_messages else None
             items.append({
                 'type': 'group',
                 'id': group.id,
@@ -550,7 +575,7 @@ class UnifiedChatsView(APIView):
                 'unread_count': 0,
                 'updated_at': group.updated_at,
                 'other_user_id': None,
-                'member_count': group.memberships.count(),
+                'member_count': membership.group_member_count,
             })
 
         items.sort(key=lambda x: x['updated_at'], reverse=True)
@@ -570,8 +595,174 @@ class MemberCheckinsView(APIView):
 
 # --- Helpers ---
 
+# --- Suggestions (Forum) ---
+
+class SuggestionPagination(PageNumberPagination):
+    page_size = 20
+
+
+class SuggestionsListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        sort = request.query_params.get('sort', 'top')
+        suggestions = _annotate_suggestions(
+            Suggestion.objects.all(), request.user,
+        )
+        if sort == 'new':
+            suggestions = suggestions.order_by('-created_at')
+        else:
+            suggestions = suggestions.order_by('-vote_count', '-created_at')
+
+        paginator = SuggestionPagination()
+        page = paginator.paginate_queryset(suggestions, request)
+        serializer = SuggestionSerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
+
+
+class SuggestionCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = CreateSuggestionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        suggestion = serializer.save(author=request.user)
+
+        from analytics.tracker import track
+        track('community_suggestion', user=request.user, suggestion_id=suggestion.id)
+
+        annotated = _annotate_suggestions(
+            Suggestion.objects.filter(id=suggestion.id), request.user,
+        ).first()
+        return Response(SuggestionSerializer(annotated).data, status=status.HTTP_201_CREATED)
+
+
+class SuggestionDeleteView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, suggestion_id):
+        try:
+            suggestion = Suggestion.objects.get(id=suggestion_id, author=request.user)
+        except Suggestion.DoesNotExist:
+            return Response({'error': 'Suggestion not found'}, status=status.HTTP_404_NOT_FOUND)
+        suggestion.delete()
+        return Response({'success': True})
+
+
+class SuggestionVoteView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, suggestion_id):
+        try:
+            suggestion = Suggestion.objects.get(id=suggestion_id)
+        except Suggestion.DoesNotExist:
+            return Response({'error': 'Suggestion not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        vote, created = SuggestionVote.objects.get_or_create(
+            suggestion=suggestion, user=request.user,
+        )
+        if not created:
+            vote.delete()
+            voted = False
+        else:
+            voted = True
+            from analytics.tracker import track
+            track('community_suggestion_vote', user=request.user, suggestion_id=suggestion_id)
+
+        return Response({'voted': voted, 'vote_count': suggestion.votes.count()})
+
+
+class SuggestionCommentsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, suggestion_id):
+        comments = _annotate_suggestion_comments(
+            SuggestionComment.objects.filter(suggestion_id=suggestion_id),
+            request.user,
+        )
+        serializer = SuggestionCommentSerializer(comments, many=True)
+        return Response({'comments': serializer.data})
+
+    def post(self, request, suggestion_id):
+        try:
+            suggestion = Suggestion.objects.get(id=suggestion_id)
+        except Suggestion.DoesNotExist:
+            return Response({'error': 'Suggestion not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        content = request.data.get('content', '').strip()
+        if not content:
+            return Response({'error': 'Content is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        comment = SuggestionComment.objects.create(
+            suggestion=suggestion, author=request.user, content=content[:500],
+        )
+
+        from analytics.tracker import track
+        track('community_suggestion_comment', user=request.user, suggestion_id=suggestion_id)
+
+        annotated = _annotate_suggestion_comments(
+            SuggestionComment.objects.filter(id=comment.id), request.user,
+        ).first()
+        serializer = SuggestionCommentSerializer(annotated)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class SuggestionCommentVoteView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, comment_id):
+        try:
+            comment = SuggestionComment.objects.get(id=comment_id)
+        except SuggestionComment.DoesNotExist:
+            return Response({'error': 'Comment not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        vote, created = SuggestionCommentVote.objects.get_or_create(
+            comment=comment, user=request.user,
+        )
+        if not created:
+            vote.delete()
+            voted = False
+        else:
+            voted = True
+
+        return Response({'voted': voted, 'vote_count': comment.votes.count()})
+
+
+class SuggestionCommentDeleteView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, comment_id):
+        try:
+            comment = SuggestionComment.objects.get(id=comment_id, author=request.user)
+        except SuggestionComment.DoesNotExist:
+            return Response({'error': 'Comment not found'}, status=status.HTTP_404_NOT_FOUND)
+        comment.delete()
+        return Response({'success': True})
+
+
+# --- Helpers ---
+
+def _annotate_suggestion_comments(queryset, request_user):
+    return queryset.select_related('author', 'author__community_profile').annotate(
+        vote_count=Count('votes', distinct=True),
+        is_voted=Exists(
+            SuggestionCommentVote.objects.filter(comment=OuterRef('pk'), user=request_user)
+        ),
+    )
+
+
+def _annotate_suggestions(queryset, request_user):
+    return queryset.select_related('author', 'author__community_profile').annotate(
+        vote_count=Count('votes', distinct=True),
+        comment_count=Count('comments', distinct=True),
+        is_voted=Exists(
+            SuggestionVote.objects.filter(suggestion=OuterRef('pk'), user=request_user)
+        ),
+    )
+
+
 def _annotate_posts(queryset, request_user):
-    return queryset.select_related('author').annotate(
+    return queryset.select_related('author', 'author__community_profile').annotate(
         like_count=Count('likes', distinct=True),
         comment_count=Count('comments', distinct=True),
         is_liked=Exists(

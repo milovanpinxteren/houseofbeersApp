@@ -9,6 +9,9 @@ from .views import (
     GroupsListView, AvailableGroupsListView, GroupDetailView,
     GroupJoinView, GroupLeaveView, GroupMessagesListView, GroupSendMessageView,
     UnifiedChatsView,
+    SuggestionsListView, SuggestionCreateView, SuggestionDeleteView,
+    SuggestionVoteView, SuggestionCommentsView, SuggestionCommentDeleteView,
+    SuggestionCommentVoteView,
 )
 
 urlpatterns = [
@@ -53,4 +56,13 @@ urlpatterns = [
 
     # Unread count
     path('unread-count/', UnreadCountView.as_view(), name='community-unread-count'),
+
+    # Suggestions (Forum)
+    path('suggestions/', SuggestionsListView.as_view(), name='community-suggestions'),
+    path('suggestions/create/', SuggestionCreateView.as_view(), name='community-suggestion-create'),
+    path('suggestions/<int:suggestion_id>/', SuggestionDeleteView.as_view(), name='community-suggestion-delete'),
+    path('suggestions/<int:suggestion_id>/vote/', SuggestionVoteView.as_view(), name='community-suggestion-vote'),
+    path('suggestions/<int:suggestion_id>/comments/', SuggestionCommentsView.as_view(), name='community-suggestion-comments'),
+    path('suggestions/comments/<int:comment_id>/', SuggestionCommentDeleteView.as_view(), name='community-suggestion-comment-delete'),
+    path('suggestions/comments/<int:comment_id>/vote/', SuggestionCommentVoteView.as_view(), name='community-suggestion-comment-vote'),
 ]
