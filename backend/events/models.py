@@ -134,6 +134,35 @@ class Raffle(models.Model):
         return created_winners
 
 
+class AuctionItem(models.Model):
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('active', 'Active'),
+        ('sold', 'Sold'),
+    ]
+
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='auction_items')
+    title = models.CharField(max_length=200)
+    image_url = models.URLField(max_length=500, blank=True)
+    starting_price = models.DecimalField(max_digits=10, decimal_places=2)
+    final_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    winner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='auction_wins',
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"{self.title} ({self.get_status_display()}) - {self.event.title}"
+
+
 class RaffleWinner(models.Model):
     raffle = models.ForeignKey(Raffle, on_delete=models.CASCADE, related_name='winners')
     user = models.ForeignKey(

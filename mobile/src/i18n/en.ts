@@ -352,5 +352,12 @@ export default {
     viewWinners: 'View Winners',
     startsAt: 'Starts',
     going: 'going',
+    // Auction
+    currentItem: 'Current Item',
+    startingAt: 'Starting at',
+    soldFor: 'Sold for',
+    soldTo: 'to',
+    unsold: 'Unsold',
+    noActiveItem: 'No item up for auction',
   },
 };

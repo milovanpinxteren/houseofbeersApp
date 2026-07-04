@@ -352,5 +352,12 @@ export default {
     viewWinners: 'Bekijk Winnaars',
     startsAt: 'Start',
     going: 'gaan',
+    // Veiling
+    currentItem: 'Huidig Item',
+    startingAt: 'Startprijs',
+    soldFor: 'Verkocht voor',
+    soldTo: 'aan',
+    unsold: 'Niet verkocht',
+    noActiveItem: 'Geen item te veilen',
   },
 };

@@ -2,7 +2,14 @@ import csv
 from django.contrib import admin
 from django.http import HttpResponse
 from django.utils import timezone
-from .models import Event, EventViewer, EventMessage, Raffle, RaffleWinner
+from .models import Event, EventViewer, EventMessage, Raffle, RaffleWinner, AuctionItem
+
+
+class AuctionItemInline(admin.TabularInline):
+    model = AuctionItem
+    extra = 1
+    fields = ['title', 'image_url', 'starting_price', 'final_price', 'winner', 'status']
+    raw_id_fields = ['winner']
 
 
 class RaffleInline(admin.TabularInline):
@@ -21,7 +28,7 @@ class EventAdmin(admin.ModelAdmin):
     search_fields = ['title', 'description']
     readonly_fields = ['created_at', 'updated_at']
     ordering = ['-scheduled_at']
-    inlines = [RaffleInline]
+    inlines = [AuctionItemInline, RaffleInline]
     actions = ['set_live', 'set_ended']
 
     def viewer_count_display(self, obj):
@@ -131,6 +138,56 @@ class RaffleWinnerAdmin(admin.ModelAdmin):
                 winner.user.email,
                 winner.user.first_name or winner.user.email.split('@')[0],
                 winner.drawn_at.strftime('%Y-%m-%d %H:%M'),
+            ])
+
+        return response
+
+
+@admin.register(AuctionItem)
+class AuctionItemAdmin(admin.ModelAdmin):
+    list_display = ['event', 'title', 'starting_price', 'final_price',
+                    'winner_display', 'status', 'created_at']
+    list_filter = ['status', 'event']
+    list_editable = ['status']
+    search_fields = ['title', 'event__title']
+    raw_id_fields = ['winner']
+    ordering = ['-created_at']
+    actions = ['set_active', 'export_auction_results_csv']
+
+    def winner_display(self, obj):
+        if not obj.winner:
+            return '-'
+        return obj.winner.email
+    winner_display.short_description = 'Winner'
+
+    @admin.action(description='Set selected item as ACTIVE (deactivates others in same event)')
+    def set_active(self, request, queryset):
+        for item in queryset:
+            # Deactivate other active items in the same event
+            AuctionItem.objects.filter(
+                event=item.event, status='active',
+            ).exclude(id=item.id).update(status='pending')
+            item.status = 'active'
+            item.save()
+            self.message_user(request, f"'{item.title}' is now active.")
+
+    @admin.action(description='Export selected items as CSV')
+    def export_auction_results_csv(self, request, queryset):
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = 'attachment; filename="auction_results.csv"'
+
+        writer = csv.writer(response)
+        writer.writerow(['Event', 'Item', 'Starting Price', 'Final Price', 'Winner Email', 'Winner Name', 'Status'])
+
+        for item in queryset.select_related('event', 'winner'):
+            writer.writerow([
+                item.event.title,
+                item.title,
+                item.starting_price,
+                item.final_price or '-',
+                item.winner.email if item.winner else '-',
+                (item.winner.first_name or item.winner.email.split('@')[0]) if item.winner else '-',
+                item.get_status_display(),
             ])
 
         return response

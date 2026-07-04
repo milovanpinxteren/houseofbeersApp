@@ -5,10 +5,11 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
-from .models import Event, EventViewer, EventMessage, RaffleWinner
+from .models import Event, EventViewer, EventMessage, RaffleWinner, AuctionItem
 from .serializers import (
     EventListSerializer, EventDetailSerializer,
     EventMessageSerializer, RaffleWinnerSerializer,
+    AuctionItemSerializer,
 )
 
 
@@ -136,6 +137,41 @@ class EventChatView(APIView):
 
         serializer = EventMessageSerializer(msg)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class EventAuctionActiveView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, event_id):
+        try:
+            item = (
+                AuctionItem.objects
+                .filter(event_id=event_id, status='active')
+                .select_related('winner', 'winner__community_profile')
+                .first()
+            )
+        except Event.DoesNotExist:
+            return Response({'error': 'Event not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if not item:
+            return Response({'item': None})
+
+        serializer = AuctionItemSerializer(item)
+        return Response({'item': serializer.data})
+
+
+class EventAuctionHistoryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, event_id):
+        items = (
+            AuctionItem.objects
+            .filter(event_id=event_id)
+            .select_related('winner', 'winner__community_profile')
+            .order_by('-created_at')
+        )
+        serializer = AuctionItemSerializer(items, many=True)
+        return Response({'items': serializer.data})
 
 
 class EventRaffleWinnersView(APIView):

@@ -33,6 +33,17 @@ export interface RaffleWinner {
   drawn_at: string;
 }
 
+export interface AuctionItem {
+  id: number;
+  title: string;
+  image_url: string;
+  starting_price: string;
+  final_price: string | null;
+  winner_name: string | null;
+  status: 'pending' | 'active' | 'sold';
+  created_at: string;
+}
+
 // --- API Functions ---
 
 export async function getEvents(status?: string): Promise<{ events: Event[] }> {
@@ -70,4 +81,16 @@ export async function getEventWinners(
   eventId: number
 ): Promise<{ winners: RaffleWinner[] }> {
   return apiFetch(`/events/${eventId}/raffle/winners/`);
+}
+
+export async function getActiveAuctionItem(
+  eventId: number
+): Promise<{ item: AuctionItem | null }> {
+  return apiFetch(`/events/${eventId}/auction/active/`);
+}
+
+export async function getAuctionHistory(
+  eventId: number
+): Promise<{ items: AuctionItem[] }> {
+  return apiFetch(`/events/${eventId}/auction/history/`);
 }

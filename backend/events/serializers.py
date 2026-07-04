@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from community.serializers import AuthorSerializer
-from .models import Event, EventMessage, RaffleWinner
+from .models import Event, EventMessage, RaffleWinner, AuctionItem
 
 
 class EventListSerializer(serializers.ModelSerializer):
@@ -33,6 +33,25 @@ class EventMessageSerializer(serializers.ModelSerializer):
     class Meta:
         model = EventMessage
         fields = ['id', 'user', 'message', 'is_system', 'created_at']
+
+
+class AuctionItemSerializer(serializers.ModelSerializer):
+    winner_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AuctionItem
+        fields = [
+            'id', 'title', 'image_url', 'starting_price',
+            'final_price', 'winner_name', 'status', 'created_at',
+        ]
+
+    def get_winner_name(self, obj):
+        if not obj.winner:
+            return None
+        profile = getattr(obj.winner, 'community_profile', None)
+        if profile and profile.display_name:
+            return profile.display_name
+        return obj.winner.first_name or obj.winner.email.split('@')[0]
 
 
 class RaffleWinnerSerializer(serializers.ModelSerializer):

@@ -23,11 +23,13 @@ import {
   Event,
   EventMessage,
   RaffleWinner,
+  AuctionItem,
   getEvent,
   joinEvent,
   getEventChat,
   sendEventMessage,
   getEventWinners,
+  getActiveAuctionItem,
 } from '../../../src/api/events';
 
 const POLL_INTERVAL = 3000;
@@ -96,6 +98,12 @@ export default function LivestreamScreen() {
   const [loading, setLoading] = useState(true);
   const [showWinnersModal, setShowWinnersModal] = useState(false);
   const [activeViewerCount, setActiveViewerCount] = useState(0);
+
+  // Auction
+  const [auctionItem, setAuctionItem] = useState<AuctionItem | null>(null);
+  const [soldBanner, setSoldBanner] = useState<AuctionItem | null>(null);
+  const soldBannerOpacity = useRef(new Animated.Value(0)).current;
+  const prevAuctionItemId = useRef<number | null>(null);
 
   // Track latest winner for banner animation
   const [bannerWinner, setBannerWinner] = useState<RaffleWinner | null>(null);
@@ -187,6 +195,57 @@ export default function LivestreamScreen() {
     const interval = setInterval(pollWinners, WINNER_POLL_INTERVAL);
     return () => clearInterval(interval);
   }, [numericEventId]);
+
+  // Poll active auction item
+  useEffect(() => {
+    if (event?.event_type !== 'auction') return;
+
+    async function pollAuction() {
+      try {
+        const data = await getActiveAuctionItem(numericEventId);
+        const newItem = data.item;
+
+        // Detect when an item transitions to sold
+        if (
+          prevAuctionItemId.current !== null &&
+          newItem?.id !== prevAuctionItemId.current
+        ) {
+          // Previous item is gone — check if it was sold
+          // We show the sold banner from the previous item state
+          if (auctionItem && auctionItem.status === 'active') {
+            // The item was replaced, likely sold — we'll get the sold info next poll
+          }
+        }
+
+        // Detect a sold item (active -> sold transition)
+        if (newItem && newItem.status === 'sold' && auctionItem?.status === 'active' && newItem.id === auctionItem.id) {
+          setSoldBanner(newItem);
+          Animated.sequence([
+            Animated.timing(soldBannerOpacity, {
+              toValue: 1,
+              duration: 300,
+              useNativeDriver: true,
+            }),
+            Animated.delay(5000),
+            Animated.timing(soldBannerOpacity, {
+              toValue: 0,
+              duration: 300,
+              useNativeDriver: true,
+            }),
+          ]).start(() => setSoldBanner(null));
+        }
+
+        setAuctionItem(newItem);
+        prevAuctionItemId.current = newItem?.id ?? null;
+      } catch (err) {
+        console.error('Auction poll error:', err);
+      }
+    }
+
+    pollAuction();
+    const interval = setInterval(pollAuction, POLL_INTERVAL);
+    return () => clearInterval(interval);
+  }, [numericEventId, event?.event_type, auctionItem?.id, auctionItem?.status]);
 
   const handleSend = useCallback(async () => {
     const text = messageText.trim();
@@ -293,6 +352,31 @@ export default function LivestreamScreen() {
           </TouchableOpacity>
         )}
       </View>
+
+      {/* Auction Item Panel */}
+      {event.event_type === 'auction' && auctionItem && auctionItem.status === 'active' && (
+        <View style={styles.auctionPanel}>
+          <View style={styles.auctionHeader}>
+            <Ionicons name="hammer" size={16} color={colors.primary} />
+            <Text style={styles.auctionLabel}>{t('events.currentItem')}</Text>
+          </View>
+          <Text style={styles.auctionTitle}>{auctionItem.title}</Text>
+          <Text style={styles.auctionPrice}>
+            {t('events.startingAt')} €{auctionItem.starting_price}
+          </Text>
+        </View>
+      )}
+
+      {/* Auction Sold Banner */}
+      {soldBanner && (
+        <Animated.View style={[styles.soldBanner, { opacity: soldBannerOpacity }]}>
+          <Ionicons name="hammer" size={20} color={colors.success} />
+          <Text style={styles.soldBannerText}>
+            {soldBanner.title} — {t('events.soldFor')} €{soldBanner.final_price}{' '}
+            {soldBanner.winner_name ? `${t('events.soldTo')} ${soldBanner.winner_name}` : ''}
+          </Text>
+        </Animated.View>
+      )}
 
       {/* Winner Banner */}
       {bannerWinner && (
@@ -474,6 +558,55 @@ const styles = StyleSheet.create({
     color: colors.warning,
     fontSize: 13,
     fontWeight: '600',
+  },
+
+  // Auction panel
+  auctionPanel: {
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.primary + '30',
+  },
+  auctionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 4,
+  },
+  auctionLabel: {
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+  },
+  auctionTitle: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  auctionPrice: {
+    color: colors.textMuted,
+    fontSize: 13,
+    marginTop: 2,
+  },
+
+  // Sold banner
+  soldBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    gap: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.success + '30',
+  },
+  soldBannerText: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '600',
+    flex: 1,
   },
 
   // Winner banner
