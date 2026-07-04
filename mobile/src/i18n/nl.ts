@@ -330,4 +330,27 @@ export default {
     commentError: 'Reactie toevoegen mislukt',
     deleteComment: 'Reactie Verwijderen',
   },
+
+  // Evenementen
+  events: {
+    title: 'Evenementen',
+    upcoming: 'Binnenkort',
+    liveNow: 'LIVE',
+    ended: 'Afgelopen',
+    rsvp: 'Aanmelden',
+    rsvped: 'Aangemeld',
+    joinLive: 'Kijk mee',
+    viewers: 'kijkers',
+    watching: 'aan het kijken',
+    noEvents: 'Nog geen evenementen',
+    noEventsHint: 'Kom snel terug voor aankomende livestreams!',
+    chatPlaceholder: 'Zeg iets...',
+    sendError: 'Bericht versturen mislukt',
+    winners: 'Winnaars',
+    noWinners: 'Nog geen winnaars',
+    won: 'won',
+    viewWinners: 'Bekijk Winnaars',
+    startsAt: 'Start',
+    going: 'gaan',
+  },
 };

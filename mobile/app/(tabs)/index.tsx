@@ -25,6 +25,7 @@ import {
   getFavorites,
   UntappdProfile,
 } from '../../src/api/recommendations';
+import { getEvents, joinEvent, Event } from '../../src/api/events';
 import IOSInstallPrompt from '../../src/components/IOSInstallPrompt';
 
 const notificationIcons: Record<string, keyof typeof Ionicons.glyphMap> = {
@@ -61,17 +62,28 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [untappdProfile, setUntappdProfile] = useState<UntappdProfile | null>(null);
   const [favoritesCount, setFavoritesCount] = useState(0);
+  const [events, setEvents] = useState<Event[]>([]);
 
   const fetchData = useCallback(async () => {
     try {
-      const [notifData, untappdData, favoritesData] = await Promise.all([
+      const [notifData, untappdData, favoritesData, eventsData] = await Promise.all([
         getNotifications(),
         getUntappdProfile(),
         getFavorites(),
+        getEvents(),
       ]);
       setNotifications(notifData.filter((n) => !n.is_read));
       setUntappdProfile(untappdData.untappd);
       setFavoritesCount(favoritesData.favorites.length);
+      // Show live first, then scheduled, hide ended
+      const sorted = eventsData.events
+        .filter((e) => e.status !== 'ended')
+        .sort((a, b) => {
+          if (a.status === 'live' && b.status !== 'live') return -1;
+          if (b.status === 'live' && a.status !== 'live') return 1;
+          return new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime();
+        });
+      setEvents(sorted);
     } catch (error) {
       console.error('Failed to fetch data:', error);
     } finally {
@@ -140,6 +152,30 @@ export default function HomeScreen() {
     }
   };
 
+  const handleRSVP = async (eventId: number) => {
+    try {
+      await joinEvent(eventId);
+      setEvents((prev) =>
+        prev.map((e) =>
+          e.id === eventId ? { ...e, is_joined: true, viewer_count: e.viewer_count + 1 } : e
+        )
+      );
+    } catch (error) {
+      console.error('Failed to RSVP:', error);
+    }
+  };
+
+  const formatEventDate = (dateStr: string) => {
+    const date = new Date(dateStr);
+    return date.toLocaleDateString(language === 'nl' ? 'nl-NL' : 'en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
   const renderNotification = (notification: Notification) => {
     const iconName = notificationIcons[notification.notification_type] || 'information-circle';
     const iconColor = notificationColors[notification.notification_type] || colors.primary;
@@ -203,6 +239,76 @@ export default function HomeScreen() {
             <View style={styles.notificationsSection}>
               <Text style={styles.sectionTitle}>{t('home.notifications')}</Text>
               {notifications.map(renderNotification)}
+            </View>
+          )}
+
+          {/* Events Section */}
+          {events.length > 0 && (
+            <View style={styles.eventsSection}>
+              <Text style={styles.sectionTitle}>{t('events.title')}</Text>
+              {events.map((evt) => (
+                <View key={evt.id} style={styles.eventCard}>
+                  <View style={styles.eventHeader}>
+                    {evt.status === 'live' ? (
+                      <View style={styles.liveBadge}>
+                        <Text style={styles.liveBadgeText}>{t('events.liveNow')}</Text>
+                      </View>
+                    ) : (
+                      <View style={styles.scheduledBadge}>
+                        <Ionicons name="calendar" size={12} color={colors.primary} />
+                        <Text style={styles.scheduledBadgeText}>
+                          {formatEventDate(evt.scheduled_at)}
+                        </Text>
+                      </View>
+                    )}
+                    <Text style={styles.eventViewers}>
+                      {evt.viewer_count} {t('events.going')}
+                    </Text>
+                  </View>
+                  <Text style={styles.eventTitle}>{evt.title}</Text>
+                  {evt.description ? (
+                    <Text style={styles.eventDescription} numberOfLines={2}>
+                      {evt.description}
+                    </Text>
+                  ) : null}
+                  {evt.status === 'live' ? (
+                    <TouchableOpacity
+                      style={styles.eventButton}
+                      onPress={() =>
+                        router.push({
+                          pathname: '/(community)/livestream',
+                          params: { eventId: evt.id },
+                        } as any)
+                      }
+                    >
+                      <Ionicons name="play" size={16} color={colors.background} />
+                      <Text style={styles.eventButtonText}>{t('events.joinLive')}</Text>
+                    </TouchableOpacity>
+                  ) : evt.is_joined ? (
+                    <TouchableOpacity
+                      style={[styles.eventButton, styles.eventButtonJoined]}
+                      onPress={() =>
+                        router.push({
+                          pathname: '/(community)/livestream',
+                          params: { eventId: evt.id },
+                        } as any)
+                      }
+                    >
+                      <Ionicons name="checkmark" size={16} color={colors.primary} />
+                      <Text style={[styles.eventButtonText, styles.eventButtonTextJoined]}>
+                        {t('events.rsvped')}
+                      </Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity
+                      style={styles.eventButton}
+                      onPress={() => handleRSVP(evt.id)}
+                    >
+                      <Text style={styles.eventButtonText}>{t('events.rsvp')}</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              ))}
             </View>
           )}
 
@@ -321,6 +427,84 @@ const styles = StyleSheet.create({
     color: colors.primary,
     marginRight: spacing.xs,
   },
+  // Events Section
+  eventsSection: {
+    marginTop: spacing.lg,
+  },
+  eventCard: {
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.primary,
+  },
+  eventHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.sm,
+  },
+  liveBadge: {
+    backgroundColor: '#e74c3c',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  liveBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  scheduledBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  scheduledBadgeText: {
+    color: colors.primary,
+    fontSize: 12,
+  },
+  eventViewers: {
+    color: colors.textMuted,
+    fontSize: 12,
+  },
+  eventTitle: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  eventDescription: {
+    color: colors.textMuted,
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: spacing.sm,
+  },
+  eventButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primary,
+    paddingVertical: 8,
+    borderRadius: borderRadius.sm,
+    gap: 6,
+    marginTop: spacing.xs,
+  },
+  eventButtonText: {
+    color: colors.background,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  eventButtonJoined: {
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: colors.primary,
+  },
+  eventButtonTextJoined: {
+    color: colors.primary,
+  },
+
   // Beer Journey Section
   journeySection: {
     marginTop: spacing.lg,

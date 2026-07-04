@@ -330,4 +330,27 @@ export default {
     commentError: 'Failed to add comment',
     deleteComment: 'Delete Comment',
   },
+
+  // Events
+  events: {
+    title: 'Events',
+    upcoming: 'Upcoming',
+    liveNow: 'LIVE',
+    ended: 'Ended',
+    rsvp: 'RSVP',
+    rsvped: 'Going',
+    joinLive: 'Join Live',
+    viewers: 'viewers',
+    watching: 'watching',
+    noEvents: 'No events yet',
+    noEventsHint: 'Check back soon for upcoming livestreams!',
+    chatPlaceholder: 'Say something...',
+    sendError: 'Failed to send message',
+    winners: 'Winners',
+    noWinners: 'No winners yet',
+    won: 'won',
+    viewWinners: 'View Winners',
+    startsAt: 'Starts',
+    going: 'going',
+  },
 };

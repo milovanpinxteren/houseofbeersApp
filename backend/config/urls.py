@@ -8,5 +8,6 @@ urlpatterns = [
     path('api/loyalty/', include('loyalty.urls')),
     path('api/recommendations/', include('recommendations.urls')),
     path('api/community/', include('community.urls')),
+    path('api/events/', include('events.urls')),
     path('reset-password/', password_reset_page, name='password_reset_page'),
 ]

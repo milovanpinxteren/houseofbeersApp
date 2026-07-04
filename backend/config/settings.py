@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     'recommendations',
     'analytics',
     'community',
+    'events',
 ]
 
 MIDDLEWARE = [
