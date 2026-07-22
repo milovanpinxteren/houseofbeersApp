@@ -54,6 +54,18 @@ class AuctionItemSerializer(serializers.ModelSerializer):
         return obj.winner.first_name or obj.winner.email.split('@')[0]
 
 
+class EventViewerNameSerializer(serializers.Serializer):
+    """Lightweight serializer for viewer display names only (privacy-safe)."""
+    display_name = serializers.SerializerMethodField()
+
+    def get_display_name(self, obj):
+        # obj is a User instance (from EventViewer.user)
+        profile = getattr(obj, 'community_profile', None)
+        if profile and profile.display_name:
+            return profile.display_name
+        return obj.first_name or obj.email.split('@')[0]
+
+
 class RaffleWinnerSerializer(serializers.ModelSerializer):
     prize_name = serializers.CharField(source='raffle.prize_name', read_only=True)
     user = AuthorSerializer(read_only=True)

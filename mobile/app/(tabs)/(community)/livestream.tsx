@@ -12,6 +12,7 @@ import {
   Modal,
   ActivityIndicator,
   Animated,
+  Pressable,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams } from 'expo-router';
@@ -26,14 +27,11 @@ import {
   AuctionItem,
   getEvent,
   joinEvent,
-  getEventChat,
   sendEventMessage,
-  getEventWinners,
-  getActiveAuctionItem,
+  pollEvent,
 } from '../../../src/api/events';
 
 const POLL_INTERVAL = 3000;
-const WINNER_POLL_INTERVAL = 5000;
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const VIDEO_HEIGHT = (SCREEN_WIDTH * 9) / 16;
 
@@ -105,9 +103,18 @@ export default function LivestreamScreen() {
   const soldBannerOpacity = useRef(new Animated.Value(0)).current;
   const prevAuctionItemId = useRef<number | null>(null);
 
-  // Track latest winner for banner animation
-  const [bannerWinner, setBannerWinner] = useState<RaffleWinner | null>(null);
-  const bannerOpacity = useRef(new Animated.Value(0)).current;
+  // Raffle animation
+  const [raffleAnimation, setRaffleAnimation] = useState<{
+    prizeName: string;
+    winnerName: string;
+    isCurrentUser: boolean;
+    viewerNames: string[];
+  } | null>(null);
+  const [shuffleName, setShuffleName] = useState('');
+  const [animationPhase, setAnimationPhase] = useState<'shuffling' | 'revealing' | 'done'>('shuffling');
+  const raffleOverlayOpacity = useRef(new Animated.Value(0)).current;
+  const winnerScale = useRef(new Animated.Value(0.5)).current;
+  const youWonOpacity = useRef(new Animated.Value(0)).current;
   const prevWinnerCount = useRef(0);
 
   const lastMessageTime = useRef<string | undefined>(undefined);
@@ -134,11 +141,25 @@ export default function LivestreamScreen() {
     init();
   }, [numericEventId]);
 
-  // Poll chat messages
+  // Combined poll: chat, winners, auction — single request every 3s
+  // Heartbeat (presence update) every 20th poll (~60s)
+  const pollCount = useRef(0);
+  const auctionItemRef = useRef<AuctionItem | null>(null);
+
   useEffect(() => {
-    async function pollChat() {
+    async function doPoll() {
       try {
-        const data = await getEventChat(numericEventId, lastMessageTime.current);
+        pollCount.current += 1;
+        const isHeartbeat = pollCount.current % 20 === 1; // First poll + every 60s
+
+        const data = await pollEvent(
+          numericEventId,
+          lastMessageTime.current,
+          isHeartbeat,
+          prevWinnerCount.current,
+        );
+
+        // Chat messages
         if (data.messages.length > 0) {
           setMessages((prev) => {
             const existingIds = new Set(prev.map((m) => m.id));
@@ -149,103 +170,69 @@ export default function LivestreamScreen() {
           lastMessageTime.current =
             data.messages[data.messages.length - 1].created_at;
         }
-        setActiveViewerCount(data.active_viewer_count);
-      } catch (err) {
-        console.error('Chat poll error:', err);
-      }
-    }
 
-    pollChat();
-    const interval = setInterval(pollChat, POLL_INTERVAL);
-    return () => clearInterval(interval);
-  }, [numericEventId]);
+        // Viewer count (only on heartbeat)
+        if (data.active_viewer_count !== undefined) {
+          setActiveViewerCount(data.active_viewer_count);
+        }
 
-  // Poll raffle winners
-  useEffect(() => {
-    async function pollWinners() {
-      try {
-        const data = await getEventWinners(numericEventId);
-        setWinners(data.winners);
-
-        // Show banner for new winners
-        if (data.winners.length > prevWinnerCount.current && prevWinnerCount.current > 0) {
+        // Winner changes — full data + viewer names included by backend
+        if (data.winners && data.winner_count > prevWinnerCount.current && !raffleAnimation) {
+          setWinners(data.winners);
           const latestWinner = data.winners[0];
-          setBannerWinner(latestWinner);
-          Animated.sequence([
-            Animated.timing(bannerOpacity, {
-              toValue: 1,
-              duration: 300,
-              useNativeDriver: true,
-            }),
-            Animated.delay(5000),
-            Animated.timing(bannerOpacity, {
-              toValue: 0,
-              duration: 300,
-              useNativeDriver: true,
-            }),
-          ]).start(() => setBannerWinner(null));
+          const isCurrentUser = latestWinner.user.user_id === user?.id;
+
+          const names = data.viewer_names?.map((v) => v.display_name) || [];
+          const shuffleNames = names.length >= 3 ? names : [
+            latestWinner.user.display_name,
+            ...names,
+            'Viewer', 'Guest', 'Beer Fan',
+          ];
+
+          startRaffleAnimation({
+            prizeName: latestWinner.prize_name,
+            winnerName: latestWinner.user.display_name,
+            isCurrentUser,
+            viewerNames: shuffleNames,
+          });
         }
-        prevWinnerCount.current = data.winners.length;
-      } catch (err) {
-        console.error('Winners poll error:', err);
-      }
-    }
+        prevWinnerCount.current = data.winner_count;
 
-    pollWinners();
-    const interval = setInterval(pollWinners, WINNER_POLL_INTERVAL);
-    return () => clearInterval(interval);
-  }, [numericEventId]);
+        // Auction item (included for auction events)
+        if (data.auction_item !== undefined) {
+          const newItem = data.auction_item;
+          const prevItem = auctionItemRef.current;
 
-  // Poll active auction item
-  useEffect(() => {
-    if (event?.event_type !== 'auction') return;
-
-    async function pollAuction() {
-      try {
-        const data = await getActiveAuctionItem(numericEventId);
-        const newItem = data.item;
-
-        // Detect when an item transitions to sold
-        if (
-          prevAuctionItemId.current !== null &&
-          newItem?.id !== prevAuctionItemId.current
-        ) {
-          // Previous item is gone — check if it was sold
-          // We show the sold banner from the previous item state
-          if (auctionItem && auctionItem.status === 'active') {
-            // The item was replaced, likely sold — we'll get the sold info next poll
+          // Detect sold transition
+          if (newItem && newItem.status === 'sold' && prevItem?.status === 'active' && newItem.id === prevItem.id) {
+            setSoldBanner(newItem);
+            Animated.sequence([
+              Animated.timing(soldBannerOpacity, {
+                toValue: 1,
+                duration: 300,
+                useNativeDriver: true,
+              }),
+              Animated.delay(5000),
+              Animated.timing(soldBannerOpacity, {
+                toValue: 0,
+                duration: 300,
+                useNativeDriver: true,
+              }),
+            ]).start(() => setSoldBanner(null));
           }
-        }
 
-        // Detect a sold item (active -> sold transition)
-        if (newItem && newItem.status === 'sold' && auctionItem?.status === 'active' && newItem.id === auctionItem.id) {
-          setSoldBanner(newItem);
-          Animated.sequence([
-            Animated.timing(soldBannerOpacity, {
-              toValue: 1,
-              duration: 300,
-              useNativeDriver: true,
-            }),
-            Animated.delay(5000),
-            Animated.timing(soldBannerOpacity, {
-              toValue: 0,
-              duration: 300,
-              useNativeDriver: true,
-            }),
-          ]).start(() => setSoldBanner(null));
+          setAuctionItem(newItem);
+          auctionItemRef.current = newItem;
         }
-
-        setAuctionItem(newItem);
-        prevAuctionItemId.current = newItem?.id ?? null;
       } catch (err) {
-        console.error('Auction poll error:', err);
+        console.error('Poll error:', err);
       }
     }
 
-    pollAuction();
-    const interval = setInterval(pollAuction, POLL_INTERVAL);
+    doPoll();
+    const interval = setInterval(doPoll, POLL_INTERVAL);
     return () => clearInterval(interval);
-  }, [numericEventId, event?.event_type, auctionItem?.id, auctionItem?.status]);
+  }, [numericEventId, raffleAnimation, user?.id]);
 
   const handleSend = useCallback(async () => {
     const text = messageText.trim();
@@ -267,6 +254,95 @@ export default function LivestreamScreen() {
       setSending(false);
     }
   }, [messageText, sending, numericEventId]);
+
+  function startRaffleAnimation(data: {
+    prizeName: string;
+    winnerName: string;
+    isCurrentUser: boolean;
+    viewerNames: string[];
+  }) {
+    setRaffleAnimation(data);
+    setAnimationPhase('shuffling');
+    raffleOverlayOpacity.setValue(0);
+    winnerScale.setValue(0.5);
+    youWonOpacity.setValue(0);
+
+    // Fade in overlay
+    Animated.timing(raffleOverlayOpacity, {
+      toValue: 1,
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
+
+    // Shuffle through names with deceleration
+    const { viewerNames, winnerName } = data;
+    let elapsed = 0;
+    let delay = 50;
+
+    function getDelay() {
+      if (elapsed < 1000) return 50;
+      if (elapsed < 1800) return 100;
+      if (elapsed < 2300) return 200;
+      return 400;
+    }
+
+    function tick() {
+      if (elapsed >= 2800) {
+        // Reveal the winner
+        setShuffleName(winnerName);
+        setAnimationPhase('revealing');
+
+        Animated.spring(winnerScale, {
+          toValue: 1,
+          friction: 4,
+          tension: 80,
+          useNativeDriver: true,
+        }).start();
+
+        if (data.isCurrentUser) {
+          Animated.sequence([
+            Animated.delay(500),
+            Animated.timing(youWonOpacity, {
+              toValue: 1,
+              duration: 400,
+              useNativeDriver: true,
+            }),
+          ]).start();
+        }
+
+        // Auto-dismiss after 5 seconds
+        setTimeout(() => {
+          setAnimationPhase('done');
+          dismissRaffle();
+        }, 5000);
+        return;
+      }
+
+      // Pick a random name (avoid showing the winner too early)
+      const pool = viewerNames.filter((n) => n !== winnerName);
+      const randomName = pool.length > 0
+        ? pool[Math.floor(Math.random() * pool.length)]
+        : viewerNames[Math.floor(Math.random() * viewerNames.length)];
+      setShuffleName(randomName);
+
+      delay = getDelay();
+      elapsed += delay;
+      setTimeout(tick, delay);
+    }
+
+    tick();
+  }
+
+  function dismissRaffle() {
+    Animated.timing(raffleOverlayOpacity, {
+      toValue: 0,
+      duration: 300,
+      useNativeDriver: true,
+    }).start(() => {
+      setRaffleAnimation(null);
+      setShuffleName('');
+    });
+  }
 
   const renderMessage = useCallback(
     ({ item }: { item: EventMessage }) => {
@@ -378,14 +454,49 @@ export default function LivestreamScreen() {
         </Animated.View>
       )}
 
-      {/* Winner Banner */}
-      {bannerWinner && (
-        <Animated.View style={[styles.winnerBanner, { opacity: bannerOpacity }]}>
-          <Ionicons name="trophy" size={20} color={colors.warning} />
-          <Text style={styles.winnerBannerText}>
-            {bannerWinner.user.display_name} {t('events.won')} {bannerWinner.prize_name}!
-          </Text>
-        </Animated.View>
+      {/* Raffle Animation Overlay */}
+      {raffleAnimation && (
+        <Modal visible transparent animationType="none">
+          <Animated.View style={[styles.raffleOverlay, { opacity: raffleOverlayOpacity }]}>
+            <Pressable style={styles.raffleOverlayPress} onPress={animationPhase === 'done' ? dismissRaffle : undefined}>
+              <View style={styles.raffleContent}>
+                {/* Prize name */}
+                <View style={styles.rafflePrizeRow}>
+                  <Ionicons name="gift" size={24} color={colors.primary} />
+                  <Text style={styles.rafflePrizeText}>{t('events.drawingFor')}: {raffleAnimation.prizeName}</Text>
+                </View>
+
+                {/* Shuffling / Winner name */}
+                <Animated.View style={[
+                  styles.raffleNameContainer,
+                  animationPhase !== 'shuffling' && { transform: [{ scale: winnerScale }] },
+                ]}>
+                  {animationPhase !== 'shuffling' && (
+                    <Ionicons name="trophy" size={40} color={colors.warning} style={{ marginBottom: spacing.sm }} />
+                  )}
+                  <Text style={[
+                    styles.raffleShuffleName,
+                    animationPhase !== 'shuffling' && styles.raffleWinnerName,
+                  ]}>
+                    {shuffleName}
+                  </Text>
+                </Animated.View>
+
+                {/* YOU WON! */}
+                {raffleAnimation.isCurrentUser && animationPhase !== 'shuffling' && (
+                  <Animated.View style={[styles.youWonContainer, { opacity: youWonOpacity }]}>
+                    <Text style={styles.youWonText}>YOU WON!</Text>
+                  </Animated.View>
+                )}
+
+                {/* Tap to dismiss hint */}
+                {animationPhase === 'done' && (
+                  <Text style={styles.raffleDismissHint}>{t('events.tapToDismiss') || 'Tap to dismiss'}</Text>
+                )}
+              </View>
+            </Pressable>
+          </Animated.View>
+        </Modal>
       )}
 
       {/* Chat */}
@@ -609,22 +720,66 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 
-  // Winner banner
-  winnerBanner: {
+  // Raffle animation overlay
+  raffleOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.92)',
+  },
+  raffleOverlayPress: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  raffleContent: {
+    alignItems: 'center',
+    paddingHorizontal: spacing.xl,
+  },
+  rafflePrizeRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.surface,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
     gap: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.warning + '30',
+    marginBottom: spacing.xl,
   },
-  winnerBannerText: {
-    color: colors.text,
-    fontSize: 14,
+  rafflePrizeText: {
+    color: colors.primary,
+    fontSize: 18,
     fontWeight: '600',
-    flex: 1,
+  },
+  raffleNameContainer: {
+    alignItems: 'center',
+    minHeight: 100,
+    justifyContent: 'center',
+  },
+  raffleShuffleName: {
+    color: colors.textMuted,
+    fontSize: 28,
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+  raffleWinnerName: {
+    color: colors.text,
+    fontSize: 36,
+    fontWeight: '700',
+  },
+  youWonContainer: {
+    marginTop: spacing.lg,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md,
+    borderRadius: borderRadius.lg,
+    borderWidth: 2,
+    borderColor: colors.warning,
+  },
+  youWonText: {
+    color: colors.warning,
+    fontSize: 28,
+    fontWeight: '800',
+    textAlign: 'center',
+    letterSpacing: 4,
+  },
+  raffleDismissHint: {
+    color: colors.textMuted,
+    fontSize: 12,
+    marginTop: spacing.xl,
   },
 
   // Chat

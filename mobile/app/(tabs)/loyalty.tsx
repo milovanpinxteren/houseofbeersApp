@@ -3,12 +3,15 @@ import {
   View,
   Text,
   Image,
+  Modal,
   FlatList,
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
   RefreshControl,
   ScrollView,
+  Dimensions,
+  Pressable,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
@@ -46,6 +49,7 @@ export default function LoyaltyScreen() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [imageOverlay, setImageOverlay] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     try {
@@ -242,7 +246,9 @@ export default function LoyaltyScreen() {
             rewards.map((reward) => (
               <View key={reward.id} style={styles.rewardCard}>
                 {reward.image_url ? (
-                  <Image source={{ uri: reward.image_url }} style={styles.rewardImage} resizeMode="cover" />
+                  <TouchableOpacity activeOpacity={0.9} onPress={() => setImageOverlay(reward.image_url)}>
+                    <Image source={{ uri: reward.image_url }} style={styles.rewardImage} resizeMode="cover" />
+                  </TouchableOpacity>
                 ) : null}
                 <View style={styles.rewardBody}>
                   <View style={styles.rewardInfo}>
@@ -362,6 +368,20 @@ export default function LoyaltyScreen() {
           )
         )}
       </View>
+
+      {/* Image Overlay */}
+      <Modal visible={!!imageOverlay} transparent animationType="fade" onRequestClose={() => setImageOverlay(null)}>
+        <Pressable style={styles.overlay} onPress={() => setImageOverlay(null)}>
+          <View style={styles.overlayContent}>
+            {imageOverlay && (
+              <Image source={{ uri: imageOverlay }} style={styles.overlayImage} resizeMode="contain" />
+            )}
+          </View>
+          <TouchableOpacity style={styles.overlayClose} onPress={() => setImageOverlay(null)}>
+            <Ionicons name="close-circle" size={36} color={colors.text} />
+          </TouchableOpacity>
+        </Pressable>
+      </Modal>
     </ScrollView>
   );
 }
@@ -675,5 +695,25 @@ const styles = StyleSheet.create({
   },
   codeUsed: {
     color: colors.textMuted,
+  },
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  overlayContent: {
+    width: Dimensions.get('window').width - spacing.lg * 2,
+    height: Dimensions.get('window').height * 0.6,
+  },
+  overlayImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: borderRadius.md,
+  },
+  overlayClose: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
   },
 });

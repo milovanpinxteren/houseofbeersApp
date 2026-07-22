@@ -117,6 +117,12 @@ dokku config:report houseofbeers-api
 dokku ps:report houseofbeers-api         # Check all process statuses
 dokku ps:scale houseofbeers-api web=1 worker=1 beat=1  # Scale processes
 dokku ps:restart houseofbeers-api
+
+# Scale gunicorn workers for more concurrent users (livestreams)
+dokku config:set houseofbeers-api WEB_CONCURRENCY=4    # ~300-400 viewers (+200MB RAM)
+dokku config:set houseofbeers-api WEB_CONCURRENCY=8    # ~600+ viewers (+400MB RAM)
+# Default (unset) = 2 workers, handles ~150-200 concurrent viewers comfortably
+# Set back after event: dokku config:unset houseofbeers-api WEB_CONCURRENCY
 ```
 
 ### PWA (Netlify) - For iOS Users
@@ -578,6 +584,38 @@ Both periodic tasks dispatch individual per-user tasks staggered 2 seconds apart
 | `full_sync_user_points(user_id)` | Full check-and-correct for one user | 2x, 120s delay |
 | `periodic_partial_sync()` | Dispatches partial sync per user | — |
 | `periodic_intermediate_sync()` | Dispatches intermediate sync per user | — |
+
+---
+
+## Livestream Performance
+
+### Polling Architecture
+The livestream uses a single combined poll endpoint (`GET /events/{id}/poll/`) instead of separate requests for chat, winners, and auction. This reduces load by ~4.5x.
+
+- **Poll interval**: 3 seconds (chat responsiveness)
+- **Heartbeat** (presence update): every 60 seconds (every 20th poll)
+- **Viewer count cutoff**: 90 seconds (matches heartbeat frequency)
+- **Winner data**: only sent when winner count changes (server compares to client's `known_winner_count`)
+- **Viewer names**: included alongside winner data for raffle animation (no extra request)
+
+### Capacity
+
+| Gunicorn Workers (`WEB_CONCURRENCY`) | Max Concurrent Viewers | RAM Impact |
+|---|---|---|
+| 2 (default) | ~150-200 | Baseline |
+| 4 | ~300-400 | +200MB |
+| 8 | ~600+ | +400MB |
+
+To scale up before a big event:
+```bash
+dokku config:set houseofbeers-api WEB_CONCURRENCY=4
+```
+To reset after:
+```bash
+dokku config:unset houseofbeers-api WEB_CONCURRENCY
+```
+
+The bottleneck is gunicorn workers, not the database. Each poll is ~5-15ms DB time.
 
 ---
 

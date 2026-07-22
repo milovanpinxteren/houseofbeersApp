@@ -359,5 +359,8 @@ export default {
     soldTo: 'to',
     unsold: 'Unsold',
     noActiveItem: 'No item up for auction',
+    // Raffle animation
+    drawingFor: 'Drawing for',
+    tapToDismiss: 'Tap to dismiss',
   },
 };

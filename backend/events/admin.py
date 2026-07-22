@@ -21,10 +21,10 @@ class RaffleInline(admin.TabularInline):
 
 @admin.register(Event)
 class EventAdmin(admin.ModelAdmin):
-    list_display = ['title', 'event_type', 'status', 'scheduled_at', 'viewer_count_display',
-                    'raffle_count_display', 'created_at']
+    list_display = ['title', 'event_type', 'status', 'scheduled_at', 'exclude_past_winners',
+                    'viewer_count_display', 'raffle_count_display', 'created_at']
     list_filter = ['status', 'event_type', 'scheduled_at']
-    list_editable = ['status']
+    list_editable = ['status', 'exclude_past_winners']
     search_fields = ['title', 'description']
     readonly_fields = ['created_at', 'updated_at']
     ordering = ['-scheduled_at']

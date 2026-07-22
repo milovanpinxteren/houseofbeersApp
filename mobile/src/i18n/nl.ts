@@ -359,5 +359,8 @@ export default {
     soldTo: 'aan',
     unsold: 'Niet verkocht',
     noActiveItem: 'Geen item te veilen',
+    // Verloting animatie
+    drawingFor: 'Trekking voor',
+    tapToDismiss: 'Tik om te sluiten',
   },
 };

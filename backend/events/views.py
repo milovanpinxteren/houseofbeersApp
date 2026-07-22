@@ -8,8 +8,8 @@ from rest_framework.views import APIView
 from .models import Event, EventViewer, EventMessage, RaffleWinner, AuctionItem
 from .serializers import (
     EventListSerializer, EventDetailSerializer,
-    EventMessageSerializer, RaffleWinnerSerializer,
-    AuctionItemSerializer,
+    EventMessageSerializer, EventViewerNameSerializer,
+    RaffleWinnerSerializer, AuctionItemSerializer,
 )
 
 
@@ -172,6 +172,114 @@ class EventAuctionHistoryView(APIView):
         )
         serializer = AuctionItemSerializer(items, many=True)
         return Response({'items': serializer.data})
+
+
+class EventPollView(APIView):
+    """
+    Combined poll endpoint for livestream. Returns chat messages, winner count,
+    and optionally auction/viewer data. Handles presence heartbeat.
+
+    Query params:
+        after       - ISO timestamp for chat messages since
+        heartbeat   - "1" to update presence and get viewer count (every ~60s)
+        known_winner_count - client's current winner count; full winner data + viewer
+                             names returned only when server count differs
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, event_id):
+        try:
+            event = Event.objects.get(id=event_id)
+        except Event.DoesNotExist:
+            return Response({'error': 'Event not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        is_heartbeat = request.query_params.get('heartbeat') == '1'
+
+        # Update presence only on heartbeat (every ~60s from client)
+        if is_heartbeat:
+            EventViewer.objects.update_or_create(
+                event=event, user=request.user,
+                defaults={'last_seen_at': timezone.now()},
+            )
+
+        # Chat messages
+        messages = (
+            event.messages
+            .select_related('user', 'user__community_profile')
+            .order_by('created_at')
+        )
+        after = request.query_params.get('after')
+        if after:
+            messages = messages.filter(created_at__gt=after)
+        else:
+            messages = messages.order_by('-created_at')[:100]
+            messages = sorted(messages, key=lambda m: m.created_at)
+
+        message_serializer = EventMessageSerializer(messages, many=True)
+
+        # Winner count (cheap)
+        winner_count = RaffleWinner.objects.filter(raffle__event=event).count()
+
+        response_data = {
+            'messages': message_serializer.data,
+            'winner_count': winner_count,
+        }
+
+        # Include viewer count only on heartbeat
+        if is_heartbeat:
+            response_data['active_viewer_count'] = event.active_viewer_count()
+
+        # Include full winner data + viewer names when count changed
+        known_count = request.query_params.get('known_winner_count')
+        if known_count is not None and int(known_count) != winner_count:
+            winners = (
+                RaffleWinner.objects
+                .filter(raffle__event=event)
+                .select_related('raffle', 'user', 'user__community_profile')
+                .order_by('-drawn_at')
+            )
+            response_data['winners'] = RaffleWinnerSerializer(winners, many=True).data
+
+            # Include viewer names for raffle animation
+            cutoff = timezone.now() - timezone.timedelta(minutes=5)
+            viewers = (
+                EventViewer.objects
+                .filter(event=event, last_seen_at__gte=cutoff)
+                .select_related('user', 'user__community_profile')
+            )
+            response_data['viewer_names'] = EventViewerNameSerializer(
+                [v.user for v in viewers], many=True
+            ).data
+
+        # Auction item (only for auction events)
+        if event.event_type == 'auction':
+            item = (
+                AuctionItem.objects
+                .filter(event=event, status='active')
+                .select_related('winner', 'winner__community_profile')
+                .first()
+            )
+            response_data['auction_item'] = (
+                AuctionItemSerializer(item).data if item else None
+            )
+
+        return Response(response_data)
+
+
+class EventViewersView(APIView):
+    """Get display names of active viewers for raffle animation."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, event_id):
+        cutoff = timezone.now() - timezone.timedelta(minutes=5)
+        viewers = (
+            EventViewer.objects
+            .filter(event_id=event_id, last_seen_at__gte=cutoff)
+            .select_related('user', 'user__community_profile')
+        )
+        users = [v.user for v in viewers]
+        serializer = EventViewerNameSerializer(users, many=True)
+        return Response({'viewers': serializer.data})
 
 
 class EventRaffleWinnersView(APIView):

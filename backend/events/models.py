@@ -26,6 +26,10 @@ class Event(models.Model):
     youtube_url = models.URLField(max_length=500, blank=True)
     image_url = models.URLField(max_length=500, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='scheduled')
+    exclude_past_winners = models.BooleanField(
+        default=True,
+        help_text="If checked, users who already won a raffle in this event cannot win again"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -36,7 +40,7 @@ class Event(models.Model):
         return f"{self.title} ({self.get_status_display()}) - {self.scheduled_at:%Y-%m-%d %H:%M}"
 
     def active_viewer_count(self):
-        cutoff = timezone.now() - timezone.timedelta(seconds=30)
+        cutoff = timezone.now() - timezone.timedelta(seconds=90)
         return self.viewers.filter(last_seen_at__gte=cutoff).count()
 
 
@@ -96,7 +100,7 @@ class Raffle(models.Model):
         return f"{self.prize_name} ({self.get_status_display()}) - {self.event.title}"
 
     def draw_winners(self):
-        """Draw random winners from active viewers, excluding past event winners."""
+        """Draw random winners from active viewers."""
         cutoff = timezone.now() - timezone.timedelta(minutes=5)
         active_viewer_user_ids = list(
             self.event.viewers
@@ -104,14 +108,16 @@ class Raffle(models.Model):
             .values_list('user_id', flat=True)
         )
 
-        # Exclude users who already won in this event
-        existing_winner_ids = set(
-            RaffleWinner.objects
-            .filter(raffle__event=self.event)
-            .values_list('user_id', flat=True)
-        )
+        eligible = list(active_viewer_user_ids)
 
-        eligible = [uid for uid in active_viewer_user_ids if uid not in existing_winner_ids]
+        # Optionally exclude users who already won in this event
+        if self.event.exclude_past_winners:
+            existing_winner_ids = set(
+                RaffleWinner.objects
+                .filter(raffle__event=self.event)
+                .values_list('user_id', flat=True)
+            )
+            eligible = [uid for uid in eligible if uid not in existing_winner_ids]
 
         num_to_draw = min(self.num_winners, len(eligible))
         if num_to_draw == 0:

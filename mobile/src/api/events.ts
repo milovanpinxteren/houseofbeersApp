@@ -44,6 +44,19 @@ export interface AuctionItem {
   created_at: string;
 }
 
+export interface EventViewerName {
+  display_name: string;
+}
+
+export interface PollResponse {
+  messages: EventMessage[];
+  winner_count: number;
+  active_viewer_count?: number;
+  winners?: RaffleWinner[];
+  viewer_names?: EventViewerName[];
+  auction_item?: AuctionItem | null;
+}
+
 // --- API Functions ---
 
 export async function getEvents(status?: string): Promise<{ events: Event[] }> {
@@ -81,6 +94,26 @@ export async function getEventWinners(
   eventId: number
 ): Promise<{ winners: RaffleWinner[] }> {
   return apiFetch(`/events/${eventId}/raffle/winners/`);
+}
+
+export async function pollEvent(
+  eventId: number,
+  after?: string,
+  heartbeat?: boolean,
+  knownWinnerCount?: number,
+): Promise<PollResponse> {
+  const params = new URLSearchParams();
+  if (after) params.set('after', after);
+  if (heartbeat) params.set('heartbeat', '1');
+  if (knownWinnerCount !== undefined) params.set('known_winner_count', String(knownWinnerCount));
+  const query = params.toString();
+  return apiFetch(`/events/${eventId}/poll/${query ? `?${query}` : ''}`);
+}
+
+export async function getEventViewers(
+  eventId: number
+): Promise<{ viewers: EventViewerName[] }> {
+  return apiFetch(`/events/${eventId}/viewers/`);
 }
 
 export async function getActiveAuctionItem(
