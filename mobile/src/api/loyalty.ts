@@ -58,12 +58,21 @@ export interface RedeemResult {
 }
 
 export interface SyncResult {
-  success: boolean;
+  success?: boolean;
+  status?: 'started' | 'in_progress' | 'completed';
+  sync_type?: 'partial' | 'intermediate' | 'full';
+  message?: string;
   error?: string;
-  points_awarded: number;
-  orders_processed: number;
-  orders_skipped: number;
-  new_balance: number;
+  points_awarded?: number;
+  orders_processed?: number;
+  orders_skipped?: number;
+  new_balance?: number;
+}
+
+export interface SyncStatus {
+  status: 'idle' | 'in_progress' | 'failed';
+  last_sync: string | null;
+  last_error: string;
 }
 
 export async function getLoyaltySummary(): Promise<LoyaltySummary> {
@@ -96,4 +105,8 @@ export async function syncPoints(): Promise<SyncResult> {
   return apiFetch<SyncResult>('/loyalty/sync/', {
     method: 'POST',
   });
+}
+
+export async function getSyncStatus(): Promise<SyncStatus> {
+  return apiFetch<SyncStatus>('/loyalty/sync/status/');
 }

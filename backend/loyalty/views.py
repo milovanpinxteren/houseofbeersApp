@@ -4,7 +4,6 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
-from users.services import ShopifyService
 from .models import PointsBalance, Redemption
 from .services import LoyaltyService
 from .serializers import (
@@ -106,7 +105,9 @@ class RedemptionsListView(APIView):
 class SyncPointsView(APIView):
     """
     Sync points from Shopify orders.
-    Recalculates all points from scratch using current rules.
+
+    User tap triggers an intermediate sync (all orders, process unprocessed) synchronously.
+    Full (check-and-correct) sync is admin-only — triggered via Django admin or CLI.
     """
     permission_classes = [IsAuthenticated]
 
@@ -119,27 +120,31 @@ class SyncPointsView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        loyalty_service = LoyaltyService()
         try:
-            # Fetch orders from Shopify
-            shopify_service = ShopifyService()
-            orders = shopify_service.get_customer_orders(user.shopify_customer_id)
+            result = loyalty_service.intermediate_sync_for_user(user)
 
-            # Process orders for points
-            loyalty_service = LoyaltyService()
-            result = loyalty_service.recalculate_all_points(user, orders)
-
-            # Get updated balance
-            balance = loyalty_service.get_or_create_balance(user)
+            if not result.get('success'):
+                error = result.get('error', 'Sync failed')
+                if error == 'Sync already in progress':
+                    return Response(
+                        {'status': 'in_progress', 'message': error},
+                        status=status.HTTP_409_CONFLICT
+                    )
+                return Response(
+                    {'error': error},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
 
             from analytics.tracker import track
-            track('points_sync', user=user, points_awarded=result['total_awarded'])
+            track('points_sync', user=user, points_awarded=result.get('total_awarded', 0))
 
             return Response({
                 'success': True,
-                'points_awarded': result['total_awarded'],
-                'orders_processed': result['processed_count'],
-                'orders_skipped': result['skipped_count'],
-                'new_balance': balance.balance,
+                'points_awarded': result.get('total_awarded', 0),
+                'orders_processed': result.get('processed_count', 0),
+                'orders_skipped': result.get('skipped_count', 0),
+                'new_balance': result.get('new_balance', 0),
             })
 
         except Exception as e:
@@ -148,6 +153,28 @@ class SyncPointsView(APIView):
                 {'error': 'Failed to sync points'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+class SyncStatusView(APIView):
+    """Check the status of a user's sync operation."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from loyalty.models import SyncState
+
+        sync_state = SyncState.objects.filter(user=request.user).first()
+        if not sync_state:
+            return Response({
+                'status': 'idle',
+                'last_sync': None,
+                'last_error': '',
+            })
+
+        return Response({
+            'status': sync_state.sync_status,
+            'last_sync': sync_state.last_successful_sync,
+            'last_error': sync_state.last_error,
+        })
 
 
 class NotificationsListView(APIView):

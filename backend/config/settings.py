@@ -165,6 +165,27 @@ DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='noreply@houseofbeers.
 PASSWORD_RESET_TIMEOUT = 3600  # 1 hour
 FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:8081')
 
+# Celery Configuration
+CELERY_BROKER_URL = config('REDIS_URL', default='redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = config('REDIS_URL', default='redis://localhost:6379/0')
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'Europe/Amsterdam'
+
+# Periodic task schedule (celery beat)
+from celery.schedules import crontab
+CELERY_BEAT_SCHEDULE = {
+    'partial-points-sync': {
+        'task': 'loyalty.tasks.periodic_partial_sync',
+        'schedule': 3 * 60 * 60,  # Every 3 hours (in seconds)
+    },
+    'nightly-intermediate-sync': {
+        'task': 'loyalty.tasks.periodic_intermediate_sync',
+        'schedule': crontab(hour=3, minute=0),  # 3:00 AM Amsterdam time
+    },
+}
+
 # Security settings for production
 if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')

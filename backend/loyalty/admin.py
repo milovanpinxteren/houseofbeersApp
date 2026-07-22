@@ -1,13 +1,13 @@
 from django.contrib import admin
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
-from .models import PointsRule, Reward, PointsBalance, PointsTransaction, Redemption, ProcessedOrder, Notification, NotificationRead
+from .models import PointsRule, Reward, PointsBalance, PointsTransaction, Redemption, ProcessedOrder, SyncState, Notification, NotificationRead
 
 
 @admin.register(PointsRule)
 class PointsRuleAdmin(admin.ModelAdmin):
-    list_display = ['name', 'rule_type', 'rule_summary', 'is_active', 'priority', 'valid_from', 'valid_until']
-    list_filter = ['rule_type', 'is_active']
+    list_display = ['name', 'rule_type', 'rule_summary', 'is_active', 'priority', 'only_after_registration', 'valid_from', 'valid_until']
+    list_filter = ['rule_type', 'is_active', 'only_after_registration']
     search_fields = ['name', 'description']
     ordering = ['-priority', '-created_at']
     readonly_fields = ['rule_preview']
@@ -81,7 +81,7 @@ class PointsRuleAdmin(admin.ModelAdmin):
             'description': 'This shows what the rule will do based on your configuration.'
         }),
         ('Status & Priority', {
-            'fields': ('is_active', 'priority'),
+            'fields': ('is_active', 'priority', 'only_after_registration'),
             'description': 'Higher priority rules are evaluated first. Use this to ensure important rules apply before general ones.'
         }),
         ('Validity Period', {
@@ -225,6 +225,7 @@ class PointsBalanceAdmin(admin.ModelAdmin):
     search_fields = ['user__email', 'user__first_name', 'user__last_name']
     readonly_fields = ['user', 'lifetime_earned', 'lifetime_spent', 'updated_at']
     ordering = ['-balance']
+    actions = ['trigger_full_sync']
 
     fieldsets = (
         (None, {
@@ -238,6 +239,22 @@ class PointsBalanceAdmin(admin.ModelAdmin):
 
     def has_add_permission(self, request):
         return False  # Balances are created automatically
+
+    @admin.action(description='Trigger full points recalculation')
+    def trigger_full_sync(self, request, queryset):
+        """Dispatch full sync tasks for selected users."""
+        from loyalty.tasks import full_sync_user_points
+
+        count = 0
+        for balance in queryset:
+            if balance.user.shopify_customer_id:
+                full_sync_user_points.delay(balance.user.id)
+                count += 1
+
+        if count:
+            self.message_user(request, f"Full sync dispatched for {count} user(s).")
+        else:
+            self.message_user(request, "No users with Shopify accounts selected.", level='warning')
 
     def save_model(self, request, obj, form, change):
         """Create a transaction record when balance is manually adjusted."""
@@ -385,6 +402,22 @@ class ProcessedOrderAdmin(admin.ModelAdmin):
 
     def has_change_permission(self, request, obj=None):
         return False
+
+@admin.register(SyncState)
+class SyncStateAdmin(admin.ModelAdmin):
+    list_display = ['user', 'sync_status', 'last_successful_sync', 'last_shopify_order_id', 'updated_at']
+    list_filter = ['sync_status']
+    search_fields = ['user__email']
+    readonly_fields = ['user', 'sync_status', 'sync_started_at', 'last_successful_sync',
+                       'last_shopify_order_id', 'last_error', 'updated_at']
+    ordering = ['-updated_at']
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
 
 @admin.register(Notification)
 class NotificationAdmin(admin.ModelAdmin):

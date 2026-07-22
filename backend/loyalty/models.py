@@ -46,6 +46,12 @@ class PointsRule(models.Model):
     valid_from = models.DateTimeField(null=True, blank=True)
     valid_until = models.DateTimeField(null=True, blank=True)
 
+    # Registration filter
+    only_after_registration = models.BooleanField(
+        default=False,
+        help_text="Only award points for orders placed after the user registered in the app"
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -292,6 +298,55 @@ class ProcessedOrder(models.Model):
 
     def __str__(self):
         return f"{self.shopify_order_name} - {self.points_awarded} points"
+
+
+class SyncState(models.Model):
+    """
+    Tracks per-user sync state for incremental Shopify order syncing.
+    Prevents concurrent syncs and stores cursor for partial sync.
+    """
+    SYNC_STATUS_CHOICES = [
+        ('idle', 'Idle'),
+        ('in_progress', 'In Progress'),
+        ('failed', 'Failed'),
+    ]
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='sync_state'
+    )
+    last_successful_sync = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Used as created_at_min for partial sync"
+    )
+    last_shopify_order_id = models.CharField(
+        max_length=255, blank=True,
+        help_text="Highest Shopify order ID seen"
+    )
+    sync_status = models.CharField(
+        max_length=20,
+        choices=SYNC_STATUS_CHOICES,
+        default='idle'
+    )
+    sync_started_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Sync State'
+        verbose_name_plural = 'Sync States'
+
+    def __str__(self):
+        return f"{self.user.email}: {self.sync_status} (last sync: {self.last_successful_sync})"
+
+    @property
+    def is_stale(self):
+        """Check if an in-progress sync is stale (>10 minutes)."""
+        from django.utils import timezone
+        if self.sync_status != 'in_progress' or not self.sync_started_at:
+            return False
+        return (timezone.now() - self.sync_started_at).total_seconds() > 600
 
 
 class Notification(models.Model):

@@ -7,6 +7,7 @@ from .views import (
     RedeemRewardView,
     RedemptionsListView,
     SyncPointsView,
+    SyncStatusView,
     NotificationsListView,
     NotificationDismissView,
 )
@@ -19,6 +20,7 @@ urlpatterns = [
     path("redeem/", RedeemRewardView.as_view(), name="redeem_reward"),
     path("redemptions/", RedemptionsListView.as_view(), name="redemptions_list"),
     path("sync/", SyncPointsView.as_view(), name="sync_points"),
+    path("sync/status/", SyncStatusView.as_view(), name="sync_status"),
     path("notifications/", NotificationsListView.as_view(), name="notifications_list"),
     path("notifications/<int:notification_id>/dismiss/", NotificationDismissView.as_view(), name="notification_dismiss"),
 ]

@@ -10,7 +10,7 @@ from django.utils import timezone
 
 from loyalty.models import (
     PointsRule, Reward, PointsBalance, PointsTransaction,
-    Redemption, ProcessedOrder
+    Redemption, ProcessedOrder, SyncState
 )
 
 logger = logging.getLogger(__name__)
@@ -78,6 +78,10 @@ class LoyaltyService:
         is_first_order = not ProcessedOrder.objects.filter(user=user).exists()
 
         for rule in rules:
+            # Skip rules that only apply after registration if order predates it
+            if rule.only_after_registration and order_date < user.date_joined:
+                continue
+
             points_for_rule = 0
 
             if rule.rule_type == 'per_euro':
@@ -209,30 +213,18 @@ class LoyaltyService:
 
 
     @transaction.atomic
-    def recalculate_all_points(self, user, orders: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def check_and_correct_points(self, user, orders: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        Recalculate all points for a user from scratch.
-        Clears existing order processing history and recalculates with current rules.
-        Preserves redemptions and spent points.
+        Check-and-correct sync: recalculates what each order SHOULD award with
+        current rules, compares to what WAS awarded, and creates adjustment
+        transactions for any differences. Also processes any unprocessed orders.
+
+        Preserves all history — no deletions of transactions, processed orders,
+        redemptions, or discount codes.
         """
-        # Get current spent points (from redemptions) - these should be preserved
-        balance = self.get_or_create_balance(user)
-        lifetime_spent = balance.lifetime_spent
-
-        # Clear processed orders for this user
-        ProcessedOrder.objects.filter(user=user).delete()
-
-        # Clear earned transactions (keep spent/adjusted)
-        PointsTransaction.objects.filter(user=user, transaction_type='earned').delete()
-
-        # Reset balance (keeping spent intact)
-        balance.balance = 0
-        balance.lifetime_earned = 0
-        balance.save()
-
-        # Reprocess all paid orders with current rules
-        total_awarded = 0
-        processed_count = 0
+        net_adjustment = 0
+        corrected_count = 0
+        new_count = 0
         skipped_count = 0
 
         for order in orders:
@@ -240,22 +232,74 @@ class LoyaltyService:
                 skipped_count += 1
                 continue
 
-            points = self.award_points_for_order(user, order)
-            if points is not None and points > 0:
-                total_awarded += points
-                processed_count += 1
-            else:
-                skipped_count += 1
+            shopify_order_id = str(order.get('id'))
+            shopify_order_name = order.get('name', '')
 
-        # Restore spent points in balance calculation
-        balance.refresh_from_db()
-        balance.lifetime_spent = lifetime_spent
-        balance.balance = balance.lifetime_earned - lifetime_spent
-        balance.save()
+            # Check if already processed
+            try:
+                processed = ProcessedOrder.objects.get(shopify_order_id=shopify_order_id)
+            except ProcessedOrder.DoesNotExist:
+                # New unprocessed order — award normally
+                points = self.award_points_for_order(user, order)
+                if points is not None and points > 0:
+                    net_adjustment += points
+                    new_count += 1
+                continue
+
+            # Already processed — check if points should be different with current rules
+            calculation = self.calculate_order_points(user, order)
+            should_award = calculation['total_points']
+            was_awarded = processed.points_awarded
+            diff = should_award - was_awarded
+
+            if diff == 0:
+                skipped_count += 1
+                continue
+
+            # Points differ — create a correction adjustment
+            balance = self.get_or_create_balance(user)
+            balance.balance += diff
+            if diff > 0:
+                balance.lifetime_earned += diff
+            else:
+                balance.lifetime_spent += abs(diff)
+            balance.save()
+
+            PointsTransaction.objects.create(
+                user=user,
+                transaction_type='adjusted',
+                points=diff,
+                balance_after=balance.balance,
+                description=f"Points correction for order {shopify_order_name} "
+                            f"({was_awarded} → {should_award})",
+                shopify_order_id=shopify_order_id,
+                shopify_order_name=shopify_order_name,
+            )
+
+            # Update the processed order record
+            processed.points_awarded = should_award
+            processed.save(update_fields=['points_awarded'])
+
+            net_adjustment += diff
+            corrected_count += 1
+            logger.info(
+                f"Corrected {user.email} order {shopify_order_name}: "
+                f"{was_awarded} → {should_award} (diff: {diff:+d})"
+            )
+
+        # Recalculate balance_after on all transactions in chronological order
+        running_balance = 0
+        all_transactions = PointsTransaction.objects.filter(user=user).order_by('created_at')
+        for txn in all_transactions:
+            running_balance += txn.points
+            if txn.balance_after != running_balance:
+                txn.balance_after = running_balance
+                txn.save(update_fields=['balance_after'])
 
         return {
-            'total_awarded': total_awarded,
-            'processed_count': processed_count,
+            'net_adjustment': net_adjustment,
+            'corrected_count': corrected_count,
+            'new_count': new_count,
             'skipped_count': skipped_count,
         }
 
@@ -488,3 +532,158 @@ class LoyaltyService:
     def get_user_redemptions(self, user) -> List[Redemption]:
         """Get redemptions for a user."""
         return list(Redemption.objects.filter(user=user))
+
+    # ============ Sync Orchestration ============
+
+    def _acquire_sync_lock(self, user) -> Optional['SyncState']:
+        """
+        Acquire a sync lock for the user. Returns SyncState if lock acquired, None if busy.
+        Resets stale locks (>10 minutes).
+        """
+        sync_state, _ = SyncState.objects.get_or_create(user=user)
+
+        if sync_state.sync_status == 'in_progress':
+            if not sync_state.is_stale:
+                logger.info(f"Sync already in progress for {user.email}")
+                return None
+            logger.warning(f"Resetting stale sync lock for {user.email}")
+
+        sync_state.sync_status = 'in_progress'
+        sync_state.sync_started_at = timezone.now()
+        sync_state.last_error = ''
+        sync_state.save()
+        return sync_state
+
+    def _release_sync_lock(self, sync_state: 'SyncState', success: bool, error: str = ''):
+        """Release sync lock and update state."""
+        if success:
+            sync_state.sync_status = 'idle'
+            sync_state.last_successful_sync = timezone.now()
+        else:
+            sync_state.sync_status = 'failed'
+            sync_state.last_error = error
+        sync_state.save()
+
+    def partial_sync_for_user(self, user) -> Dict[str, Any]:
+        """
+        Incremental sync: fetch only new orders since last sync and process them.
+        Returns result dict or error.
+        """
+        from users.services import ShopifyService
+
+        if not user.shopify_customer_id:
+            return {'success': False, 'error': 'No Shopify account linked'}
+
+        sync_state = self._acquire_sync_lock(user)
+        if sync_state is None:
+            return {'success': False, 'error': 'Sync already in progress'}
+
+        try:
+            shopify_service = ShopifyService()
+
+            if sync_state.last_successful_sync:
+                orders = shopify_service.get_customer_orders_since(
+                    user.shopify_customer_id,
+                    sync_state.last_successful_sync,
+                )
+            else:
+                # First sync ever — fetch all orders
+                orders = shopify_service.get_all_customer_orders(user.shopify_customer_id)
+
+            result = self.process_all_orders_for_user(user, orders)
+
+            # Track highest order ID for reference
+            if orders:
+                max_order_id = str(max(int(o.get('id', 0)) for o in orders))
+                sync_state.last_shopify_order_id = max_order_id
+
+            self._release_sync_lock(sync_state, success=True)
+
+            balance = self.get_or_create_balance(user)
+            return {
+                'success': True,
+                'sync_type': 'partial',
+                **result,
+                'new_balance': balance.balance,
+            }
+        except Exception as e:
+            logger.error(f"Partial sync failed for {user.email}: {e}")
+            self._release_sync_lock(sync_state, success=False, error=str(e))
+            return {'success': False, 'error': 'Sync failed'}
+
+    def intermediate_sync_for_user(self, user) -> Dict[str, Any]:
+        """
+        Intermediate sync: fetch ALL orders (paginated), process only unprocessed ones.
+        Catches orders that partial sync may have missed without recalculating anything.
+        """
+        from users.services import ShopifyService
+
+        if not user.shopify_customer_id:
+            return {'success': False, 'error': 'No Shopify account linked'}
+
+        sync_state = self._acquire_sync_lock(user)
+        if sync_state is None:
+            return {'success': False, 'error': 'Sync already in progress'}
+
+        try:
+            shopify_service = ShopifyService()
+            orders = shopify_service.get_all_customer_orders(user.shopify_customer_id)
+
+            result = self.process_all_orders_for_user(user, orders)
+
+            if orders:
+                max_order_id = str(max(int(o.get('id', 0)) for o in orders))
+                sync_state.last_shopify_order_id = max_order_id
+
+            self._release_sync_lock(sync_state, success=True)
+
+            balance = self.get_or_create_balance(user)
+            return {
+                'success': True,
+                'sync_type': 'intermediate',
+                **result,
+                'new_balance': balance.balance,
+            }
+        except Exception as e:
+            logger.error(f"Intermediate sync failed for {user.email}: {e}")
+            self._release_sync_lock(sync_state, success=False, error=str(e))
+            return {'success': False, 'error': 'Sync failed'}
+
+    def full_sync_for_user(self, user) -> Dict[str, Any]:
+        """
+        Full sync (check-and-correct): fetch ALL orders, recalculate what each
+        should award with current rules, and create correction adjustments for
+        any differences. Also picks up unprocessed orders. No deletions.
+        """
+        from users.services import ShopifyService
+
+        if not user.shopify_customer_id:
+            return {'success': False, 'error': 'No Shopify account linked'}
+
+        sync_state = self._acquire_sync_lock(user)
+        if sync_state is None:
+            return {'success': False, 'error': 'Sync already in progress'}
+
+        try:
+            shopify_service = ShopifyService()
+            orders = shopify_service.get_all_customer_orders(user.shopify_customer_id)
+
+            result = self.check_and_correct_points(user, orders)
+
+            if orders:
+                max_order_id = str(max(int(o.get('id', 0)) for o in orders))
+                sync_state.last_shopify_order_id = max_order_id
+
+            self._release_sync_lock(sync_state, success=True)
+
+            balance = self.get_or_create_balance(user)
+            return {
+                'success': True,
+                'sync_type': 'full',
+                **result,
+                'new_balance': balance.balance,
+            }
+        except Exception as e:
+            logger.error(f"Full sync failed for {user.email}: {e}")
+            self._release_sync_lock(sync_state, success=False, error=str(e))
+            return {'success': False, 'error': 'Sync failed'}

@@ -84,6 +84,57 @@ class ShopifyService:
             return data.get('orders', [])
         return []
 
+    def _paginated_request(self, endpoint: str, data_key: str = 'orders') -> list:
+        """
+        Fetch all pages from a paginated Shopify REST endpoint.
+        Follows Link header with rel="next" for cursor-based pagination.
+        """
+        all_results = []
+        url = f"{self.base_url}/{endpoint}"
+
+        while url:
+            try:
+                response = requests.get(url, headers=self.headers, timeout=30)
+                response.raise_for_status()
+                data = response.json()
+
+                results = data.get(data_key, [])
+                all_results.extend(results)
+                logger.info(f"Fetched {len(results)} {data_key} (total: {len(all_results)})")
+
+                # Follow pagination via Link header
+                url = None
+                link_header = response.headers.get('Link', '')
+                if 'rel="next"' in link_header:
+                    for part in link_header.split(','):
+                        if 'rel="next"' in part:
+                            url = part.split(';')[0].strip().strip('<>')
+                            break
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Paginated request error: {e}")
+                break
+
+        return all_results
+
+    def get_all_customer_orders(self, customer_id: str) -> list:
+        """
+        Get ALL orders for a Shopify customer, paginating through all pages.
+        Used for full sync / recalculation.
+        """
+        return self._paginated_request(
+            f'customers/{customer_id}/orders.json?limit=250&status=any'
+        )
+
+    def get_customer_orders_since(self, customer_id: str, since_date) -> list:
+        """
+        Get orders for a Shopify customer created after since_date.
+        Used for partial/incremental sync.
+        """
+        since_iso = since_date.isoformat()
+        return self._paginated_request(
+            f'customers/{customer_id}/orders.json?limit=250&status=any&created_at_min={since_iso}'
+        )
+
     def link_customer_to_user(self, user, email: str = None) -> bool:
         """
         Find and link a Shopify customer to a local user.
