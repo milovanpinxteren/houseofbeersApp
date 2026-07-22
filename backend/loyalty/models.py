@@ -104,6 +104,12 @@ class Reward(models.Model):
         help_text="For free_product: Shopify product GID (e.g., gid://shopify/Product/123456)"
     )
 
+    # Image
+    image_url = models.URLField(
+        blank=True,
+        help_text="Product image URL. Auto-fetched from Shopify when saving with a product ID."
+    )
+
     # Shopify integration
     shopify_discount_code = models.CharField(
         max_length=255,

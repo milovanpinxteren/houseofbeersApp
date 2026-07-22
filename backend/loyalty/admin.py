@@ -1,7 +1,10 @@
+import logging
 from django.contrib import admin
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from .models import PointsRule, Reward, PointsBalance, PointsTransaction, Redemption, ProcessedOrder, SyncState, Notification, NotificationRead
+
+logger = logging.getLogger(__name__)
 
 
 @admin.register(PointsRule)
@@ -190,10 +193,11 @@ class PointsRuleAdmin(admin.ModelAdmin):
 
 @admin.register(Reward)
 class RewardAdmin(admin.ModelAdmin):
-    list_display = ['name', 'reward_type', 'points_cost', 'is_active', 'redemption_count_display']
+    list_display = ['name', 'reward_type', 'points_cost', 'is_active', 'has_image', 'redemption_count_display']
     list_filter = ['reward_type', 'is_active']
     search_fields = ['name', 'description']
     ordering = ['points_cost']
+    readonly_fields = ['image_preview']
 
     fieldsets = (
         (None, {
@@ -201,6 +205,10 @@ class RewardAdmin(admin.ModelAdmin):
         }),
         ('Reward Value', {
             'fields': ('discount_amount', 'discount_percentage', 'shopify_product_id')
+        }),
+        ('Image', {
+            'fields': ('image_url', 'image_preview'),
+            'description': 'Auto-fetched from Shopify when saving with a product ID. You can also set a custom URL.'
         }),
         ('Shopify Integration', {
             'fields': ('shopify_discount_code', 'create_shopify_discount')
@@ -217,6 +225,34 @@ class RewardAdmin(admin.ModelAdmin):
     def redemption_count_display(self, obj):
         return obj.redemption_count
     redemption_count_display.short_description = 'Redemptions'
+
+    def has_image(self, obj):
+        if obj.image_url:
+            return format_html('<span style="color: green;">Yes</span>')
+        return format_html('<span style="color: gray;">No</span>')
+    has_image.short_description = 'Image'
+
+    def image_preview(self, obj):
+        if obj.image_url:
+            return format_html(
+                '<img src="{}" style="max-height: 150px; border-radius: 8px;" />',
+                obj.image_url
+            )
+        return 'No image'
+    image_preview.short_description = 'Preview'
+
+    def save_model(self, request, obj, form, change):
+        """Auto-fetch product image from Shopify if product ID is set and no custom image."""
+        if obj.shopify_product_id and not obj.image_url:
+            try:
+                from users.services import ShopifyService
+                service = ShopifyService()
+                image_url = service.get_product_image(obj.shopify_product_id)
+                if image_url:
+                    obj.image_url = image_url
+            except Exception as e:
+                logger.error(f"Failed to fetch product image: {e}")
+        super().save_model(request, obj, form, change)
 
 
 @admin.register(PointsBalance)

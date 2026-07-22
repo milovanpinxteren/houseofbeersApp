@@ -492,6 +492,31 @@ class ShopifyService:
             applies_once_per_customer=applies_once_per_customer,
         )
 
+    def get_product_image(self, product_gid: str) -> Optional[str]:
+        """
+        Get the featured image URL for a product.
+
+        Args:
+            product_gid: Shopify product GID (e.g., gid://shopify/Product/123456)
+
+        Returns:
+            Image URL or None
+        """
+        query = """
+        query getProductImage($id: ID!) {
+            product(id: $id) {
+                featuredImage {
+                    url
+                }
+            }
+        }
+        """
+
+        data = self._graphql_request(query, {"id": product_gid})
+        if data and data.get("product") and data["product"].get("featuredImage"):
+            return data["product"]["featuredImage"]["url"]
+        return None
+
     def get_product_metafield(self, product_id: str, namespace: str, key: str) -> Optional[str]:
         """
         Get a specific metafield value for a product.

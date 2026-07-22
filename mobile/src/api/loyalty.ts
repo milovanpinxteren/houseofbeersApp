@@ -31,6 +31,7 @@ export interface Reward {
   minimum_order_value: string | null;
   is_active: boolean;
   can_redeem: boolean;
+  image_url: string;
 }
 
 export interface Redemption {

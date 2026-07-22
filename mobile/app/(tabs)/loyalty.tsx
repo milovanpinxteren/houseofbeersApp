@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
+  Image,
   FlatList,
   TouchableOpacity,
   StyleSheet,
@@ -240,36 +241,41 @@ export default function LoyaltyScreen() {
           ) : (
             rewards.map((reward) => (
               <View key={reward.id} style={styles.rewardCard}>
-                <View style={styles.rewardInfo}>
-                  <Text style={styles.rewardName}>{reward.name}</Text>
-                  {reward.description ? (
-                    <Text style={styles.rewardDescription}>{reward.description}</Text>
-                  ) : null}
-                  <View style={styles.rewardMeta}>
-                    <Text style={styles.rewardType}>{reward.reward_type_display}</Text>
-                    {reward.discount_amount && (
-                      <Text style={styles.rewardValue}>\u20ac{reward.discount_amount}</Text>
-                    )}
-                    {reward.discount_percentage && (
-                      <Text style={styles.rewardValue}>{reward.discount_percentage}% off</Text>
-                    )}
+                {reward.image_url ? (
+                  <Image source={{ uri: reward.image_url }} style={styles.rewardImage} resizeMode="cover" />
+                ) : null}
+                <View style={styles.rewardBody}>
+                  <View style={styles.rewardInfo}>
+                    <Text style={styles.rewardName}>{reward.name}</Text>
+                    {reward.description ? (
+                      <Text style={styles.rewardDescription}>{reward.description}</Text>
+                    ) : null}
+                    <View style={styles.rewardMeta}>
+                      <Text style={styles.rewardType}>{reward.reward_type_display}</Text>
+                      {reward.discount_amount && (
+                        <Text style={styles.rewardValue}>€{parseFloat(reward.discount_amount)} off</Text>
+                      )}
+                      {reward.discount_percentage && (
+                        <Text style={styles.rewardValue}>{parseFloat(reward.discount_percentage)}% off</Text>
+                      )}
+                    </View>
                   </View>
-                </View>
-                <View style={styles.rewardAction}>
-                  <Text style={styles.pointsCost}>{reward.points_cost}</Text>
-                  <Text style={styles.pointsLabel}>{t('loyalty.points')}</Text>
-                  <TouchableOpacity
-                    style={[
-                      styles.redeemButton,
-                      !reward.can_redeem && styles.redeemButtonDisabled,
-                    ]}
-                    onPress={() => handleRedeem(reward)}
-                    disabled={!reward.can_redeem || isRedeeming === reward.id}
-                  >
-                    <Text style={styles.redeemButtonText}>
-                      {isRedeeming === reward.id ? '...' : t('loyalty.redeem')}
-                    </Text>
-                  </TouchableOpacity>
+                  <View style={styles.rewardAction}>
+                    <Text style={styles.pointsCost}>{reward.points_cost}</Text>
+                    <Text style={styles.pointsLabel}>{t('loyalty.points')}</Text>
+                    <TouchableOpacity
+                      style={[
+                        styles.redeemButton,
+                        !reward.can_redeem && styles.redeemButtonDisabled,
+                      ]}
+                      onPress={() => handleRedeem(reward)}
+                      disabled={!reward.can_redeem || isRedeeming === reward.id}
+                    >
+                      <Text style={styles.redeemButtonText}>
+                        {isRedeeming === reward.id ? '...' : t('loyalty.redeem')}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
               </View>
             ))
@@ -504,11 +510,18 @@ const styles = StyleSheet.create({
   rewardCard: {
     backgroundColor: colors.surface,
     borderRadius: borderRadius.md,
-    padding: spacing.md,
     marginBottom: spacing.sm,
-    flexDirection: 'row',
+    overflow: 'hidden',
     borderWidth: 1,
     borderColor: colors.tertiary + '30',
+  },
+  rewardImage: {
+    width: '100%',
+    height: 140,
+  },
+  rewardBody: {
+    flexDirection: 'row',
+    padding: spacing.md,
   },
   rewardInfo: {
     flex: 1,

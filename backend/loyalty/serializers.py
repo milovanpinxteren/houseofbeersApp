@@ -19,7 +19,7 @@ class RewardSerializer(serializers.ModelSerializer):
         model = Reward
         fields = ['id', 'name', 'description', 'reward_type', 'reward_type_display',
                   'points_cost', 'discount_amount', 'discount_percentage',
-                  'minimum_order_value', 'is_active', 'can_redeem']
+                  'minimum_order_value', 'is_active', 'can_redeem', 'image_url']
 
     def get_can_redeem(self, obj):
         request = self.context.get('request')
