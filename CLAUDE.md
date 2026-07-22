@@ -5,15 +5,19 @@ A loyalty and community app for houseofbeers.nl. This is a new project built fro
 
 ## Stack
 - **Backend**: Django + Django REST Framework, hosted on Dokku at `appadmin.houseofbeers.nl`
-- **Frontend**: Expo (React Native) with Expo Router. Native mobile app for iOS and Android.
+- **Frontend**: Expo (React Native) with Expo Router
+  - **Android**: Native app on Google Play Store
+  - **iOS**: Progressive Web App (PWA) at `app.houseofbeers.nl`
 - **Database**: PostgreSQL (production), SQLite (development)
+- **Task Queue**: Celery + Redis (background sync, scheduled tasks)
+- **Hosting**: Dokku (backend), Netlify (PWA)
 
 ## Repository Structure
 ```
 /backend
-  /config              → Django settings, urls, wsgi
+  /config              → Django settings, urls, wsgi, celery
   /users               → User model, auth, Shopify service
-  /loyalty             → Points, rewards, notifications
+  /loyalty             → Points, rewards, notifications, sync tasks
   /recommendations     → Beer recommendations, taste profiles, favorites
   /templates           → Password reset web page
 
@@ -40,8 +44,24 @@ A loyalty and community app for houseofbeers.nl. This is a new project built fro
     /i18n              → Translations (en.ts, nl.ts)
     /theme             → Colors and spacing
   /assets              → Logo, icons, splash screen
+  /public              → PWA assets (icons, manifest, service worker)
+  /scripts             → Build scripts (PWA icon generation, asset copying)
   eas.json             → EAS Build configuration
+
+/netlify.toml          → Netlify deployment configuration
 ```
+
+---
+
+## Git Repository Structure
+
+This is a monorepo containing both backend and mobile code. Each can be deployed independently.
+
+### GitHub
+- **Repository**: https://github.com/milovanpinxteren/houseofbeersApp
+- **Branch**: `main`
+
+Both `backend/` and `mobile/` are regular directories in the same repo (not submodules).
 
 ---
 
@@ -54,13 +74,17 @@ A loyalty and community app for houseofbeers.nl. This is a new project built fro
 - **Server**: 89.145.161.168
 - **App name**: `houseofbeers-api`
 - **Database**: PostgreSQL via `dokku-postgres` plugin
+- **Redis**: `houseofbeers-redis` via `dokku-redis` plugin (Celery broker)
+- **Processes**: web (gunicorn), worker (celery), beat (celery beat)
 
 #### Deploy Backend
+Deploy only the `backend/` folder to Dokku using git subtree:
 ```bash
-cd backend
-git add .
-git commit -m "Your commit message"
-git push dokku master:main
+# First time: add dokku remote
+git remote add dokku dokku@89.145.161.168:houseofbeers-api
+
+# Deploy backend folder to Dokku
+git subtree push --prefix backend dokku main
 ```
 
 #### Useful Dokku Commands
@@ -69,10 +93,19 @@ ssh root@89.145.161.168
 
 # View logs
 dokku logs houseofbeers-api -t
+dokku logs houseofbeers-api -p worker    # Celery worker logs
+dokku logs houseofbeers-api -p beat      # Celery beat logs
 
 # Run Django commands
 dokku run houseofbeers-api python manage.py createsuperuser
 dokku run houseofbeers-api python manage.py migrate
+
+# Points sync commands
+dokku run houseofbeers-api python manage.py sync_points                        # Partial sync all users
+dokku run houseofbeers-api python manage.py sync_points --type intermediate    # Intermediate sync all users
+dokku run houseofbeers-api python manage.py sync_points --type full            # Full check-and-correct all users
+dokku run houseofbeers-api python manage.py sync_points --email user@example.com  # Sync specific user
+dokku run houseofbeers-api python manage.py sync_points --async                # Dispatch as Celery tasks
 
 # Set environment variables
 dokku config:set houseofbeers-api KEY=value
@@ -80,14 +113,41 @@ dokku config:set houseofbeers-api KEY=value
 # View config
 dokku config:report houseofbeers-api
 
-# Restart app
+# Process management
+dokku ps:report houseofbeers-api         # Check all process statuses
+dokku ps:scale houseofbeers-api web=1 worker=1 beat=1  # Scale processes
 dokku ps:restart houseofbeers-api
 ```
 
-### Mobile (EAS Build)
+### PWA (Netlify) - For iOS Users
+- **URL**: https://app.houseofbeers.nl
+- **Hosting**: Netlify (auto-deploys from GitHub)
+- **Config**: `netlify.toml` in repo root
+
+The PWA is automatically deployed when you push to `main`. Netlify:
+1. Reads `netlify.toml` from repo root
+2. Changes to `mobile/` directory
+3. Runs `npm run build:web`
+4. Publishes `mobile/dist/`
+
+#### PWA Features
+- Installable on iOS home screen ("Add to Home Screen" in Safari)
+- Offline support via service worker
+- Push notifications (iOS 16.4+)
+- Custom splash screens and icons
+
+#### Manual PWA Build (Local Testing)
+```bash
+cd mobile
+npm run build:web      # Build for production API
+npm run serve:web      # Serve locally at http://localhost:3000
+```
+
+### Mobile App (EAS Build) - For Android
 - **Build service**: Expo Application Services (EAS)
 - **Package**: `nl.houseofbeers.app`
 - **EAS Project**: https://expo.dev/accounts/milovp/projects/house-of-beers
+- **Play Store**: Published on Google Play
 
 #### Build Commands
 ```bash
@@ -147,6 +207,7 @@ eas submit --platform android --profile production
   - Points for specific products (SKU or title)
   - Bonus for minimum order value
   - First order bonus
+  - `only_after_registration` flag: only count orders placed after user joined the app
 - [x] Rewards system (redeemable with points):
   - Fixed discount
   - Percentage discount
@@ -154,7 +215,8 @@ eas submit --platform android --profile production
   - Free product (via Shopify product ID)
 - [x] Shopify discount code generation on redemption (GraphQL API)
 - [x] Loyalty tab with points balance, rewards, history, and redemption codes
-- [x] Sync points from Shopify orders (recalculates with current rules)
+- [x] Three-tier points sync system (see Loyalty Sync section below)
+- [x] Admin-awarded points preserved across syncs
 - [x] Copy discount code to clipboard
 
 ### Phase 4: Notifications ✅
@@ -199,13 +261,26 @@ eas submit --platform android --profile production
 - [x] Bottom navbar stays visible on profile sub-screens (nested Stack in tabs)
 - [x] Consistent header with logo across all screens
 
+### Phase 9: PWA for iOS ✅
+- [x] Progressive Web App build configuration
+- [x] Service worker for offline support and caching
+- [x] PWA manifest with app icons and splash screens
+- [x] iOS-specific meta tags (apple-mobile-web-app-capable)
+- [x] Netlify deployment with auto-deploy from GitHub
+- [x] Custom domain: app.houseofbeers.nl
+
+### Phase 10: Order Enhancements ✅
+- [x] Estimated delivery date display on order line items
+- [x] Fetches `custom.estimated_delivery_date` product metafield from Shopify
+- [x] Batch GraphQL queries for efficient metafield retrieval
+
 ---
 
 ## Current App Structure
 
 ### Backend Apps
 - `users/` - User model, authentication, Shopify service, account deletion
-- `loyalty/` - Points rules, rewards, balances, transactions, redemptions, notifications
+- `loyalty/` - Points rules, rewards, balances, transactions, redemptions, notifications, Celery sync tasks
 - `recommendations/` - Beer recommendations, Untappd integration, favorites, taste profiles
 
 ### Mobile Tabs
@@ -278,7 +353,8 @@ function MyComponent() {
 | GET | `/api/loyalty/rewards/` | Available rewards |
 | POST | `/api/loyalty/redeem/` | Redeem a reward |
 | GET | `/api/loyalty/redemptions/` | User's redemptions |
-| POST | `/api/loyalty/sync/` | Sync points from orders |
+| POST | `/api/loyalty/sync/` | Sync points (intermediate sync) |
+| GET | `/api/loyalty/sync/status/` | Check sync status |
 | GET | `/api/loyalty/notifications/` | Active notifications |
 | POST | `/api/loyalty/notifications/<id>/dismiss/` | Dismiss notification |
 
@@ -330,8 +406,11 @@ DEFAULT_FROM_EMAIL=noreply@houseofbeers.nl
 # Password reset links
 FRONTEND_URL=https://appadmin.houseofbeers.nl
 
-# CORS
-CORS_ALLOWED_ORIGINS=https://appadmin.houseofbeers.nl
+# CORS (include PWA domain)
+CORS_ALLOWED_ORIGINS=https://appadmin.houseofbeers.nl,https://app.houseofbeers.nl
+
+# Redis (auto-set by dokku-redis plugin)
+REDIS_URL=redis://...
 ```
 
 ### Mobile (eas.json)
@@ -356,7 +435,16 @@ python manage.py runserver
 # Management commands
 python manage.py sync_shopify           # Sync unlinked users to Shopify
 python manage.py sync_shopify --all     # Resync all users
+python manage.py sync_points            # Partial sync all users (inline)
+python manage.py sync_points --type intermediate  # Intermediate sync all users
+python manage.py sync_points --type full          # Full check-and-correct all users
+python manage.py sync_points --email user@example.com  # Sync specific user
+python manage.py sync_points --async    # Dispatch as Celery tasks
 python manage.py createsuperuser        # Create admin user
+
+# Run Celery worker locally (for development)
+celery -A config worker --loglevel=debug
+celery -A config beat --loglevel=debug
 ```
 
 ### Mobile (Local)
@@ -396,7 +484,9 @@ npx expo start
 - Service: `backend/users/services/shopify.py`
 - Auto-adds `https://` prefix to store URL if missing
 - Customer lookup by email
-- Order fetching for linked customers
+- Order fetching for linked customers (with pagination via `Link` header)
+- `get_customer_orders_since(customer_id, since_date)` — partial sync (new orders only)
+- `get_all_customer_orders(customer_id)` — paginated fetch of ALL orders (250/page)
 - Discount code creation via GraphQL API (supports all 4 discount types)
 
 ### Mobile Token Storage
@@ -406,9 +496,11 @@ npx expo start
 - Handled in `mobile/src/api/client.ts`
 
 ### Points Calculation
-- Rules evaluated in priority order
-- Only processes paid orders
-- Sync recalculates all points from scratch using current rules
+- Rules evaluated in priority order, matched against the order's creation date
+- Only processes paid orders (`financial_status='paid'`)
+- `only_after_registration` flag on rules: skips orders placed before user's `date_joined`
+- Admin-awarded points (adjusted transactions) are preserved across all sync types
+- `balance_after` on all transactions is recalculated chronologically after full sync
 - Service: `backend/loyalty/services/points.py`
 
 ### Discount Code Creation
@@ -418,12 +510,82 @@ npx expo start
 
 ---
 
+## Loyalty Sync System
+
+Three-tier sync system for keeping loyalty points in sync with Shopify orders. All syncs only process users who exist in the Django database and have a linked `shopify_customer_id` — no bulk Shopify customer fetching.
+
+### Sync Tiers
+
+| | Partial | Intermediate | Full |
+|---|---|---|---|
+| **What** | New orders since last sync | All orders, process unprocessed | Check-and-correct all orders |
+| **Schedule** | Every 3 hours (all users) | Nightly 3 AM (all users) | Manual only |
+| **Triggered by** | Celery beat | Celery beat, user taps "Sync" | Django admin action, CLI |
+| **Runs in** | Celery worker (async) | Celery worker (async) / synchronous (user tap) | Celery worker (async) |
+| **Shopify calls/user** | 1 | 1-3 (paginated) | 1-3 (paginated) |
+| **Deletes anything** | No | No | No |
+
+### How Each Sync Works
+
+**Partial**: Looks at `SyncState.last_successful_sync` and calls `get_customer_orders_since()` to fetch only new orders. Passes them to `process_all_orders_for_user()` which skips already-processed orders via `ProcessedOrder` check.
+
+**Intermediate**: Calls `get_all_customer_orders()` (paginated, 250/page) to fetch ALL orders. Same processing — skips already-processed orders. Catches anything the partial sync missed (backdated orders, pagination gaps).
+
+**Full (check-and-correct)**: Fetches ALL orders, then for each already-processed order, recalculates what it SHOULD award with current rules and compares to what WAS awarded. If different, creates an `adjusted` transaction for the difference (e.g., "Points correction for order #1234 (50 → 75)"). Unprocessed orders are awarded normally. No deletions — preserves all history, discount codes, and redemptions.
+
+### Key Models
+
+- **`SyncState`** (OneToOne with User): Tracks `last_successful_sync`, `last_shopify_order_id`, `sync_status` (idle/in_progress/failed), `sync_started_at`, `last_error`. Prevents concurrent syncs with a lock (stale after 10 min).
+- **`ProcessedOrder`**: Tracks which Shopify orders have been awarded points (`shopify_order_id` unique). Prevents duplicate awards.
+
+### Key Files
+
+- `backend/loyalty/services/points.py` — `partial_sync_for_user()`, `intermediate_sync_for_user()`, `full_sync_for_user()`, `check_and_correct_points()`
+- `backend/loyalty/tasks.py` — Celery tasks wrapping the service methods
+- `backend/loyalty/management/commands/sync_points.py` — CLI entry point
+- `backend/users/services/shopify.py` — `_paginated_request()`, `get_all_customer_orders()`, `get_customer_orders_since()`
+
+---
+
+## Celery & Redis
+
+### Infrastructure
+- **Broker**: Redis via Dokku plugin (`dokku-redis`), auto-sets `REDIS_URL`
+- **Config**: `backend/config/celery.py` (app definition), `backend/config/settings.py` (broker, beat schedule)
+- **Init**: `backend/config/__init__.py` imports the celery app
+
+### Dokku Processes (Procfile)
+```
+web: gunicorn config.wsgi --log-file -
+worker: celery -A config worker --loglevel=info --concurrency=2
+beat: celery -A config beat --loglevel=info
+release: python manage.py migrate --noinput
+```
+
+### Beat Schedule
+| Task | Schedule | Description |
+|------|----------|-------------|
+| `loyalty.tasks.periodic_partial_sync` | Every 3 hours | Partial sync for all users with Shopify accounts |
+| `loyalty.tasks.periodic_intermediate_sync` | Daily at 3:00 AM | Intermediate sync for all users |
+
+Both periodic tasks dispatch individual per-user tasks staggered 2 seconds apart to respect Shopify rate limits.
+
+### Tasks
+| Task | Description | Retry |
+|------|-------------|-------|
+| `partial_sync_user_points(user_id)` | Partial sync for one user | 3x, 60s delay |
+| `intermediate_sync_user_points(user_id)` | Intermediate sync for one user | 3x, 60s delay |
+| `full_sync_user_points(user_id)` | Full check-and-correct for one user | 2x, 120s delay |
+| `periodic_partial_sync()` | Dispatches partial sync per user | — |
+| `periodic_intermediate_sync()` | Dispatches intermediate sync per user | — |
+
+---
+
 ## Planned Features (Not Yet Implemented)
 - Community / chat
 - Push notifications (separate from in-app notifications)
 - Product browsing from Shopify
 - Loyalty tiers/levels
-- iOS App Store release
 
 ---
 
@@ -495,3 +657,20 @@ This keeps the bottom tab bar visible while navigating profile screens.
 ### Build fails on EAS
 - Check build logs at https://expo.dev
 - Common issue: dependency version conflicts (check package.json)
+
+### PWA not updating
+- Service worker caches aggressively; users may need to close all tabs and reopen
+- Clear service worker in DevTools → Application → Service Workers → Unregister
+
+### PWA shows wrong API URL
+- Check `EXPO_PUBLIC_API_URL` in `netlify.toml` for production
+- Local `.env` file overrides for development
+- Rebuild with `npm run build:web` after changes
+
+### Git subtree push fails
+- If you get "Updates were rejected", try:
+  ```bash
+  git subtree split --prefix backend -b backend-deploy
+  git push dokku backend-deploy:main --force
+  git branch -D backend-deploy
+  ```
