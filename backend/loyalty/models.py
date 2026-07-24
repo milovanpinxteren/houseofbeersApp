@@ -174,11 +174,14 @@ class Reward(models.Model):
     valid_from = models.DateTimeField(null=True, blank=True)
     valid_until = models.DateTimeField(null=True, blank=True)
 
+    # Display order
+    ordering = models.IntegerField(default=0, help_text="Lower numbers appear first within a category")
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['points_cost']
+        ordering = ['ordering', 'points_cost']
         verbose_name = 'Reward'
         verbose_name_plural = 'Rewards'
 

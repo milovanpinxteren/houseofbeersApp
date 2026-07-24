@@ -205,10 +205,11 @@ class RewardCategoryAdmin(admin.ModelAdmin):
 
 @admin.register(Reward)
 class RewardAdmin(admin.ModelAdmin):
-    list_display = ['name', 'category', 'reward_type', 'points_cost', 'is_active', 'has_image', 'redemption_count_display']
+    list_display = ['name', 'category', 'ordering', 'reward_type', 'points_cost', 'is_active', 'has_image', 'redemption_count_display']
+    list_editable = ['ordering']
     list_filter = ['category', 'reward_type', 'is_active']
     search_fields = ['name', 'description']
-    ordering = ['points_cost']
+    ordering = ['category', 'ordering', 'points_cost']
     readonly_fields = ['image_preview']
 
     fieldsets = (
@@ -230,7 +231,7 @@ class RewardAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
         ('Status & Validity', {
-            'fields': ('is_active', 'valid_from', 'valid_until')
+            'fields': ('is_active', 'valid_from', 'valid_until', 'ordering')
         }),
     )
 
