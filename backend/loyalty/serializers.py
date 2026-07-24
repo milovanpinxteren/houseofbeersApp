@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import PointsRule, Reward, PointsBalance, PointsTransaction, Redemption, Notification
+from .models import PointsRule, RewardCategory, Reward, PointsBalance, PointsTransaction, Redemption, Notification
 
 
 class PointsRuleSerializer(serializers.ModelSerializer):
@@ -9,6 +9,12 @@ class PointsRuleSerializer(serializers.ModelSerializer):
         model = PointsRule
         fields = ['id', 'name', 'description', 'rule_type', 'rule_type_display',
                   'points', 'condition_value', 'multiplier', 'is_active']
+
+
+class RewardCategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RewardCategory
+        fields = ['id', 'name']
 
 
 class RewardSerializer(serializers.ModelSerializer):

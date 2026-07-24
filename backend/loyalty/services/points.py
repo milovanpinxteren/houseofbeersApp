@@ -352,7 +352,46 @@ class LoyaltyService:
             models.Q(valid_from__isnull=True) | models.Q(valid_from__lte=now)
         ).filter(
             models.Q(valid_until__isnull=True) | models.Q(valid_until__gte=now)
-        ))
+        ).select_related('category'))
+
+    def get_rewards_grouped(self) -> Dict[str, Any]:
+        """Get rewards grouped by category. Returns active categories (ordered) and uncategorized rewards."""
+        from loyalty.models import RewardCategory
+
+        rewards = self.get_all_rewards()
+
+        # Get active categories that have active rewards
+        active_category_ids = {r.category_id for r in rewards if r.category_id}
+        categories = RewardCategory.objects.filter(
+            id__in=active_category_ids,
+            is_active=True,
+        ).order_by('ordering', 'name')
+
+        active_cat_ids = {c.id for c in categories}
+
+        # Group rewards by category
+        category_rewards: Dict[int, list] = {}
+        uncategorized = []
+        for reward in rewards:
+            if reward.category_id and reward.category_id in active_cat_ids:
+                category_rewards.setdefault(reward.category_id, []).append(reward)
+            else:
+                uncategorized.append(reward)
+
+        grouped = []
+        for cat in categories:
+            cat_rewards = category_rewards.get(cat.id, [])
+            if cat_rewards:
+                grouped.append({
+                    'id': cat.id,
+                    'name': cat.name,
+                    'rewards': cat_rewards,
+                })
+
+        return {
+            'categories': grouped,
+            'uncategorized': uncategorized,
+        }
 
     def _generate_discount_code(self) -> str:
         """Generate a unique discount code."""

@@ -60,14 +60,31 @@ class PointsTransactionsView(APIView):
 
 
 class RewardsListView(APIView):
-    """List all available rewards."""
+    """List all available rewards, grouped by category."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         service = LoyaltyService()
-        rewards = service.get_all_rewards()
-        serializer = RewardSerializer(rewards, many=True, context={'request': request})
-        return Response({'rewards': serializer.data})
+        grouped = service.get_rewards_grouped()
+
+        categories = []
+        for cat_group in grouped['categories']:
+            categories.append({
+                'id': cat_group['id'],
+                'name': cat_group['name'],
+                'rewards': RewardSerializer(
+                    cat_group['rewards'], many=True, context={'request': request}
+                ).data,
+            })
+
+        uncategorized = RewardSerializer(
+            grouped['uncategorized'], many=True, context={'request': request}
+        ).data
+
+        return Response({
+            'categories': categories,
+            'uncategorized': uncategorized,
+        })
 
 
 class RedeemRewardView(APIView):

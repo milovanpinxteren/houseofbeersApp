@@ -2,7 +2,7 @@ import logging
 from django.contrib import admin
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
-from .models import PointsRule, Reward, PointsBalance, PointsTransaction, Redemption, ProcessedOrder, SyncState, Notification, NotificationRead
+from .models import PointsRule, RewardCategory, Reward, PointsBalance, PointsTransaction, Redemption, ProcessedOrder, SyncState, Notification, NotificationRead
 
 logger = logging.getLogger(__name__)
 
@@ -191,17 +191,29 @@ class PointsRuleAdmin(admin.ModelAdmin):
         js = ('loyalty/js/pointsrule_admin.js',)
 
 
+@admin.register(RewardCategory)
+class RewardCategoryAdmin(admin.ModelAdmin):
+    list_display = ['name', 'ordering', 'is_active', 'reward_count']
+    list_editable = ['ordering', 'is_active']
+    search_fields = ['name']
+    ordering = ['ordering', 'name']
+
+    def reward_count(self, obj):
+        return obj.rewards.filter(is_active=True).count()
+    reward_count.short_description = 'Active Rewards'
+
+
 @admin.register(Reward)
 class RewardAdmin(admin.ModelAdmin):
-    list_display = ['name', 'reward_type', 'points_cost', 'is_active', 'has_image', 'redemption_count_display']
-    list_filter = ['reward_type', 'is_active']
+    list_display = ['name', 'category', 'reward_type', 'points_cost', 'is_active', 'has_image', 'redemption_count_display']
+    list_filter = ['category', 'reward_type', 'is_active']
     search_fields = ['name', 'description']
     ordering = ['points_cost']
     readonly_fields = ['image_preview']
 
     fieldsets = (
         (None, {
-            'fields': ('name', 'description', 'reward_type', 'points_cost')
+            'fields': ('name', 'description', 'reward_type', 'points_cost', 'category')
         }),
         ('Reward Value', {
             'fields': ('discount_amount', 'discount_percentage', 'shopify_product_id')

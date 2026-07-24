@@ -34,6 +34,17 @@ export interface Reward {
   image_url: string;
 }
 
+export interface RewardCategoryGroup {
+  id: number;
+  name: string;
+  rewards: Reward[];
+}
+
+export interface RewardsResponse {
+  categories: RewardCategoryGroup[];
+  uncategorized: Reward[];
+}
+
 export interface Redemption {
   id: number;
   reward: number;
@@ -85,9 +96,8 @@ export async function getTransactions(): Promise<PointsTransaction[]> {
   return response.transactions;
 }
 
-export async function getRewards(): Promise<Reward[]> {
-  const response = await apiFetch<{ rewards: Reward[] }>('/loyalty/rewards/');
-  return response.rewards;
+export async function getRewards(): Promise<RewardsResponse> {
+  return apiFetch<RewardsResponse>('/loyalty/rewards/');
 }
 
 export async function getRedemptions(): Promise<Redemption[]> {

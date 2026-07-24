@@ -12,7 +12,14 @@ import {
   ScrollView,
   Dimensions,
   Pressable,
+  LayoutAnimation,
+  Platform,
+  UIManager,
 } from 'react-native';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/context/AuthContext';
@@ -27,6 +34,7 @@ import {
   syncPoints,
   LoyaltySummary,
   Reward,
+  RewardsResponse,
   PointsTransaction,
   Redemption,
 } from '../../src/api/loyalty';
@@ -39,7 +47,8 @@ export default function LoyaltyScreen() {
   const { language } = useLanguage();
   const [activeTab, setActiveTab] = useState<TabType>('rewards');
   const [summary, setSummary] = useState<LoyaltySummary | null>(null);
-  const [rewards, setRewards] = useState<Reward[]>([]);
+  const [rewardsData, setRewardsData] = useState<RewardsResponse>({ categories: [], uncategorized: [] });
+  const [collapsedCategories, setCollapsedCategories] = useState<Set<number>>(new Set());
   const [transactions, setTransactions] = useState<PointsTransaction[]>([]);
   const [redemptions, setRedemptions] = useState<Redemption[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -50,20 +59,27 @@ export default function LoyaltyScreen() {
   const [error, setError] = useState('');
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [imageOverlay, setImageOverlay] = useState<string | null>(null);
+  const [initialCollapseSet, setInitialCollapseSet] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
       setError('');
-      const [summaryData, rewardsData, transactionsData, redemptionsData] = await Promise.all([
+      const [summaryData, rewardsResult, transactionsData, redemptionsData] = await Promise.all([
         getLoyaltySummary(),
         getRewards(),
         getTransactions(),
         getRedemptions(),
       ]);
       setSummary(summaryData);
-      setRewards(rewardsData);
+      setRewardsData(rewardsResult);
       setTransactions(transactionsData);
       setRedemptions(redemptionsData);
+
+      // Default all categories to collapsed on first load
+      if (!initialCollapseSet && rewardsResult.categories.length > 0) {
+        setCollapsedCategories(new Set(rewardsResult.categories.map(c => c.id)));
+        setInitialCollapseSet(true);
+      }
     } catch (err) {
       console.log('[Loyalty] Error:', err);
       setError(err instanceof Error ? err.message : 'Failed to load loyalty data');
@@ -71,7 +87,7 @@ export default function LoyaltyScreen() {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, []);
+  }, [initialCollapseSet]);
 
   useEffect(() => {
     loadData();
@@ -131,6 +147,19 @@ export default function LoyaltyScreen() {
     await Clipboard.setStringAsync(code);
     setCopiedCode(code);
     setTimeout(() => setCopiedCode(null), 2000);
+  }
+
+  function toggleCategory(categoryId: number) {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setCollapsedCategories(prev => {
+      const next = new Set(prev);
+      if (next.has(categoryId)) {
+        next.delete(categoryId);
+      } else {
+        next.add(categoryId);
+      }
+      return next;
+    });
   }
 
   function formatDate(dateString: string): string {
@@ -237,54 +266,122 @@ export default function LoyaltyScreen() {
       {/* Tab Content */}
       <View style={styles.tabContent}>
         {activeTab === 'rewards' && (
-          rewards.length === 0 ? (
+          rewardsData.categories.length === 0 && rewardsData.uncategorized.length === 0 ? (
             <View style={styles.emptyState}>
               <Ionicons name="gift-outline" size={48} color={colors.textMuted} />
               <Text style={styles.emptyText}>{t('loyalty.noRewards')}</Text>
             </View>
           ) : (
-            rewards.map((reward) => (
-              <View key={reward.id} style={styles.rewardCard}>
-                {reward.image_url ? (
-                  <TouchableOpacity activeOpacity={0.9} onPress={() => setImageOverlay(reward.image_url)}>
-                    <Image source={{ uri: reward.image_url }} style={styles.rewardImage} resizeMode="cover" />
-                  </TouchableOpacity>
-                ) : null}
-                <View style={styles.rewardBody}>
-                  <View style={styles.rewardInfo}>
-                    <Text style={styles.rewardName}>{reward.name}</Text>
-                    {reward.description ? (
-                      <Text style={styles.rewardDescription}>{reward.description}</Text>
-                    ) : null}
-                    <View style={styles.rewardMeta}>
-                      <Text style={styles.rewardType}>{reward.reward_type_display}</Text>
-                      {reward.discount_amount && (
-                        <Text style={styles.rewardValue}>€{parseFloat(reward.discount_amount)} off</Text>
-                      )}
-                      {reward.discount_percentage && (
-                        <Text style={styles.rewardValue}>{parseFloat(reward.discount_percentage)}% off</Text>
-                      )}
+            <>
+              {rewardsData.categories.map((category) => {
+                const isCollapsed = collapsedCategories.has(category.id);
+                return (
+                  <View key={`cat-${category.id}`} style={styles.categorySection}>
+                    <TouchableOpacity
+                      style={styles.categoryHeader}
+                      onPress={() => toggleCategory(category.id)}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.categoryName}>{category.name}</Text>
+                      <View style={styles.categoryRight}>
+                        <View style={styles.categoryBadge}>
+                          <Text style={styles.categoryCount}>{category.rewards.length}</Text>
+                        </View>
+                        <Ionicons
+                          name={isCollapsed ? 'chevron-down' : 'chevron-up'}
+                          size={20}
+                          color={colors.primary}
+                        />
+                      </View>
+                    </TouchableOpacity>
+                    {!isCollapsed && category.rewards.map((reward) => (
+                      <View key={reward.id} style={styles.rewardCard}>
+                        {reward.image_url ? (
+                          <TouchableOpacity activeOpacity={0.9} onPress={() => setImageOverlay(reward.image_url)}>
+                            <Image source={{ uri: reward.image_url }} style={styles.rewardImage} resizeMode="cover" />
+                          </TouchableOpacity>
+                        ) : null}
+                        <View style={styles.rewardBody}>
+                          <View style={styles.rewardInfo}>
+                            <Text style={styles.rewardName}>{reward.name}</Text>
+                            {reward.description ? (
+                              <Text style={styles.rewardDescription}>{reward.description}</Text>
+                            ) : null}
+                            <View style={styles.rewardMeta}>
+                              <Text style={styles.rewardType}>{reward.reward_type_display}</Text>
+                              {reward.discount_amount && (
+                                <Text style={styles.rewardValue}>€{parseFloat(reward.discount_amount)} off</Text>
+                              )}
+                              {reward.discount_percentage && (
+                                <Text style={styles.rewardValue}>{parseFloat(reward.discount_percentage)}% off</Text>
+                              )}
+                            </View>
+                          </View>
+                          <View style={styles.rewardAction}>
+                            <Text style={styles.pointsCost}>{reward.points_cost}</Text>
+                            <Text style={styles.pointsLabel}>{t('loyalty.points')}</Text>
+                            <TouchableOpacity
+                              style={[
+                                styles.redeemButton,
+                                !reward.can_redeem && styles.redeemButtonDisabled,
+                              ]}
+                              onPress={() => handleRedeem(reward)}
+                              disabled={!reward.can_redeem || isRedeeming === reward.id}
+                            >
+                              <Text style={styles.redeemButtonText}>
+                                {isRedeeming === reward.id ? '...' : t('loyalty.redeem')}
+                              </Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                );
+              })}
+              {rewardsData.uncategorized.map((reward) => (
+                <View key={reward.id} style={styles.rewardCard}>
+                  {reward.image_url ? (
+                    <TouchableOpacity activeOpacity={0.9} onPress={() => setImageOverlay(reward.image_url)}>
+                      <Image source={{ uri: reward.image_url }} style={styles.rewardImage} resizeMode="cover" />
+                    </TouchableOpacity>
+                  ) : null}
+                  <View style={styles.rewardBody}>
+                    <View style={styles.rewardInfo}>
+                      <Text style={styles.rewardName}>{reward.name}</Text>
+                      {reward.description ? (
+                        <Text style={styles.rewardDescription}>{reward.description}</Text>
+                      ) : null}
+                      <View style={styles.rewardMeta}>
+                        <Text style={styles.rewardType}>{reward.reward_type_display}</Text>
+                        {reward.discount_amount && (
+                          <Text style={styles.rewardValue}>€{parseFloat(reward.discount_amount)} off</Text>
+                        )}
+                        {reward.discount_percentage && (
+                          <Text style={styles.rewardValue}>{parseFloat(reward.discount_percentage)}% off</Text>
+                        )}
+                      </View>
+                    </View>
+                    <View style={styles.rewardAction}>
+                      <Text style={styles.pointsCost}>{reward.points_cost}</Text>
+                      <Text style={styles.pointsLabel}>{t('loyalty.points')}</Text>
+                      <TouchableOpacity
+                        style={[
+                          styles.redeemButton,
+                          !reward.can_redeem && styles.redeemButtonDisabled,
+                        ]}
+                        onPress={() => handleRedeem(reward)}
+                        disabled={!reward.can_redeem || isRedeeming === reward.id}
+                      >
+                        <Text style={styles.redeemButtonText}>
+                          {isRedeeming === reward.id ? '...' : t('loyalty.redeem')}
+                        </Text>
+                      </TouchableOpacity>
                     </View>
                   </View>
-                  <View style={styles.rewardAction}>
-                    <Text style={styles.pointsCost}>{reward.points_cost}</Text>
-                    <Text style={styles.pointsLabel}>{t('loyalty.points')}</Text>
-                    <TouchableOpacity
-                      style={[
-                        styles.redeemButton,
-                        !reward.can_redeem && styles.redeemButtonDisabled,
-                      ]}
-                      onPress={() => handleRedeem(reward)}
-                      disabled={!reward.can_redeem || isRedeeming === reward.id}
-                    >
-                      <Text style={styles.redeemButtonText}>
-                        {isRedeeming === reward.id ? '...' : t('loyalty.redeem')}
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
                 </View>
-              </View>
-            ))
+              ))}
+            </>
           )
         )}
 
@@ -526,6 +623,43 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
     color: colors.textMuted,
     fontSize: 14,
+  },
+  categorySection: {
+    marginBottom: spacing.sm,
+  },
+  categoryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.surface,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    borderRadius: borderRadius.md,
+    marginBottom: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.primary + '30',
+  },
+  categoryName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.primary,
+    flex: 1,
+  },
+  categoryRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  categoryBadge: {
+    backgroundColor: colors.primary + '20',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: borderRadius.sm,
+  },
+  categoryCount: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.primary,
   },
   rewardCard: {
     backgroundColor: colors.surface,

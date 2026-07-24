@@ -64,6 +64,25 @@ class PointsRule(models.Model):
         return f"{self.name} ({self.get_rule_type_display()})"
 
 
+class RewardCategory(models.Model):
+    """
+    Categories for grouping related rewards (e.g., "Sweaters" for S/M/L/XL variants).
+    """
+    name = models.CharField(max_length=200)
+    ordering = models.IntegerField(default=0, help_text="Lower numbers appear first")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['ordering', 'name']
+        verbose_name = 'Reward Category'
+        verbose_name_plural = 'Reward Categories'
+
+    def __str__(self):
+        return self.name
+
+
 class Reward(models.Model):
     """
     Rewards that can be redeemed with loyalty points.
@@ -82,6 +101,16 @@ class Reward(models.Model):
 
     # Cost in points
     points_cost = models.IntegerField(validators=[MinValueValidator(1)])
+
+    # Category
+    category = models.ForeignKey(
+        'RewardCategory',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='rewards',
+        help_text="Group this reward under a category. Leave empty for uncategorized."
+    )
 
     # Reward value
     discount_amount = models.DecimalField(
