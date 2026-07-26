@@ -62,7 +62,9 @@ export default function TasteProfileScreen() {
       return (
         <View style={styles.noChartContainer}>
           <Ionicons name="analytics-outline" size={48} color={colors.textMuted} />
-          <Text style={styles.noChartText}>{t('recommendations.notEnoughData')}</Text>
+          <Text style={styles.noChartText}>
+            {profile?.message || t('recommendations.notEnoughData')}
+          </Text>
         </View>
       );
     }

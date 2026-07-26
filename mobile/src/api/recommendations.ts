@@ -32,12 +32,13 @@ export interface ProfileSummary {
 }
 
 export interface RecommendationsResponse {
-  profile_summary: ProfileSummary;
+  profile_summary: ProfileSummary | null;
   recommendations: ScoredBeer[];
   discovery_picks: ScoredBeer[];
   tried_beers: ScoredBeer[];
   profile_source: 'untappd' | 'shopify';
   profile_identifier: string;
+  message?: string;
 }
 
 export interface RadarChartData {
@@ -52,10 +53,10 @@ export interface RadarChartData {
 }
 
 export interface TasteProfileResponse {
-  username: string;
+  username?: string;
   total_checkins: number;
   unique_beers: number;
-  radar_chart: RadarChartData;
+  radar_chart: RadarChartData | null;
   style_distribution: Array<{
     style: string;
     count: number;
@@ -69,11 +70,11 @@ export interface TasteProfileResponse {
     preferred_max: number | null;
     range_label: string;
     category: string;
-  };
+  } | null;
   rating_profile: {
     average: number;
     category: string;
-  };
+  } | null;
   top_breweries: Array<{
     brewery: string;
     count: number;
@@ -81,6 +82,7 @@ export interface TasteProfileResponse {
   }>;
   profile_source: 'untappd' | 'shopify';
   profile_identifier: string;
+  message?: string;
 }
 
 export interface UntappdProfile {

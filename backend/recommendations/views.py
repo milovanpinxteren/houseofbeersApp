@@ -16,10 +16,37 @@ from .serializers import (
 logger = logging.getLogger(__name__)
 
 
+def _get_untappd_profile(user):
+    """Safely get user's Untappd profile, returning None if not linked."""
+    try:
+        return user.untappd_profile
+    except UntappdProfile.DoesNotExist:
+        return None
+
+
+EMPTY_RECOMMENDATIONS = {
+    'recommendations': [],
+    'discovery_picks': [],
+    'tried_beers': [],
+    'profile_summary': None,
+}
+
+EMPTY_TASTE_PROFILE = {
+    'total_checkins': 0,
+    'unique_beers': 0,
+    'radar_chart': {'axes': [], 'values': [], 'details': []},
+    'style_distribution': [],
+    'top_breweries': [],
+    'abv_profile': None,
+    'rating_profile': None,
+}
+
+
 class RecommendationsView(APIView):
     """
     Get beer recommendations for the current user.
     Uses Untappd profile if linked, otherwise falls back to Shopify order history.
+    If Untappd fails, automatically falls back to Shopify.
     """
     permission_classes = [IsAuthenticated]
 
@@ -32,20 +59,29 @@ class RecommendationsView(APIView):
         filter_serializer.is_valid(raise_exception=True)
         filters = filter_serializer.validated_data
 
-        try:
-            # Check if user has linked Untappd
-            untappd_profile = getattr(user, 'untappd_profile', None)
+        untappd_profile = _get_untappd_profile(user)
+        result = None
+        profile_source = 'shopify'
+        profile_identifier = user.email
 
+        try:
+            # Try Untappd first if linked
             if untappd_profile:
-                # Use Untappd profile
-                result = service.get_recommendations(
-                    username=untappd_profile.username,
-                    **filters
-                )
-                profile_source = 'untappd'
-                profile_identifier = untappd_profile.username
-            else:
-                # Fall back to email (Shopify order history)
+                try:
+                    result = service.get_recommendations(
+                        username=untappd_profile.username,
+                        **filters
+                    )
+                    profile_source = 'untappd'
+                    profile_identifier = untappd_profile.username
+                except RecommendationAPIError as e:
+                    logger.warning(
+                        f"Untappd recommendations failed for {user.email} "
+                        f"(username: {untappd_profile.username}): {e} — falling back to Shopify"
+                    )
+
+            # Fall back to Shopify if Untappd failed or not linked
+            if result is None:
                 result = service.get_recommendations(
                     email=user.email,
                     **filters
@@ -55,7 +91,6 @@ class RecommendationsView(APIView):
 
             # Handle async response (new user, needs profile building)
             if result.get('status') == 'pending' and result.get('task_id'):
-                # Poll for result (blocking, but recommendation API handles the heavy lifting)
                 result = service.poll_for_result(result['task_id'])
 
             # Add profile source info
@@ -69,19 +104,16 @@ class RecommendationsView(APIView):
 
         except RecommendationAPIError as e:
             logger.error(f"Recommendation API error for {user.email}: {e}")
-            # Return friendly message for 404 (user has no profile/orders yet)
             if e.status_code == 404:
                 return Response({
-                    'recommendations': [],
-                    'discovery_picks': [],
-                    'tried_beers': [],
-                    'profile_summary': None,
-                    'profile_source': profile_source if 'profile_source' in dir() else 'shopify',
+                    **EMPTY_RECOMMENDATIONS,
+                    'profile_source': profile_source,
+                    'profile_identifier': profile_identifier,
                     'message': 'No purchase history found yet. Start shopping to get personalized recommendations!'
                 })
             return Response(
                 {'error': str(e)},
-                status=status.HTTP_502_BAD_GATEWAY if not e.status_code else e.status_code
+                status=e.status_code or status.HTTP_502_BAD_GATEWAY
             )
         except Exception as e:
             logger.error(f"Unexpected error getting recommendations for {user.email}: {e}")
@@ -94,6 +126,7 @@ class RecommendationsView(APIView):
 class TasteProfileView(APIView):
     """
     Get detailed taste profile for visualization (radar chart, etc.)
+    If Untappd fails, automatically falls back to Shopify order history.
     """
     permission_classes = [IsAuthenticated]
 
@@ -101,23 +134,38 @@ class TasteProfileView(APIView):
         user = request.user
         service = RecommendationService()
 
-        try:
-            untappd_profile = getattr(user, 'untappd_profile', None)
+        untappd_profile = _get_untappd_profile(user)
+        result = None
+        profile_source = 'shopify'
+        profile_identifier = user.email
 
+        try:
+            # Try Untappd first if linked
             if untappd_profile:
-                result = service.get_profile(
-                    untappd_profile.username,
-                    profile_type='untappd'
-                )
-                result['profile_source'] = 'untappd'
-                result['profile_identifier'] = untappd_profile.username
-            else:
+                try:
+                    result = service.get_profile(
+                        untappd_profile.username,
+                        profile_type='untappd'
+                    )
+                    profile_source = 'untappd'
+                    profile_identifier = untappd_profile.username
+                except RecommendationAPIError as e:
+                    logger.warning(
+                        f"Untappd profile fetch failed for {user.email} "
+                        f"(username: {untappd_profile.username}): {e} — falling back to Shopify"
+                    )
+
+            # Fall back to Shopify if Untappd failed or not linked
+            if result is None:
                 result = service.get_profile(
                     user.email,
                     profile_type='shopify'
                 )
-                result['profile_source'] = 'shopify'
-                result['profile_identifier'] = user.email
+                profile_source = 'shopify'
+                profile_identifier = user.email
+
+            result['profile_source'] = profile_source
+            result['profile_identifier'] = profile_identifier
 
             from analytics.tracker import track
             track('taste_profile', user=user)
@@ -126,20 +174,16 @@ class TasteProfileView(APIView):
 
         except RecommendationAPIError as e:
             logger.error(f"Profile API error for {user.email}: {e}")
-            # Return friendly message for 404 (user has no profile/orders yet)
             if e.status_code == 404:
                 return Response({
-                    'taste_profile': None,
-                    'style_distribution': [],
-                    'top_breweries': [],
-                    'abv_profile': None,
-                    'total_beers': 0,
-                    'profile_source': result.get('profile_source', 'shopify') if 'result' in dir() else 'shopify',
+                    **EMPTY_TASTE_PROFILE,
+                    'profile_source': profile_source,
+                    'profile_identifier': profile_identifier,
                     'message': 'No taste profile available yet. Start shopping or link your Untappd account to build your profile!'
                 })
             return Response(
                 {'error': str(e)},
-                status=status.HTTP_502_BAD_GATEWAY if not e.status_code else e.status_code
+                status=e.status_code or status.HTTP_502_BAD_GATEWAY
             )
         except Exception as e:
             logger.error(f"Unexpected error getting profile for {user.email}: {e}")
