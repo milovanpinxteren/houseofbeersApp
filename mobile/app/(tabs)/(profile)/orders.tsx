@@ -106,6 +106,28 @@ export default function OrdersScreen() {
     return `${count} ${t('orders.items')}`;
   }
 
+  function getItemFulfillmentLabel(status: string | null): string {
+    switch (status) {
+      case 'fulfilled':
+        return t('orders.itemFulfilled');
+      case 'partial':
+        return t('orders.itemPartial');
+      default:
+        return t('orders.itemUnfulfilled');
+    }
+  }
+
+  function getItemFulfillmentColor(status: string | null): string {
+    switch (status) {
+      case 'fulfilled':
+        return colors.success;
+      case 'partial':
+        return colors.warning;
+      default:
+        return colors.textMuted;
+    }
+  }
+
   if (!user?.shopify_customer_id) {
     return (
       <View style={styles.centerContainer}>
@@ -211,6 +233,27 @@ export default function OrdersScreen() {
                           {item.variant_title && (
                             <Text style={styles.lineItemVariant}>{item.variant_title}</Text>
                           )}
+                          <View
+                            style={[
+                              styles.itemFulfillmentBadge,
+                              { backgroundColor: getItemFulfillmentColor(item.fulfillment_status) + '20' },
+                            ]}
+                          >
+                            <View
+                              style={[
+                                styles.itemFulfillmentDot,
+                                { backgroundColor: getItemFulfillmentColor(item.fulfillment_status) },
+                              ]}
+                            />
+                            <Text
+                              style={[
+                                styles.itemFulfillmentText,
+                                { color: getItemFulfillmentColor(item.fulfillment_status) },
+                              ]}
+                            >
+                              {getItemFulfillmentLabel(item.fulfillment_status)}
+                            </Text>
+                          </View>
                           {item.estimated_delivery_date && (
                             <Text style={styles.estimatedDelivery}>
                               {t('orders.estimatedDelivery')}: {item.estimated_delivery_date}
@@ -373,6 +416,25 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textMuted,
     marginTop: 2,
+  },
+  itemFulfillmentBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: borderRadius.sm,
+    marginTop: 4,
+  },
+  itemFulfillmentDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 4,
+  },
+  itemFulfillmentText: {
+    fontSize: 11,
+    fontWeight: '600',
   },
   estimatedDelivery: {
     fontSize: 12,

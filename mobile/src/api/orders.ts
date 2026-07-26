@@ -8,6 +8,7 @@ export interface LineItem {
   price: string;
   sku: string | null;
   product_id: number | null;
+  fulfillment_status: string | null;
   estimated_delivery_date: string | null;
 }
 

@@ -68,6 +68,9 @@ export default {
     delivered: 'Delivered',
     partiallyShipped: 'Partially shipped',
     processing: 'Processing',
+    itemFulfilled: 'Shipped',
+    itemPartial: 'Partially shipped',
+    itemUnfulfilled: 'Not yet shipped',
     estimatedDelivery: 'Est. delivery',
   },
 

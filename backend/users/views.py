@@ -267,6 +267,7 @@ class UserOrdersView(APIView):
                             'price': item.get('price'),
                             'sku': item.get('sku'),
                             'product_id': item.get('product_id'),
+                            'fulfillment_status': item.get('fulfillment_status'),
                             'estimated_delivery_date': delivery_dates.get(str(item.get('product_id'))),
                         }
                         for item in order.get('line_items', [])

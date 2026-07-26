@@ -68,6 +68,9 @@ export default {
     delivered: 'Bezorgd',
     partiallyShipped: 'Gedeeltelijk verzonden',
     processing: 'In behandeling',
+    itemFulfilled: 'Verzonden',
+    itemPartial: 'Gedeeltelijk verzonden',
+    itemUnfulfilled: 'Nog niet verzonden',
     estimatedDelivery: 'Verw. levering',
   },
 
