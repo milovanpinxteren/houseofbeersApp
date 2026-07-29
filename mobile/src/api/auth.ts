@@ -26,6 +26,8 @@ interface User {
   shopify_customer_id: string | null;
   shopify_linked_at: string | null;
   date_joined: string;
+  birthdate?: string | null;
+  birthdate_locked?: boolean;
 }
 
 export async function register(data: RegisterData): Promise<void> {
@@ -79,5 +81,17 @@ export async function updateProfile(data: { first_name?: string; last_name?: str
   return apiFetch<User>('/users/me/', {
     method: 'PATCH',
     body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Sets the date of birth (YYYY-MM-DD). The backend validates it (real date,
+ * 18+) and locks it once the first birthday gift has been issued, so callers
+ * should show the returned error message rather than a generic one.
+ */
+export async function updateBirthdate(birthdate: string): Promise<User> {
+  return apiFetch<User>('/users/me/birthdate/', {
+    method: 'PATCH',
+    body: JSON.stringify({ birthdate }),
   });
 }

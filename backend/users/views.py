@@ -12,12 +12,15 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
 
+from django.utils import timezone
+
 from .serializers import (
-    RegisterSerializer, 
-    UserSerializer, 
+    RegisterSerializer,
+    UserSerializer,
     EmailTokenObtainPairSerializer,
     PasswordResetRequestSerializer,
     PasswordResetConfirmSerializer,
+    BirthdateSerializer,
 )
 from .services import ShopifyService
 from django.contrib.auth import get_user_model
@@ -91,6 +94,37 @@ class UserMeView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data)
+
+
+class UserBirthdateView(APIView):
+    """
+    Set the current user's birthdate.
+
+    Freely editable until the first birthday gift is issued, then locked
+    (an admin can still correct it in Django admin).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request):
+        user = request.user
+
+        if user.birthdate_locked:
+            return Response(
+                {'error': 'Your birthdate is locked because a birthday gift has already '
+                          'been issued. Contact us if it needs correcting.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        serializer = BirthdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user.birthdate = serializer.validated_data['birthdate']
+        user.birthdate_set_at = timezone.now()
+        user.save(update_fields=['birthdate', 'birthdate_set_at'])
+
+        logger.info(f"Birthdate set for {user.email}")
+
+        return Response(UserSerializer(user).data)
 
 
 class UserSyncShopifyView(APIView):

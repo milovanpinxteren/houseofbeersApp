@@ -9,6 +9,12 @@
 [build.environment]
   # Set the API URL for production
   EXPO_PUBLIC_API_URL = "https://appadmin.houseofbeers.nl/api"
+  # Fallback for web push. The app normally fetches the VAPID public key from
+  # /api/notifications/vapid-public-key/; this is used only if that request
+  # fails. Public by design — the private half lives in the backend's
+  # VAPID_PRIVATE_KEY config var and must never appear here.
+  # Regenerating the pair invalidates every existing push subscription.
+  EXPO_PUBLIC_VAPID_PUBLIC_KEY = "BNd_6FxL1Zkhlcv7YRT7qt719bhqLWMiaq3I7oQ_HPPsk0miVZcVF2HGF_r8S6tgFlkr-JoPlByc_jr-6PIUEW0"
 
 # SPA fallback - redirect all routes to index.html
 [[redirects]]

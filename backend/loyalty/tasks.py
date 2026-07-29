@@ -1,7 +1,22 @@
+import calendar
 import logging
+import secrets
+import string
+from datetime import date, timedelta
+from zoneinfo import ZoneInfo
+
 from celery import shared_task
+from django.db import IntegrityError, transaction
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
+
+# Gifts are scheduled for a civil local hour, never "whenever the cron fired".
+BIRTHDAY_TZ = ZoneInfo('Europe/Amsterdam')
+
+# Birthdays that fell in the last N days with nothing issued are still
+# honoured, so an outage does not silently swallow somebody's gift.
+BIRTHDAY_CATCHUP_DAYS = 3
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
@@ -93,6 +108,213 @@ def full_sync_user_points(self, user_id):
             return
         logger.error(f"Full sync failed for {user.email}: {error}")
         raise self.retry(exc=Exception(error))
+
+
+def _generate_birthday_code() -> str:
+    """Generate an unguessable single-use birthday discount code."""
+    chars = string.ascii_uppercase + string.digits
+    return 'BDAY-' + ''.join(secrets.choice(chars) for _ in range(8))
+
+
+def _celebration_date(birthdate: date, year: int) -> date:
+    """
+    The date this year's birthday is celebrated on.
+    29 February is celebrated on 28 February in non-leap years.
+    """
+    try:
+        return date(year, birthdate.month, birthdate.day)
+    except ValueError:
+        return date(year, 2, 28)
+
+
+def _celebration_keys(day: date) -> set:
+    """
+    The (month, day) birthdate values that are celebrated on `day`.
+    On 28 February of a non-leap year that also includes 29 February.
+    """
+    keys = {(day.month, day.day)}
+    if day.month == 2 and day.day == 28 and not calendar.isleap(day.year):
+        keys.add((2, 29))
+    return keys
+
+
+def _offer_label(config) -> str:
+    """Human-readable description of the configured offer."""
+    value = config.discount_value
+    text = str(int(value)) if value == int(value) else str(value)
+    if config.discount_type == 'percentage':
+        return f"{text}% off"
+    return f"€{text} off"
+
+
+def _issue_birthday_gift(user, year: int, config) -> bool:
+    """
+    Issue one birthday gift. Returns True if a gift was issued.
+    Raises on Shopify failure so the caller can log it per-user.
+    """
+    from loyalty.models import BirthdayReward
+    from users.services import ShopifyService
+
+    if BirthdayReward.objects.filter(user=user, year=year).exists():
+        logger.debug(f"Birthday gift already issued to {user.email} for {year}")
+        return False
+
+    celebration = _celebration_date(user.birthdate, year)
+
+    # Anti-abuse lead time: setting your birthday to next week must not
+    # produce a gift next week.
+    if user.birthdate_set_at:
+        set_on = timezone.localtime(user.birthdate_set_at, BIRTHDAY_TZ).date()
+        cutoff = celebration - timedelta(days=config.lead_time_days)
+        if set_on > cutoff:
+            logger.info(
+                f"Skipping birthday gift for {user.email} ({year}): birthdate set "
+                f"{set_on}, which is inside the {config.lead_time_days}-day lead "
+                f"time before {celebration}. First gift arrives next year."
+            )
+            return False
+
+    code = _generate_birthday_code()
+    expires_at = timezone.now() + timedelta(days=config.validity_days)
+
+    # A code without a linked customer cannot be locked to one, but
+    # usage_limit=1 bounds the exposure to exactly the gift we intended.
+    customer_id = user.shopify_customer_id or None
+
+    result = ShopifyService().create_discount_code(
+        code=code,
+        discount_type=config.discount_type,
+        value=float(config.discount_value),
+        usage_limit=1,
+        customer_id=customer_id,
+        ends_at=expires_at,
+    )
+    if not result:
+        raise RuntimeError(f"Shopify refused to create birthday code {code}")
+
+    try:
+        with transaction.atomic():
+            reward = BirthdayReward.objects.create(
+                user=user,
+                year=year,
+                discount_code=code,
+                expires_at=expires_at,
+            )
+    except IntegrityError:
+        # Another worker won the race; the unique constraint did its job.
+        logger.info(f"Birthday gift for {user.email} ({year}) already created by another run")
+        return False
+
+    offer = _offer_label(config)
+    name = user.first_name or 'there'
+    title = 'Happy birthday from House of Beers!'
+    body = f"Here is {offer} as a birthday gift. Use code {code} before {expires_at.date()}."
+
+    try:
+        # Imported here, not at module level, so loyalty does not hard-depend
+        # on the notifications app at import time.
+        from notifications.services import send_notification
+
+        delivery = send_notification(
+            user,
+            kind='birthday_gift',
+            title=title,
+            body=body,
+            data={'url': '/loyalty', 'discount_code': code},
+            dedupe_key=f'birthday:{user.id}:{year}',
+            email_subject=title,
+            email_body=(
+                f"Hi {name},\n\n"
+                f"Happy birthday! Here is {offer} on your next order at House of Beers.\n\n"
+                f"Your code: {code}\n"
+                f"Valid until: {expires_at.date()}\n\n"
+                f"Cheers,\nHouse of Beers Team"
+            ),
+        )
+        delivery_id = getattr(delivery, 'id', None)
+        if delivery_id:
+            reward.delivery_id = delivery_id
+            reward.save(update_fields=['delivery_id'])
+    except Exception as e:
+        # The gift itself is safely recorded; only the message failed.
+        logger.error(
+            f"Birthday gift {code} issued to {user.email} ({year}) but the "
+            f"notification failed: {e}",
+            exc_info=True,
+        )
+
+    logger.info(f"Issued birthday gift {code} to {user.email} for {year}")
+    return True
+
+
+@shared_task
+def birthday_scan():
+    """
+    Hourly: issue birthday gifts at the configured local send hour.
+
+    Runs every hour so the send hour stays admin-tunable and so birthdays
+    missed during an outage are caught up (see BIRTHDAY_CATCHUP_DAYS).
+    """
+    from loyalty.models import BirthdayRewardConfig
+    from users.models import User
+
+    config = BirthdayRewardConfig.load()
+
+    if not config.is_active:
+        logger.info("Birthday scan skipped: feature is not active")
+        return {'skipped': 'inactive'}
+
+    now_local = timezone.now().astimezone(BIRTHDAY_TZ)
+    if now_local.hour != config.send_hour:
+        logger.debug(
+            f"Birthday scan skipped: hour {now_local.hour} != send hour {config.send_hour}"
+        )
+        return {'skipped': 'outside send hour'}
+
+    today = now_local.date()
+
+    # (month, day) -> the calendar year that birthday belongs to. Walking
+    # backwards means the catch-up window can cross a year boundary
+    # (e.g. 30 December when today is 1 January).
+    key_years = {}
+    for offset in range(BIRTHDAY_CATCHUP_DAYS + 1):
+        day = today - timedelta(days=offset)
+        for key in _celebration_keys(day):
+            key_years.setdefault(key, day.year)
+
+    issued = 0
+    skipped = 0
+    failed = 0
+
+    for (month, day), year in key_years.items():
+        candidates = User.objects.filter(
+            is_active=True,
+            birthdate__isnull=False,
+            birthdate__month=month,
+            birthdate__day=day,
+        ).exclude(
+            birthday_rewards__year=year
+        )
+
+        for user in candidates:
+            try:
+                if _issue_birthday_gift(user, year, config):
+                    issued += 1
+                else:
+                    skipped += 1
+            except Exception as e:
+                # One user's failure must never abort the whole run.
+                failed += 1
+                logger.error(
+                    f"Birthday gift failed for {user.email} ({year}): {e}",
+                    exc_info=True,
+                )
+
+    logger.info(
+        f"Birthday scan complete for {today}: {issued} issued, "
+        f"{skipped} skipped, {failed} failed"
+    )
+    return {'issued': issued, 'skipped': skipped, 'failed': failed}
 
 
 @shared_task

@@ -1,5 +1,14 @@
+from datetime import timedelta
+
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django.utils import timezone
+
+# last_active_at is written at most once per this window per user, so a chatty
+# session costs one UPDATE rather than one per request. The field is used for
+# audience segmentation ("nobody who has visited in 90 days"), where
+# quarter-hour precision is far more than enough.
+LAST_ACTIVE_THROTTLE = timedelta(minutes=15)
 
 
 class User(AbstractUser):
@@ -9,6 +18,27 @@ class User(AbstractUser):
     shopify_customer_id = models.CharField(max_length=255, blank=True, null=True)
     shopify_linked_at = models.DateTimeField(blank=True, null=True)
 
+    # Birthday rewards. Validated 18+ wherever it is set (see users.validators).
+    birthdate = models.DateField(
+        blank=True,
+        null=True,
+        help_text="Date of birth. Must be 18+. Locked once a birthday gift has been issued."
+    )
+    birthdate_set_at = models.DateTimeField(
+        blank=True,
+        null=True,
+        help_text="When the birthdate was last set. Used for the anti-abuse lead time."
+    )
+
+    # Last time the user did anything in the app. Indexed because segment
+    # queries filter on it.
+    last_active_at = models.DateTimeField(
+        blank=True,
+        null=True,
+        db_index=True,
+        help_text="Last recorded activity. Updated from analytics.tracker.track()."
+    )
+
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['username']
 
@@ -17,3 +47,33 @@ class User(AbstractUser):
 
     def __str__(self):
         return self.email
+
+    def touch_last_active(self) -> bool:
+        """
+        Record that the user was just active. Returns True if it wrote.
+
+        Throttled to one write per LAST_ACTIVE_THROTTLE, and written with a
+        queryset UPDATE so it touches exactly one column - no signals, no
+        auto_now fields, and no clobbering of concurrent writes to the row.
+        """
+        now = timezone.now()
+
+        if self.last_active_at and (now - self.last_active_at) < LAST_ACTIVE_THROTTLE:
+            return False
+
+        User.objects.filter(pk=self.pk).update(last_active_at=now)
+        self.last_active_at = now
+        return True
+
+    @property
+    def birthdate_locked(self) -> bool:
+        """
+        True once a birthday gift has been issued, after which the birthdate
+        can no longer be changed in-app (admin can still correct it).
+        """
+        if not self.pk:
+            return False
+        # Imported locally: loyalty imports users, so a module-level import
+        # would be circular.
+        from loyalty.models import BirthdayReward
+        return BirthdayReward.objects.filter(user=self).exists()

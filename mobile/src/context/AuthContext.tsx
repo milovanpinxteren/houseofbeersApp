@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { getTokens, clearTokens } from '../api/client';
 import { getMe, login as apiLogin, logout as apiLogout, register as apiRegister } from '../api/auth';
+import { syncExistingSubscription } from '../utils/webPush';
 
 interface User {
   id: number;
@@ -8,6 +9,8 @@ interface User {
   first_name: string;
   last_name: string;
   shopify_customer_id: string | null;
+  birthdate?: string | null;
+  birthdate_locked?: boolean;
 }
 
 interface AuthContextType {
@@ -29,6 +32,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     checkAuth();
   }, []);
+
+  // Repair the push subscription once per logged-in session. Browsers drop
+  // subscriptions when the PWA is removed and re-added, and can rotate them on
+  // their own, so we re-upload whatever the browser currently has. Deliberately
+  // not awaited: it must never delay startup, and it no-ops without push support.
+  useEffect(() => {
+    if (!user) return;
+    void syncExistingSubscription();
+  }, [user?.id]);
 
   async function checkAuth() {
     try {

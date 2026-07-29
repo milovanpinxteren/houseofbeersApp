@@ -2,7 +2,9 @@ import logging
 from django.contrib import admin
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
-from .models import PointsRule, RewardCategory, Reward, PointsBalance, PointsTransaction, Redemption, ProcessedOrder, SyncState, Notification, NotificationRead
+from .models import (PointsRule, RewardCategory, Reward, PointsBalance, PointsTransaction, Redemption,
+                     ProcessedOrder, SyncState, Notification, NotificationRead,
+                     BirthdayRewardConfig, BirthdayReward)
 
 logger = logging.getLogger(__name__)
 
@@ -493,6 +495,55 @@ class NotificationAdmin(admin.ModelAdmin):
             return format_html('<span style="color: green;">Visible</span>')
         return format_html('<span style="color: gray;">Hidden</span>')
     is_visible_display.short_description = 'Status'
+
+
+@admin.register(BirthdayRewardConfig)
+class BirthdayRewardConfigAdmin(admin.ModelAdmin):
+    """Single configuration row for the birthday reward."""
+    list_display = ['__str__', 'is_active', 'discount_type', 'discount_value',
+                    'validity_days', 'lead_time_days', 'send_hour', 'updated_at']
+    readonly_fields = ['updated_at']
+
+    fieldsets = (
+        ('The offer', {
+            'fields': ('is_active', 'discount_type', 'discount_value', 'validity_days'),
+            'description': 'Discount value is euros for "Fixed amount off", '
+                           'or a percentage (e.g. 10 for 10%) for "Percentage off".'
+        }),
+        ('Eligibility & timing', {
+            'fields': ('lead_time_days', 'minimum_age', 'send_hour'),
+            'description': 'Lead time is the anti-abuse window: the birthdate must have '
+                           'been set at least this many days before the birthday. '
+                           'Send hour is Europe/Amsterdam local time.'
+        }),
+        ('Meta', {
+            'fields': ('updated_at',),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def has_add_permission(self, request):
+        # Singleton - only one config row is ever allowed.
+        return not BirthdayRewardConfig.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(BirthdayReward)
+class BirthdayRewardAdmin(admin.ModelAdmin):
+    """Audit trail of issued birthday gifts. Read-only."""
+    list_display = ['user', 'year', 'discount_code', 'expires_at', 'issued_at', 'delivery_id']
+    list_filter = ['year', 'issued_at']
+    search_fields = ['user__email', 'discount_code']
+    readonly_fields = ['user', 'year', 'discount_code', 'expires_at', 'issued_at', 'delivery_id']
+    ordering = ['-issued_at']
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(NotificationRead)

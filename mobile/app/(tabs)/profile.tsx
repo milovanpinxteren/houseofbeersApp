@@ -24,6 +24,8 @@ import {
   getFavorites,
   UntappdProfile,
 } from '../../src/api/recommendations';
+import BirthdaySettings from '../../src/components/BirthdaySettings';
+import NotificationSettings from '../../src/components/NotificationSettings';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -275,6 +277,12 @@ export default function ProfileScreen() {
           {menuItems.map((item) => renderMenuItem(item))}
         </View>
       </View>
+
+      {/* Birthday */}
+      <BirthdaySettings />
+
+      {/* Notification settings */}
+      <NotificationSettings />
 
       {/* Settings Section */}
       <View style={styles.section}>

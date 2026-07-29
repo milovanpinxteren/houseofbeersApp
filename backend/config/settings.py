@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     'analytics',
     'community',
     'events',
+    'notifications',
 ]
 
 MIDDLEWARE = [
@@ -203,7 +204,28 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'loyalty.tasks.periodic_intermediate_sync',
         'schedule': crontab(hour=3, minute=0),  # 3:00 AM Amsterdam time
     },
+    # Runs hourly but only acts at BirthdayRewardConfig.send_hour, so the
+    # send hour is admin-tunable without touching this schedule. Also catches
+    # up on birthdays missed while the worker was down.
+    'birthday-scan': {
+        'task': 'loyalty.tasks.birthday_scan',
+        'schedule': crontab(minute=5),  # every hour at :05
+    },
+    # Retires push subscriptions that the push service reports as gone.
+    'prune-push-subscriptions': {
+        'task': 'notifications.tasks.prune_push_subscriptions',
+        'schedule': crontab(hour=4, minute=30),
+    },
 }
+
+# Web Push (VAPID)
+# Generate once with `vapid --gen` (ships with pywebpush). Changing the
+# keypair invalidates every existing subscription, so treat it as permanent.
+# The public key is also exposed to the PWA build as
+# EXPO_PUBLIC_VAPID_PUBLIC_KEY; it is public by design.
+VAPID_PUBLIC_KEY = config('VAPID_PUBLIC_KEY', default='')
+VAPID_PRIVATE_KEY = config('VAPID_PRIVATE_KEY', default='')
+VAPID_SUBJECT = config('VAPID_SUBJECT', default='mailto:info@houseofbeers.nl')
 
 # Security settings for production
 if not DEBUG:

@@ -9,6 +9,9 @@ django-cors-headers>=4.3,<5.0
 celery[redis]>=5.3,<6.0
 redis>=5.0,<6.0
 
+# Web Push (PWA notifications)
+pywebpush>=2.0,<3.0
+
 # Production
 gunicorn>=21.0,<23.0
 psycopg2-binary>=2.9,<3.0

@@ -1,7 +1,7 @@
 from decimal import Decimal
 from django.db import models
 from django.conf import settings
-from django.core.validators import MinValueValidator
+from django.core.validators import MinValueValidator, MaxValueValidator
 
 
 class PointsRule(models.Model):
@@ -441,6 +441,122 @@ class Notification(models.Model):
         if self.show_until and now > self.show_until:
             return False
         return True
+
+
+class BirthdayRewardConfig(models.Model):
+    """
+    Single admin-editable configuration row for the birthday reward.
+    Lets the business tune the offer without a deploy.
+
+    Always stored at pk=1 - use BirthdayRewardConfig.load().
+    """
+    DISCOUNT_TYPE_CHOICES = [
+        ('fixed_amount', 'Fixed amount off'),
+        ('percentage', 'Percentage off'),
+    ]
+
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Turn the whole birthday reward feature on or off"
+    )
+    discount_type = models.CharField(
+        max_length=20,
+        choices=DISCOUNT_TYPE_CHOICES,
+        default='fixed_amount'
+    )
+    discount_value = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal('5.00'),
+        validators=[MinValueValidator(Decimal('0.01'))],
+        help_text="Euros for fixed_amount, percent (e.g. 10 for 10%) for percentage"
+    )
+    validity_days = models.PositiveIntegerField(
+        default=30,
+        validators=[MinValueValidator(1)],
+        help_text="How long the discount code stays valid"
+    )
+    lead_time_days = models.PositiveIntegerField(
+        default=30,
+        help_text="Anti-abuse: the birthdate must have been set at least this "
+                  "many days before the birthday for a gift to be issued"
+    )
+    minimum_age = models.PositiveIntegerField(
+        default=18,
+        help_text="Minimum age to receive a gift. Note: registration is always "
+                  "blocked below 18 regardless of this value."
+    )
+    send_hour = models.PositiveIntegerField(
+        default=9,
+        validators=[MinValueValidator(0), MaxValueValidator(23)],
+        help_text="Local hour (Europe/Amsterdam) at which gifts are sent"
+    )
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Birthday Reward Config'
+        verbose_name_plural = 'Birthday Reward Config'
+
+    def __str__(self):
+        state = 'active' if self.is_active else 'inactive'
+        if self.discount_type == 'percentage':
+            offer = f"{self.discount_value}% off"
+        else:
+            offer = f"€{self.discount_value} off"
+        return f"Birthday reward ({state}): {offer}, sent at {self.send_hour}:00"
+
+    def save(self, *args, **kwargs):
+        # Singleton: there is only ever one config row. force_insert is
+        # dropped so even objects.create() upserts pk=1 instead of failing.
+        self.pk = 1
+        kwargs.pop('force_insert', None)
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        # Never delete the singleton - deactivate it instead.
+        pass
+
+    @classmethod
+    def load(cls):
+        """Get the config row, creating it with defaults if it does not exist."""
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
+class BirthdayReward(models.Model):
+    """
+    A birthday gift issued to a user in a given year.
+
+    unique_together (user, year) is the hard guarantee that nobody receives
+    two gifts in one year, regardless of task retries or races.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='birthday_rewards'
+    )
+    year = models.IntegerField(help_text="Calendar year the birthday fell in")
+    discount_code = models.CharField(max_length=255)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    issued_at = models.DateTimeField(auto_now_add=True)
+
+    # Deliberately not a ForeignKey: keeps loyalty and notifications
+    # decoupled so either app can be deployed or dropped independently.
+    delivery_id = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="notifications.NotificationDelivery id (not a FK, apps stay decoupled)"
+    )
+
+    class Meta:
+        unique_together = ['user', 'year']
+        ordering = ['-issued_at']
+        verbose_name = 'Birthday Reward'
+        verbose_name_plural = 'Birthday Rewards'
+
+    def __str__(self):
+        return f"{self.user.email} - birthday {self.year} ({self.discount_code})"
 
 
 class NotificationRead(models.Model):

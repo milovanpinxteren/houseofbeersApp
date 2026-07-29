@@ -194,6 +194,7 @@ class ShopifyService:
         value: float,
         usage_limit: int = 1,
         customer_id: str = None,
+        ends_at=None,
     ) -> Optional[dict]:
         """
         Create a discount code in Shopify.
@@ -204,6 +205,7 @@ class ShopifyService:
             value: Discount value (amount in currency or percentage)
             usage_limit: Number of times the code can be used
             customer_id: Limit to specific customer (optional)
+            ends_at: datetime the code expires (optional, None = never expires)
 
         Returns:
             Price rule data or None if failed
@@ -227,6 +229,10 @@ class ShopifyService:
         # Add customer prerequisite if specified
         if customer_id:
             price_rule_data['price_rule']['prerequisite_customer_ids'] = [int(customer_id)]
+
+        # Optional expiry
+        if ends_at:
+            price_rule_data['price_rule']['ends_at'] = ends_at.isoformat()
 
         result = self._request('POST', 'price_rules.json', json=price_rule_data)
         if not result or 'price_rule' not in result:
@@ -303,6 +309,7 @@ class ShopifyService:
         usage_limit: int = 1,
         product_ids: list = None,
         applies_once_per_customer: bool = True,
+        ends_at=None,
     ) -> Optional[dict]:
         """
         Create a basic discount code (fixed amount or percentage off).
@@ -315,6 +322,7 @@ class ShopifyService:
             usage_limit: Max number of uses
             product_ids: List of product GIDs to apply to (None = all products)
             applies_once_per_customer: Limit to one use per customer
+            ends_at: datetime the code expires (optional, None = never expires)
         """
         # Build the discount value
         if discount_type == "percentage":
@@ -377,6 +385,10 @@ class ShopifyService:
                 }
             }
         }
+
+        # Optional expiry
+        if ends_at:
+            variables["basicCodeDiscount"]["endsAt"] = ends_at.isoformat()
 
         data = self._graphql_request(query, variables)
         if not data:
