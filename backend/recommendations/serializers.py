@@ -13,7 +13,13 @@ class UntappdProfileSerializer(serializers.ModelSerializer):
 
 class LinkUntappdSerializer(serializers.Serializer):
     """Serializer for linking Untappd account."""
-    username = serializers.CharField(max_length=100)
+    username = serializers.RegexField(
+        r'^[A-Za-z0-9_.-]+$',
+        max_length=100,
+        error_messages={
+            'invalid': 'Username may only contain letters, numbers, dots, dashes and underscores.'
+        }
+    )
 
 
 class FavoriteSerializer(serializers.ModelSerializer):
@@ -32,7 +38,13 @@ class FavoriteSerializer(serializers.ModelSerializer):
 class AddFavoriteSerializer(serializers.Serializer):
     """Serializer for adding a beer to favorites."""
     beer_id = serializers.CharField(max_length=50)
-    variant_id = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    variant_id = serializers.RegexField(
+        r'^\d*$',
+        max_length=50,
+        required=False,
+        allow_blank=True,
+        error_messages={'invalid': 'Variant ID must be numeric.'}
+    )
     title = serializers.CharField(max_length=255)
     vendor = serializers.CharField(max_length=255, required=False, allow_blank=True)
     price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True)
@@ -48,3 +60,12 @@ class RecommendationFilterSerializer(serializers.Serializer):
     limit = serializers.IntegerField(default=10, min_value=1, max_value=50)
     price_max = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True)
     style_filter = serializers.CharField(max_length=100, required=False, allow_blank=True)
+
+
+class SelectedFavoritesSerializer(serializers.Serializer):
+    """Serializer for generating a cart link from selected favorites."""
+    favorite_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        allow_empty=False,
+        max_length=200,
+    )

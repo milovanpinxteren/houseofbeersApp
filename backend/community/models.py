@@ -1,4 +1,4 @@
-from django.db import models
+from django.db import IntegrityError, models
 from django.conf import settings
 
 
@@ -15,7 +15,7 @@ class CommunityProfile(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def get_display_name(self):
-        return self.display_name or self.user.first_name or self.user.email.split('@')[0]
+        return self.display_name or self.user.first_name or 'Member'
 
     def __str__(self):
         return f"{self.get_display_name()} (community profile)"
@@ -95,7 +95,11 @@ class ConversationManager(models.Manager):
     def get_or_create_between(self, user1, user2):
         """Get or create a conversation, enforcing participant_1.id < participant_2.id."""
         p1, p2 = sorted([user1, user2], key=lambda u: u.id)
-        return self.get_or_create(participant_1=p1, participant_2=p2)
+        try:
+            return self.get_or_create(participant_1=p1, participant_2=p2)
+        except IntegrityError:
+            # Lost a race with a concurrent create — the row exists now.
+            return self.get(participant_1=p1, participant_2=p2), False
 
 
 class Conversation(models.Model):
@@ -187,6 +191,7 @@ class GroupMembership(models.Model):
     )
     role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='member')
     joined_at = models.DateTimeField(auto_now_add=True)
+    last_read_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         unique_together = ['group', 'user']

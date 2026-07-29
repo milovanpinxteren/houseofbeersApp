@@ -242,10 +242,6 @@ export async function deleteComment(commentId: number): Promise<void> {
 
 // --- Conversations (DMs) ---
 
-export async function getConversations(): Promise<{ conversations: ConversationSummary[] }> {
-  return apiFetch('/community/conversations/');
-}
-
 export async function getOrCreateConversation(userId: number): Promise<ConversationSummary> {
   return apiFetch('/community/conversations/create/', {
     method: 'POST',
@@ -268,6 +264,10 @@ export async function sendMessage(conversationId: number, data: {
     method: 'POST',
     body: JSON.stringify(data),
   });
+}
+
+export async function deleteMessage(conversationId: number, messageId: number): Promise<void> {
+  await apiFetch(`/community/conversations/${conversationId}/messages/${messageId}/`, { method: 'DELETE' });
 }
 
 export async function markConversationRead(conversationId: number): Promise<void> {
@@ -317,6 +317,14 @@ export async function sendGroupMessage(groupId: number, data: {
   });
 }
 
+export async function deleteGroupMessage(groupId: number, messageId: number): Promise<void> {
+  await apiFetch(`/community/groups/${groupId}/messages/${messageId}/`, { method: 'DELETE' });
+}
+
+export async function markGroupRead(groupId: number): Promise<void> {
+  await apiFetch(`/community/groups/${groupId}/read/`, { method: 'POST' });
+}
+
 // --- Unified Chats ---
 
 export async function getChats(): Promise<{ chats: ChatItem[] }> {
@@ -349,6 +357,10 @@ export interface SuggestionComment {
 
 export async function getSuggestions(page = 1, sort: 'top' | 'new' = 'top'): Promise<PaginatedResponse<Suggestion>> {
   return apiFetch(`/community/suggestions/?page=${page}&sort=${sort}`);
+}
+
+export async function getSuggestionDetail(id: number): Promise<Suggestion> {
+  return apiFetch(`/community/suggestions/${id}/detail/`);
 }
 
 export async function createSuggestion(data: {

@@ -154,7 +154,9 @@ export default function TasteProfileScreen() {
           {/* Data points as dots */}
           {values.map((value, i) => {
             const angle = (2 * Math.PI * i) / numAxes - Math.PI / 2;
-            const boostedValue = value > 0 && value < 25 ? 25 + value * 0.5 : value;
+            // Monotonic boost: map (0, 100] onto [25, 100] so small values stay
+            // visible without ever plotting a lower score outside a higher one
+            const boostedValue = value > 0 ? 25 + value * 0.75 : 0;
             const radius = (boostedValue / 100) * maxRadius;
             const x = centerX + radius * Math.cos(angle) - 10;
             const y = centerY + radius * Math.sin(angle) - 10;

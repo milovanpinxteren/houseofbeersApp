@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Image,
-  ActivityIndicator, RefreshControl,
+  ActivityIndicator, RefreshControl, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, router } from 'expo-router';
@@ -21,6 +21,7 @@ export default function MemberProfileScreen() {
   const [data, setData] = useState<MemberProfileResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isMessaging, setIsMessaging] = useState(false);
 
   const userIdNum = parseInt(userId || '0', 10);
   const isOwnProfile = user?.id === userIdNum;
@@ -41,11 +42,15 @@ export default function MemberProfileScreen() {
   useEffect(() => { loadProfile(); }, [loadProfile]);
 
   const handleMessage = async () => {
+    if (isMessaging) return;
+    setIsMessaging(true);
     try {
       const conv = await getOrCreateConversation(userIdNum);
-      router.push(`/(tabs)/(community)/conversation?conversationId=${conv.id}&name=${data?.profile.display_name_resolved}`);
+      router.push(`/(tabs)/(community)/conversation?conversationId=${conv.id}&name=${encodeURIComponent(data?.profile.display_name_resolved || '')}`);
     } catch {
-      // silent
+      Alert.alert(t('error'), t('community.loadError'));
+    } finally {
+      setIsMessaging(false);
     }
   };
 
@@ -61,7 +66,7 @@ export default function MemberProfileScreen() {
     return (
       <View style={[styles.container, styles.center]}>
         <Ionicons name="person-outline" size={48} color={colors.textMuted} />
-        <Text style={styles.emptyText}>Member not found</Text>
+        <Text style={styles.emptyText}>{t('community.memberNotFound')}</Text>
       </View>
     );
   }
@@ -109,8 +114,16 @@ export default function MemberProfileScreen() {
           )}
         </View>
         {!isOwnProfile && (
-          <TouchableOpacity style={styles.messageBtn} onPress={handleMessage}>
-            <Ionicons name="chatbubble" size={16} color={colors.background} />
+          <TouchableOpacity
+            style={[styles.messageBtn, isMessaging && { opacity: 0.6 }]}
+            onPress={handleMessage}
+            disabled={isMessaging}
+          >
+            {isMessaging ? (
+              <ActivityIndicator size="small" color={colors.background} />
+            ) : (
+              <Ionicons name="chatbubble" size={16} color={colors.background} />
+            )}
             <Text style={styles.messageBtnText}>{t('community.sendMessage')}</Text>
           </TouchableOpacity>
         )}

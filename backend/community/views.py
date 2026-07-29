@@ -1,5 +1,8 @@
 import logging
-from django.db.models import Count, Exists, OuterRef, Prefetch, Q
+from django.db import IntegrityError
+from django.db.models import Count, Exists, F, OuterRef, Prefetch, Q
+from django.db.models.functions import Coalesce
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -26,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 class FeedCursorPagination(CursorPagination):
     page_size = 20
-    ordering = '-created_at'
+    ordering = ('-created_at', '-id')
     cursor_query_param = 'cursor'
 
 
@@ -71,7 +74,11 @@ class MembersListView(APIView):
         profiles = (
             CommunityProfile.objects
             .filter(is_visible=True)
-            .select_related('user')
+            .select_related('user', 'user__untappd_profile')
+            .annotate(
+                favorite_count_annotated=Count('user__favorite_beers', distinct=True),
+                checkin_count_annotated=Count('user__cached_checkins', distinct=True),
+            )
             .order_by('-created_at')
         )
 
@@ -80,8 +87,7 @@ class MembersListView(APIView):
             profiles = profiles.filter(
                 Q(display_name__icontains=search) |
                 Q(user__first_name__icontains=search) |
-                Q(user__last_name__icontains=search) |
-                Q(user__email__icontains=search)
+                Q(user__last_name__icontains=search)
             )
 
         paginator = MemberPagination()
@@ -186,7 +192,10 @@ class PostLikeView(APIView):
         except Post.DoesNotExist:
             return Response({'error': 'Post not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        like, created = PostLike.objects.get_or_create(post=post, user=request.user)
+        try:
+            like, created = PostLike.objects.get_or_create(post=post, user=request.user)
+        except IntegrityError:
+            like, created = PostLike.objects.get(post=post, user=request.user), False
         if not created:
             like.delete()
             liked = False
@@ -204,6 +213,9 @@ class PostCommentsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, post_id):
+        if not Post.objects.filter(id=post_id).exists():
+            return Response({'error': 'Post not found'}, status=status.HTTP_404_NOT_FOUND)
+
         comments = (
             PostComment.objects
             .filter(post_id=post_id, parent__isnull=True)
@@ -268,7 +280,24 @@ class ConversationsListView(APIView):
         conversations = (
             Conversation.objects
             .filter(Q(participant_1=request.user) | Q(participant_2=request.user))
-            .select_related('participant_1', 'participant_2')
+            .select_related(
+                'participant_1', 'participant_1__untappd_profile',
+                'participant_2', 'participant_2__untappd_profile',
+            )
+            .prefetch_related(
+                Prefetch(
+                    'messages',
+                    queryset=Message.objects.order_by('-created_at')[:1],
+                    to_attr='prefetched_messages',
+                ),
+            )
+            .annotate(
+                unread_count_annotated=Count(
+                    'messages',
+                    filter=Q(messages__is_read=False) & ~Q(messages__sender=request.user),
+                    distinct=True,
+                ),
+            )
             .order_by('-updated_at')
         )
         serializer = ConversationSerializer(
@@ -281,21 +310,26 @@ class ConversationCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        user_id = request.data.get('user_id')
-        if not user_id:
-            return Response({'error': 'user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            user_id = int(request.data.get('user_id'))
+        except (TypeError, ValueError):
+            return Response({'error': 'A valid user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if int(user_id) == request.user.id:
+        if user_id == request.user.id:
             return Response({'error': 'Cannot message yourself'}, status=status.HTTP_400_BAD_REQUEST)
 
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
         try:
-            other_user = User.objects.get(id=user_id)
-        except User.DoesNotExist:
+            other_profile = (
+                CommunityProfile.objects
+                .select_related('user')
+                .get(user_id=user_id, is_visible=True)
+            )
+        except CommunityProfile.DoesNotExist:
             return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        conversation, created = Conversation.objects.get_or_create_between(request.user, other_user)
+        conversation, created = Conversation.objects.get_or_create_between(
+            request.user, other_profile.user,
+        )
         serializer = ConversationSerializer(conversation, context={'request': request})
         return Response(serializer.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
@@ -312,7 +346,8 @@ class MessagesListView(APIView):
         except Conversation.DoesNotExist:
             return Response({'error': 'Conversation not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        messages = conversation.messages.select_related('sender')
+        # Newest first: page 1 = latest messages (mobile renders via inverted list)
+        messages = conversation.messages.select_related('sender').order_by('-created_at', '-id')
         paginator = MessagePagination()
         page = paginator.paginate_queryset(messages, request)
         serializer = MessageSerializer(page, many=True)
@@ -343,6 +378,31 @@ class SendMessageView(APIView):
         track('community_message', user=request.user, conversation_id=conversation_id)
 
         return Response(MessageSerializer(message).data, status=status.HTTP_201_CREATED)
+
+
+class MessageDeleteView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, conversation_id, message_id):
+        try:
+            conversation = Conversation.objects.get(
+                Q(participant_1=request.user) | Q(participant_2=request.user),
+                id=conversation_id,
+            )
+        except Conversation.DoesNotExist:
+            return Response({'error': 'Conversation not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            message = Message.objects.get(id=message_id, conversation=conversation)
+        except Message.DoesNotExist:
+            return Response({'error': 'Message not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if message.sender_id != request.user.id:
+            return Response({'error': 'You can only delete your own messages'},
+                            status=status.HTTP_403_FORBIDDEN)
+
+        message.delete()
+        return Response({'success': True})
 
 
 class MarkReadView(APIView):
@@ -380,9 +440,10 @@ class GroupsListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        groups = Group.objects.filter(
-            is_active=True, memberships__user=request.user,
-        ).distinct()
+        groups = _annotate_groups(
+            Group.objects.filter(is_active=True, memberships__user=request.user).distinct(),
+            request.user,
+        )
         serializer = GroupSerializer(groups, many=True, context={'request': request})
         return Response({'groups': serializer.data})
 
@@ -392,7 +453,7 @@ class AvailableGroupsListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        groups = Group.objects.filter(is_active=True)
+        groups = _annotate_groups(Group.objects.filter(is_active=True), request.user)
         serializer = GroupSerializer(groups, many=True, context={'request': request})
         return Response({'groups': serializer.data})
 
@@ -403,8 +464,11 @@ class GroupDetailView(APIView):
 
     def get(self, request, group_id):
         try:
-            group = Group.objects.prefetch_related(
-                Prefetch('memberships', queryset=GroupMembership.objects.select_related('user'))
+            group = _annotate_groups(
+                Group.objects.prefetch_related(
+                    Prefetch('memberships', queryset=GroupMembership.objects.select_related('user'))
+                ),
+                request.user,
             ).get(id=group_id, is_active=True)
         except Group.DoesNotExist:
             return Response({'error': 'Group not found'}, status=status.HTTP_404_NOT_FOUND)
@@ -422,9 +486,13 @@ class GroupJoinView(APIView):
         except Group.DoesNotExist:
             return Response({'error': 'Group not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        _, created = GroupMembership.objects.get_or_create(group=group, user=request.user)
+        try:
+            _, created = GroupMembership.objects.get_or_create(group=group, user=request.user)
+        except IntegrityError:
+            created = False
         if not created:
-            return Response({'error': 'Already a member'}, status=status.HTTP_400_BAD_REQUEST)
+            # Idempotent: already a member is a success
+            return Response({'success': True, 'already_member': True})
 
         from analytics.tracker import track
         track('community_group_join', user=request.user, group_id=group_id)
@@ -456,7 +524,16 @@ class GroupMessagesListView(APIView):
         if not GroupMembership.objects.filter(group_id=group_id, user=request.user).exists():
             return Response({'error': 'Not a member'}, status=status.HTTP_403_FORBIDDEN)
 
-        messages = GroupMessage.objects.filter(group_id=group_id).select_related('sender')
+        if not Group.objects.filter(id=group_id, is_active=True).exists():
+            return Response({'error': 'Group not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Newest first: page 1 = latest messages (mobile renders via inverted list)
+        messages = (
+            GroupMessage.objects
+            .filter(group_id=group_id)
+            .select_related('sender', 'sender__community_profile')
+            .order_by('-created_at', '-id')
+        )
         paginator = MessagePagination()
         page = paginator.paginate_queryset(messages, request)
         serializer = GroupMessageSerializer(page, many=True)
@@ -489,6 +566,40 @@ class GroupSendMessageView(APIView):
         return Response(GroupMessageSerializer(message).data, status=status.HTTP_201_CREATED)
 
 
+class GroupMessageDeleteView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, group_id, message_id):
+        if not GroupMembership.objects.filter(group_id=group_id, user=request.user).exists():
+            return Response({'error': 'Not a member'}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            message = GroupMessage.objects.get(id=message_id, group_id=group_id)
+        except GroupMessage.DoesNotExist:
+            return Response({'error': 'Message not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if message.sender_id != request.user.id:
+            return Response({'error': 'You can only delete your own messages'},
+                            status=status.HTTP_403_FORBIDDEN)
+
+        message.delete()
+        return Response({'success': True})
+
+
+class GroupMarkReadView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, group_id):
+        try:
+            membership = GroupMembership.objects.get(group_id=group_id, user=request.user)
+        except GroupMembership.DoesNotExist:
+            return Response({'error': 'Not a member'}, status=status.HTTP_403_FORBIDDEN)
+
+        membership.last_read_at = timezone.now()
+        membership.save(update_fields=['last_read_at'])
+        return Response({'success': True})
+
+
 # --- Unified Chats ---
 
 class UnifiedChatsView(APIView):
@@ -510,8 +621,15 @@ class UnifiedChatsView(APIView):
             .prefetch_related(
                 Prefetch(
                     'messages',
-                    queryset=Message.objects.order_by('-created_at'),
+                    queryset=Message.objects.order_by('-created_at')[:1],
                     to_attr='prefetched_messages',
+                ),
+            )
+            .annotate(
+                unread_count_annotated=Count(
+                    'messages',
+                    filter=Q(messages__is_read=False) & ~Q(messages__sender=user),
+                    distinct=True,
                 ),
             )
         )
@@ -521,11 +639,7 @@ class UnifiedChatsView(APIView):
             profile = getattr(other, 'community_profile', None)
             display_name = (
                 profile.get_display_name() if profile
-                else other.first_name or other.email.split('@')[0]
-            )
-            unread = sum(
-                1 for m in conv.prefetched_messages
-                if not m.is_read and m.sender_id != user.id
+                else other.first_name or 'Member'
             )
             items.append({
                 'type': 'dm',
@@ -538,7 +652,7 @@ class UnifiedChatsView(APIView):
                     'created_at': last_msg.created_at,
                     'has_beer': bool(last_msg.beer_id),
                 } if last_msg else None,
-                'unread_count': unread,
+                'unread_count': conv.unread_count_annotated,
                 'updated_at': conv.updated_at,
                 'other_user_id': other.id,
                 'member_count': None,
@@ -556,7 +670,17 @@ class UnifiedChatsView(APIView):
                     to_attr='prefetched_messages',
                 ),
             )
-            .annotate(group_member_count=Count('group__memberships'))
+            .annotate(
+                group_member_count=Count('group__memberships', distinct=True),
+                unread_count_annotated=Count(
+                    'group__messages',
+                    filter=(
+                        Q(group__messages__created_at__gt=Coalesce(F('last_read_at'), F('joined_at')))
+                        & ~Q(group__messages__sender=user)
+                    ),
+                    distinct=True,
+                ),
+            )
         )
         for membership in memberships:
             group = membership.group
@@ -572,7 +696,7 @@ class UnifiedChatsView(APIView):
                     'created_at': last_msg.created_at,
                     'has_beer': bool(last_msg.beer_id),
                 } if last_msg else None,
-                'unread_count': 0,
+                'unread_count': membership.unread_count_annotated,
                 'updated_at': group.updated_at,
                 'other_user_id': None,
                 'member_count': membership.group_member_count,
@@ -588,6 +712,9 @@ class MemberCheckinsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, user_id):
+        if not CommunityProfile.objects.filter(user_id=user_id, is_visible=True).exists():
+            return Response({'error': 'Member not found'}, status=status.HTTP_404_NOT_FOUND)
+
         checkins = CachedBeerCheckin.objects.filter(user_id=user_id)[:30]
         serializer = CachedBeerCheckinSerializer(checkins, many=True)
         return Response({'checkins': serializer.data})
@@ -637,6 +764,18 @@ class SuggestionCreateView(APIView):
         return Response(SuggestionSerializer(annotated).data, status=status.HTTP_201_CREATED)
 
 
+class SuggestionDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, suggestion_id):
+        suggestion = _annotate_suggestions(
+            Suggestion.objects.filter(id=suggestion_id), request.user,
+        ).first()
+        if suggestion is None:
+            return Response({'error': 'Suggestion not found'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(SuggestionSerializer(suggestion).data)
+
+
 class SuggestionDeleteView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -658,9 +797,14 @@ class SuggestionVoteView(APIView):
         except Suggestion.DoesNotExist:
             return Response({'error': 'Suggestion not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        vote, created = SuggestionVote.objects.get_or_create(
-            suggestion=suggestion, user=request.user,
-        )
+        try:
+            vote, created = SuggestionVote.objects.get_or_create(
+                suggestion=suggestion, user=request.user,
+            )
+        except IntegrityError:
+            vote, created = SuggestionVote.objects.get(
+                suggestion=suggestion, user=request.user,
+            ), False
         if not created:
             vote.delete()
             voted = False
@@ -676,6 +820,9 @@ class SuggestionCommentsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, suggestion_id):
+        if not Suggestion.objects.filter(id=suggestion_id).exists():
+            return Response({'error': 'Suggestion not found'}, status=status.HTTP_404_NOT_FOUND)
+
         comments = _annotate_suggestion_comments(
             SuggestionComment.objects.filter(suggestion_id=suggestion_id),
             request.user,
@@ -716,9 +863,14 @@ class SuggestionCommentVoteView(APIView):
         except SuggestionComment.DoesNotExist:
             return Response({'error': 'Comment not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        vote, created = SuggestionCommentVote.objects.get_or_create(
-            comment=comment, user=request.user,
-        )
+        try:
+            vote, created = SuggestionCommentVote.objects.get_or_create(
+                comment=comment, user=request.user,
+            )
+        except IntegrityError:
+            vote, created = SuggestionCommentVote.objects.get(
+                comment=comment, user=request.user,
+            ), False
         if not created:
             vote.delete()
             voted = False
@@ -743,7 +895,9 @@ class SuggestionCommentDeleteView(APIView):
 # --- Helpers ---
 
 def _annotate_suggestion_comments(queryset, request_user):
-    return queryset.select_related('author', 'author__community_profile').annotate(
+    return queryset.select_related(
+        'author', 'author__community_profile', 'author__untappd_profile',
+    ).annotate(
         vote_count=Count('votes', distinct=True),
         is_voted=Exists(
             SuggestionCommentVote.objects.filter(comment=OuterRef('pk'), user=request_user)
@@ -752,7 +906,9 @@ def _annotate_suggestion_comments(queryset, request_user):
 
 
 def _annotate_suggestions(queryset, request_user):
-    return queryset.select_related('author', 'author__community_profile').annotate(
+    return queryset.select_related(
+        'author', 'author__community_profile', 'author__untappd_profile',
+    ).annotate(
         vote_count=Count('votes', distinct=True),
         comment_count=Count('comments', distinct=True),
         is_voted=Exists(
@@ -761,8 +917,19 @@ def _annotate_suggestions(queryset, request_user):
     )
 
 
+def _annotate_groups(queryset, request_user):
+    return queryset.annotate(
+        member_count_annotated=Count('memberships', distinct=True),
+        is_member_annotated=Exists(
+            GroupMembership.objects.filter(group=OuterRef('pk'), user=request_user)
+        ),
+    )
+
+
 def _annotate_posts(queryset, request_user):
-    return queryset.select_related('author', 'author__community_profile').annotate(
+    return queryset.select_related(
+        'author', 'author__community_profile', 'author__untappd_profile',
+    ).annotate(
         like_count=Count('likes', distinct=True),
         comment_count=Count('comments', distinct=True),
         is_liked=Exists(

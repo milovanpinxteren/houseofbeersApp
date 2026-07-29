@@ -1,3 +1,4 @@
+from django.core.validators import MaxValueValidator, MinValueValidator
 from rest_framework import serializers
 from .models import (
     CommunityProfile, Post, PostLike, PostComment,
@@ -17,7 +18,7 @@ class AuthorSerializer(serializers.Serializer):
         profile = getattr(obj, 'community_profile', None)
         if profile and profile.display_name:
             return profile.display_name
-        return obj.first_name or obj.email.split('@')[0]
+        return obj.first_name or 'Member'
 
     def get_has_untappd(self, obj):
         return hasattr(obj, 'untappd_profile')
@@ -58,9 +59,15 @@ class MemberDetailSerializer(CommunityProfileSerializer):
         ]
 
     def get_favorite_count(self, obj):
+        annotated = getattr(obj, 'favorite_count_annotated', None)
+        if annotated is not None:
+            return annotated
         return obj.user.favorite_beers.count()
 
     def get_checkin_count(self, obj):
+        annotated = getattr(obj, 'checkin_count_annotated', None)
+        if annotated is not None:
+            return annotated
         return obj.user.cached_checkins.count()
 
 
@@ -84,6 +91,11 @@ class PostSerializer(serializers.ModelSerializer):
 
 
 class CreatePostSerializer(serializers.ModelSerializer):
+    beer_rating = serializers.DecimalField(
+        max_digits=3, decimal_places=2, required=False, allow_null=True,
+        validators=[MinValueValidator(0), MaxValueValidator(5)],
+    )
+
     class Meta:
         model = Post
         fields = [
@@ -131,7 +143,10 @@ class ConversationSerializer(serializers.Serializer):
         return AuthorSerializer(other).data
 
     def get_last_message(self, obj):
-        last = obj.messages.order_by('-created_at').first()
+        if hasattr(obj, 'prefetched_messages'):
+            last = obj.prefetched_messages[0] if obj.prefetched_messages else None
+        else:
+            last = obj.messages.order_by('-created_at').first()
         if not last:
             return None
         return {
@@ -142,6 +157,9 @@ class ConversationSerializer(serializers.Serializer):
         }
 
     def get_unread_count(self, obj):
+        annotated = getattr(obj, 'unread_count_annotated', None)
+        if annotated is not None:
+            return annotated
         request_user = self.context['request'].user
         return obj.messages.filter(is_read=False).exclude(sender=request_user).count()
 
@@ -163,7 +181,7 @@ class SendMessageSerializer(serializers.Serializer):
     content = serializers.CharField(max_length=1000)
     beer_id = serializers.CharField(max_length=50, required=False, default='')
     beer_title = serializers.CharField(max_length=255, required=False, default='')
-    beer_image_url = serializers.CharField(max_length=500, required=False, default='')
+    beer_image_url = serializers.URLField(max_length=500, required=False, allow_blank=True, default='')
     beer_style = serializers.CharField(max_length=100, required=False, default='')
 
 
@@ -181,7 +199,7 @@ class GroupMemberSerializer(serializers.ModelSerializer):
         profile = getattr(obj.user, 'community_profile', None)
         if profile and profile.display_name:
             return profile.display_name
-        return obj.user.first_name or obj.user.email.split('@')[0]
+        return obj.user.first_name or 'Member'
 
 
 class GroupSerializer(serializers.ModelSerializer):
@@ -194,9 +212,15 @@ class GroupSerializer(serializers.ModelSerializer):
                   'is_member', 'created_at']
 
     def get_member_count(self, obj):
+        annotated = getattr(obj, 'member_count_annotated', None)
+        if annotated is not None:
+            return annotated
         return obj.memberships.count()
 
     def get_is_member(self, obj):
+        annotated = getattr(obj, 'is_member_annotated', None)
+        if annotated is not None:
+            return annotated
         request = self.context.get('request')
         if not request:
             return False
@@ -226,7 +250,7 @@ class GroupMessageSerializer(serializers.ModelSerializer):
         profile = getattr(obj.sender, 'community_profile', None)
         if profile and profile.display_name:
             return profile.display_name
-        return obj.sender.first_name or obj.sender.email.split('@')[0]
+        return obj.sender.first_name or 'Member'
 
 
 class CachedBeerCheckinSerializer(serializers.ModelSerializer):

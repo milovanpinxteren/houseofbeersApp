@@ -4,6 +4,7 @@ from . import views
 urlpatterns = [
     # Recommendations
     path('', views.RecommendationsView.as_view(), name='recommendations'),
+    path('status/<str:task_id>/', views.RecommendationStatusView.as_view(), name='recommendation-status'),
     path('profile/', views.TasteProfileView.as_view(), name='taste-profile'),
     path('styles/', views.StylesListView.as_view(), name='styles'),
 

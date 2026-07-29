@@ -73,7 +73,9 @@ export default function ConnectUntappdScreen() {
     } catch (err) {
       console.log('[ConnectUntappd] Connect error:', err);
       if (err instanceof Error) {
-        if (err.message.includes('private') || err.message.includes('404')) {
+        // The backend returns a stable message for the not-found/private case
+        // (the API client does not expose HTTP status codes on errors)
+        if (err.message.includes('not found or is private')) {
           setError(t('recommendations.profilePrivateOrNotFound'));
         } else {
           setError(err.message);
@@ -139,9 +141,9 @@ export default function ConnectUntappdScreen() {
             </View>
             <Text style={styles.connectedTitle}>{t('recommendations.connected')}</Text>
             <Text style={styles.connectedUsername}>@{profile.username}</Text>
-            {profile.last_synced && (
+            {profile.linked_at && (
               <Text style={styles.syncedText}>
-                {t('recommendations.lastSynced')}: {new Date(profile.last_synced).toLocaleDateString()}
+                {t('recommendations.linkedOn')}: {new Date(profile.linked_at).toLocaleDateString()}
               </Text>
             )}
           </View>

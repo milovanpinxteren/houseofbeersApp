@@ -56,9 +56,9 @@ export default function PostCommentsScreen() {
   };
 
   const handleDelete = (commentId: number, parentId?: number | null) => {
-    Alert.alert(t('community.deletePost'), '', [
+    Alert.alert(t('community.deleteComment'), '', [
       { text: t('cancel'), style: 'cancel' },
-      { text: t('community.deletePost'), style: 'destructive', onPress: async () => {
+      { text: t('community.deleteComment'), style: 'destructive', onPress: async () => {
         try {
           await deleteComment(commentId);
           if (parentId) {

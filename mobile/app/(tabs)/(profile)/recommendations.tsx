@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -16,10 +16,12 @@ import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
 import {
   getRecommendations,
+  getRecommendationStatus,
   getUntappdProfile,
   getFavorites,
   addFavorite,
   removeFavorite,
+  isPendingRecommendations,
   RecommendationsResponse,
   ScoredBeer,
   UntappdProfile,
@@ -30,6 +32,11 @@ import PriceSlider from '../../../src/components/PriceSlider';
 
 const MIN_PRICE = 0;
 const MAX_PRICE = 100;
+
+// Client-side long polling for profile builds (backend hands us a task_id
+// instead of blocking a gunicorn worker)
+const POLL_INTERVAL_MS = 3000;
+const MAX_POLL_ATTEMPTS = 40; // ~2 minutes
 
 export default function RecommendationsScreen() {
   const { language } = useLanguage();
@@ -42,14 +49,55 @@ export default function RecommendationsScreen() {
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
   const [loadingFavorite, setLoadingFavorite] = useState<string | null>(null);
 
+  const [isBuildingProfile, setIsBuildingProfile] = useState(false);
+
   // Price filter state (MAX_PRICE means no limit)
   const [maxPrice, setMaxPrice] = useState(MAX_PRICE);
   const [isFiltering, setIsFiltering] = useState(false);
 
+  // Read via ref inside loadData so its identity is stable (no refetch on
+  // every slider tick) — data loading is only triggered explicitly.
+  const maxPriceRef = useRef(MAX_PRICE);
+  // Monotonically increasing sequence; responses from stale requests are ignored.
+  const requestSeqRef = useRef(0);
+  // Guard against an endless pending -> poll -> refetch loop
+  const didRefetchAfterPendingRef = useRef(false);
+
+  const pollTaskStatus = useCallback(async (taskId: string, seq: number) => {
+    for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+      if (seq !== requestSeqRef.current) return; // superseded by a newer load
+      try {
+        const statusData = await getRecommendationStatus(taskId);
+        if (seq !== requestSeqRef.current) return;
+        if (statusData.status !== 'pending') {
+          // completed or failed — either way refetch; on failure the backend
+          // falls back to Shopify order history
+          break;
+        }
+      } catch (err) {
+        console.log('[Recommendations] Status poll error:', err);
+        break;
+      }
+    }
+    if (seq !== requestSeqRef.current) return;
+    setIsBuildingProfile(false);
+    if (didRefetchAfterPendingRef.current) {
+      // Already refetched once for this load — don't loop
+      setError(t('recommendations.loadError'));
+      setIsLoading(false);
+      return;
+    }
+    didRefetchAfterPendingRef.current = true;
+    setIsLoading(true);
+    loadDataRef.current();
+  }, []);
+
   const loadData = useCallback(async (priceMax?: number) => {
+    const seq = ++requestSeqRef.current;
     try {
       setError('');
-      const priceFilter = priceMax !== undefined ? priceMax : maxPrice;
+      const priceFilter = priceMax !== undefined ? priceMax : maxPriceRef.current;
       // Only apply filter if not at max (no limit)
       const filterValue = priceFilter >= MAX_PRICE ? undefined : priceFilter;
       const [recsData, untappdData, favoritesData] = await Promise.all([
@@ -60,36 +108,70 @@ export default function RecommendationsScreen() {
         getUntappdProfile(),
         getFavorites(),
       ]);
-      setRecommendations(recsData);
+      if (seq !== requestSeqRef.current) return; // stale response
       setUntappdProfile(untappdData.untappd);
       setFavorites(favoritesData.favorites);
       setFavoriteIds(new Set(favoritesData.favorites.map(f => f.beer_id)));
+
+      if (isPendingRecommendations(recsData)) {
+        // Profile is still being built — show a friendly state and long-poll
+        setIsBuildingProfile(true);
+        setIsLoading(false);
+        setIsRefreshing(false);
+        setIsFiltering(false);
+        pollTaskStatus(recsData.task_id, seq);
+        return;
+      }
+
+      setIsBuildingProfile(false);
+      setRecommendations(recsData);
     } catch (err) {
+      if (seq !== requestSeqRef.current) return;
       console.log('[Recommendations] Error:', err);
       setError(err instanceof Error ? err.message : t('recommendations.loadError'));
     } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
-      setIsFiltering(false);
+      if (seq === requestSeqRef.current) {
+        setIsLoading(false);
+        setIsRefreshing(false);
+        setIsFiltering(false);
+      }
     }
-  }, [maxPrice]);
+  }, [pollTaskStatus]);
+
+  // Stable handle so pollTaskStatus can refetch without a circular dependency
+  const loadDataRef = useRef(loadData);
+  loadDataRef.current = loadData;
 
   useEffect(() => {
     loadData();
-  }, [loadData]);
+    // Load once on mount — subsequent loads are triggered explicitly
+    // (pull-to-refresh, slider release, retry)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function handleRefresh() {
+    didRefetchAfterPendingRef.current = false;
     setIsRefreshing(true);
     loadData();
   }
 
   function handlePriceChange(value: number) {
     setMaxPrice(value);
+    maxPriceRef.current = value;
   }
 
   function handlePriceChangeEnd(value: number) {
+    didRefetchAfterPendingRef.current = false;
+    setMaxPrice(value);
+    maxPriceRef.current = value;
     setIsFiltering(true);
     loadData(value);
+  }
+
+  function handleRetry() {
+    didRefetchAfterPendingRef.current = false;
+    setIsLoading(true);
+    loadData();
   }
 
   async function toggleFavorite(beer: ScoredBeer['beer']) {
@@ -163,19 +245,19 @@ export default function RecommendationsScreen() {
           </TouchableOpacity>
 
           <View style={styles.beerMeta}>
-            {beer.untappd_rating && (
+            {beer.untappd_rating != null && (
               <View style={styles.ratingBadge}>
                 <Ionicons name="star" size={12} color="#FFD700" />
                 <Text style={styles.ratingText}>{parseFloat(String(beer.untappd_rating)).toFixed(1)}</Text>
               </View>
             )}
-            {beer.abv && (
+            {beer.abv != null && (
               <Text style={styles.abvText}>{beer.abv}%</Text>
             )}
           </View>
 
           <View style={styles.beerFooter}>
-            {beer.price && (
+            {beer.price != null && (
               <Text style={styles.priceText}>€{parseFloat(beer.price).toFixed(2)}</Text>
             )}
             <TouchableOpacity
@@ -200,7 +282,15 @@ export default function RecommendationsScreen() {
   }
 
   function renderBeerCarousel(title: string, beers: ScoredBeer[], emptyText: string) {
-    if (!beers || beers.length === 0) return null;
+    if (!beers || beers.length === 0) {
+      if (!emptyText) return null;
+      return (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>{title}</Text>
+          <Text style={styles.emptySectionText}>{emptyText}</Text>
+        </View>
+      );
+    }
 
     return (
       <View style={styles.section}>
@@ -227,17 +317,37 @@ export default function RecommendationsScreen() {
     );
   }
 
+  if (isBuildingProfile) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color={colors.primary} />
+        <Text style={styles.loadingText}>{t('recommendations.buildingProfile')}</Text>
+        <Text style={styles.loadingSubtext}>{t('recommendations.buildingProfileSubtext')}</Text>
+      </View>
+    );
+  }
+
   if (error) {
     return (
       <View style={styles.centerContainer}>
         <Ionicons name="alert-circle-outline" size={48} color={colors.error} />
         <Text style={styles.errorText}>{error}</Text>
-        <TouchableOpacity style={styles.retryButton} onPress={loadData}>
+        <TouchableOpacity style={styles.retryButton} onPress={() => handleRetry()}>
           <Text style={styles.retryButtonText}>{t('common.retry')}</Text>
         </TouchableOpacity>
       </View>
     );
   }
+
+  // Trust the backend's profile_source (it may have fallen back to Shopify
+  // even when an Untappd account is linked)
+  const profileSource = recommendations?.profile_source
+    ?? (untappdProfile ? 'untappd' : 'shopify');
+  const hasAnyBeers = !!recommendations && (
+    (recommendations.recommendations?.length ?? 0) > 0 ||
+    (recommendations.discovery_picks?.length ?? 0) > 0 ||
+    (recommendations.tried_beers?.length ?? 0) > 0
+  );
 
   return (
     <ScrollView
@@ -253,16 +363,20 @@ export default function RecommendationsScreen() {
         {/* Profile Source Card */}
         <View style={styles.profileCard}>
           <Ionicons
-            name={untappdProfile ? 'beer' : 'cart'}
+            name={profileSource === 'untappd' ? 'beer' : 'cart'}
             size={24}
             color={colors.primary}
           />
           <View style={styles.profileInfo}>
             <Text style={styles.profileTitle}>
-              {untappdProfile ? t('recommendations.untappdProfile') : t('recommendations.orderHistory')}
+              {profileSource === 'untappd'
+                ? t('recommendations.untappdProfile')
+                : t('recommendations.orderHistory')}
             </Text>
             <Text style={styles.profileSubtitle}>
-              {untappdProfile ? untappdProfile.username : t('recommendations.basedOnOrders')}
+              {profileSource === 'untappd'
+                ? (untappdProfile?.username ?? recommendations?.profile_identifier ?? '')
+                : t('recommendations.basedOnOrders')}
             </Text>
           </View>
         </View>
@@ -312,27 +426,39 @@ export default function RecommendationsScreen() {
           />
         </View>
 
-        {/* Recommendations */}
-        {renderBeerCarousel(
-          t('recommendations.recommendedForYou'),
-          recommendations?.recommendations || [],
-          t('recommendations.noRecommendations')
-        )}
+        {!hasAnyBeers ? (
+          /* Nothing at all — show the backend's message or a fallback */
+          <View style={styles.emptyStateContainer}>
+            <Ionicons name="beer-outline" size={48} color={colors.textMuted} />
+            <Text style={styles.emptyStateText}>
+              {recommendations?.message || t('recommendations.noRecommendations')}
+            </Text>
+          </View>
+        ) : (
+          <>
+            {/* Recommendations */}
+            {renderBeerCarousel(
+              t('recommendations.recommendedForYou'),
+              recommendations?.recommendations || [],
+              t('recommendations.noRecommendations')
+            )}
 
-        {/* Discovery Picks */}
-        {renderBeerCarousel(
-          t('recommendations.discoverSomethingNew'),
-          recommendations?.discovery_picks || [],
-          t('recommendations.noDiscovery')
-        )}
+            {/* Discovery Picks */}
+            {renderBeerCarousel(
+              t('recommendations.discoverSomethingNew'),
+              recommendations?.discovery_picks || [],
+              t('recommendations.noDiscovery')
+            )}
 
-        {/* Tried Beers */}
-        {recommendations?.tried_beers && recommendations.tried_beers.length > 0 && (
-          renderBeerCarousel(
-            t('recommendations.triedBeers'),
-            recommendations.tried_beers,
-            ''
-          )
+            {/* Tried Beers */}
+            {recommendations?.tried_beers && recommendations.tried_beers.length > 0 && (
+              renderBeerCarousel(
+                t('recommendations.triedBeers'),
+                recommendations.tried_beers,
+                ''
+              )
+            )}
+          </>
         )}
 
         <View style={styles.bottomPadding} />
@@ -490,6 +616,22 @@ const styles = StyleSheet.create({
   },
   carouselContent: {
     paddingHorizontal: spacing.md,
+  },
+  emptySectionText: {
+    fontSize: 14,
+    color: colors.textMuted,
+    marginHorizontal: spacing.md,
+  },
+  emptyStateContainer: {
+    alignItems: 'center',
+    padding: spacing.xl,
+  },
+  emptyStateText: {
+    marginTop: spacing.md,
+    fontSize: 14,
+    color: colors.textMuted,
+    textAlign: 'center',
+    lineHeight: 20,
   },
 
   // Beer Cards

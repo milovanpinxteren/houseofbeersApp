@@ -50,16 +50,41 @@ export default function MembersScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [nextPage, setNextPage] = useState<number | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seqRef = useRef(0);
 
   const loadMembers = useCallback(async (search = '') => {
+    const seq = ++seqRef.current;
     try {
       const data = await getMembers(1, search);
+      if (seq !== seqRef.current) return; // stale response, a newer request is in flight
       setMembers(data.results);
-    } catch {} finally { setIsLoading(false); setIsRefreshing(false); }
+      setNextPage(data.next ? 2 : null);
+    } catch {} finally {
+      if (seq === seqRef.current) { setIsLoading(false); setIsRefreshing(false); }
+    }
   }, []);
 
   useEffect(() => { loadMembers(); }, [loadMembers]);
+
+  // Clear any pending debounce timer on unmount
+  useEffect(() => () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+  }, []);
+
+  const loadMore = useCallback(async () => {
+    if (!nextPage || loadingMore) return;
+    const seq = seqRef.current;
+    setLoadingMore(true);
+    try {
+      const data = await getMembers(nextPage, searchQuery);
+      if (seq !== seqRef.current) return; // search changed while loading
+      setMembers(prev => [...prev, ...data.results]);
+      setNextPage(data.next ? nextPage + 1 : null);
+    } catch {} finally { setLoadingMore(false); }
+  }, [nextPage, loadingMore, searchQuery]);
 
   const handleSearchChange = (text: string) => {
     setSearchQuery(text);
@@ -68,6 +93,12 @@ export default function MembersScreen() {
       setIsLoading(true);
       loadMembers(text);
     }, 300);
+  };
+
+  const handleClearSearch = () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    setSearchQuery('');
+    loadMembers('');
   };
 
   if (isLoading && !searchQuery) {
@@ -86,7 +117,7 @@ export default function MembersScreen() {
           onChangeText={handleSearchChange}
         />
         {searchQuery ? (
-          <TouchableOpacity onPress={() => { setSearchQuery(''); loadMembers(''); }}>
+          <TouchableOpacity onPress={handleClearSearch}>
             <Ionicons name="close-circle" size={18} color={colors.textMuted} />
           </TouchableOpacity>
         ) : null}
@@ -104,6 +135,9 @@ export default function MembersScreen() {
         refreshControl={
           <RefreshControl refreshing={isRefreshing} onRefresh={() => { setIsRefreshing(true); loadMembers(searchQuery); }} tintColor={colors.primary} />
         }
+        onEndReached={loadMore}
+        onEndReachedThreshold={0.5}
+        ListFooterComponent={loadingMore ? <ActivityIndicator color={colors.primary} style={{ padding: spacing.md }} /> : null}
         contentContainerStyle={members.length === 0 ? { flex: 1 } : { paddingBottom: spacing.lg }}
       />
     </View>

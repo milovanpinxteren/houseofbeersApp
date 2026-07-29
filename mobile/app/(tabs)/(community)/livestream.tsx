@@ -32,8 +32,16 @@ import {
 } from '../../../src/api/events';
 
 const POLL_INTERVAL = 3000;
+const MAX_MESSAGES = 300;
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const VIDEO_HEIGHT = (SCREEN_WIDTH * 9) / 16;
+
+type RaffleAnimationData = {
+  prizeName: string;
+  winnerNames: string[];
+  isCurrentUser: boolean;
+  viewerNames: string[];
+};
 
 function getYouTubeEmbedUrl(url: string): string {
   const match = url.match(
@@ -101,24 +109,27 @@ export default function LivestreamScreen() {
   const [auctionItem, setAuctionItem] = useState<AuctionItem | null>(null);
   const [soldBanner, setSoldBanner] = useState<AuctionItem | null>(null);
   const soldBannerOpacity = useRef(new Animated.Value(0)).current;
-  const prevAuctionItemId = useRef<number | null>(null);
+  const announcedSoldIds = useRef<Set<number>>(new Set());
 
   // Raffle animation
-  const [raffleAnimation, setRaffleAnimation] = useState<{
-    prizeName: string;
-    winnerName: string;
-    isCurrentUser: boolean;
-    viewerNames: string[];
-  } | null>(null);
+  const [raffleAnimation, setRaffleAnimation] = useState<RaffleAnimationData | null>(null);
   const [shuffleName, setShuffleName] = useState('');
   const [animationPhase, setAnimationPhase] = useState<'shuffling' | 'revealing' | 'done'>('shuffling');
   const raffleOverlayOpacity = useRef(new Animated.Value(0)).current;
   const winnerScale = useRef(new Animated.Value(0.5)).current;
   const youWonOpacity = useRef(new Animated.Value(0)).current;
   const prevWinnerCount = useRef(0);
+  const raffleActive = useRef(false);
+  const raffleDismissing = useRef(false);
+  const pendingRaffles = useRef<RaffleAnimationData[]>([]);
+  const raffleTimeouts = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const mountedRef = useRef(true);
 
   const lastMessageTime = useRef<string | undefined>(undefined);
   const flatListRef = useRef<FlatList>(null);
+  const sendingRef = useRef(false);
+  const userIdRef = useRef(user?.id);
+  userIdRef.current = user?.id;
 
   const numericEventId = Number(eventId);
 
@@ -141,16 +152,20 @@ export default function LivestreamScreen() {
     init();
   }, [numericEventId]);
 
-  // Combined poll: chat, winners, auction — single request every 3s
-  // Heartbeat (presence update) every 20th poll (~60s)
-  const pollCount = useRef(0);
-  const auctionItemRef = useRef<AuctionItem | null>(null);
-
+  // Combined poll: chat, winners, auction — single request every 3s.
+  // Heartbeat (presence update) every 20th poll (~60s).
+  // Uses a setTimeout-after-completion loop so slow responses never
+  // stack overlapping requests.
   useEffect(() => {
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let pollCount = 0;
+    let initialized = false; // first successful poll populates state silently
+
     async function doPoll() {
       try {
-        pollCount.current += 1;
-        const isHeartbeat = pollCount.current % 20 === 1; // First poll + every 60s
+        pollCount += 1;
+        const isHeartbeat = pollCount % 20 === 1; // First poll + every 60s
 
         const data = await pollEvent(
           numericEventId,
@@ -158,14 +173,16 @@ export default function LivestreamScreen() {
           isHeartbeat,
           prevWinnerCount.current,
         );
+        if (cancelled) return;
 
-        // Chat messages
+        // Chat messages (capped to the most recent MAX_MESSAGES)
         if (data.messages.length > 0) {
           setMessages((prev) => {
             const existingIds = new Set(prev.map((m) => m.id));
             const newMsgs = data.messages.filter((m) => !existingIds.has(m.id));
             if (newMsgs.length === 0) return prev;
-            return [...prev, ...newMsgs];
+            const next = [...prev, ...newMsgs];
+            return next.length > MAX_MESSAGES ? next.slice(-MAX_MESSAGES) : next;
           });
           lastMessageTime.current =
             data.messages[data.messages.length - 1].created_at;
@@ -177,90 +194,146 @@ export default function LivestreamScreen() {
         }
 
         // Winner changes — full data + viewer names included by backend
-        if (data.winners && data.winner_count > prevWinnerCount.current && !raffleAnimation) {
+        // whenever our known count differs (increase OR decrease).
+        if (data.winners) {
           setWinners(data.winners);
-          const latestWinner = data.winners[0];
-          const isCurrentUser = latestWinner.user.user_id === user?.id;
+          const newCount = data.winner_count;
 
-          const names = data.viewer_names?.map((v) => v.display_name) || [];
-          const shuffleNames = names.length >= 3 ? names : [
-            latestWinner.user.display_name,
-            ...names,
-            'Viewer', 'Guest', 'Beer Fan',
-          ];
+          if (initialized && newCount > prevWinnerCount.current) {
+            // Animate the full batch of new winners (list is newest-first)
+            const delta = newCount - prevWinnerCount.current;
+            const newWinners = data.winners.slice(0, delta);
+            const winnerNames = newWinners.map((w) => w.user.display_name);
+            const prizeName = [
+              ...new Set(newWinners.map((w) => w.prize_name)),
+            ].join(', ');
+            const isCurrentUser = newWinners.some(
+              (w) => w.user.user_id === userIdRef.current
+            );
 
-          startRaffleAnimation({
-            prizeName: latestWinner.prize_name,
-            winnerName: latestWinner.user.display_name,
-            isCurrentUser,
-            viewerNames: shuffleNames,
-          });
+            const names = data.viewer_names?.map((v) => v.display_name) || [];
+            const shuffleNames = names.length >= 3 ? names : [
+              ...winnerNames,
+              ...names,
+              'Viewer', 'Guest', 'Beer Fan',
+            ];
+
+            const animation: RaffleAnimationData = {
+              prizeName,
+              winnerNames,
+              isCurrentUser,
+              viewerNames: shuffleNames,
+            };
+
+            if (raffleActive.current) {
+              // An animation is playing — queue this draw for after it ends
+              pendingRaffles.current.push(animation);
+            } else {
+              startRaffleAnimation(animation);
+            }
+          }
+          // Payload consumed (winners stored, animation played/queued)
+          prevWinnerCount.current = newCount;
+        } else {
+          prevWinnerCount.current = data.winner_count;
         }
-        prevWinnerCount.current = data.winner_count;
 
-        // Auction item (included for auction events)
+        // Auction item (included for auction events). Backend returns the
+        // most recently sold item when nothing is active, so we can show
+        // the sold banner — once per item id, and never on initial load.
         if (data.auction_item !== undefined) {
           const newItem = data.auction_item;
-          const prevItem = auctionItemRef.current;
 
-          // Detect sold transition
-          if (newItem && newItem.status === 'sold' && prevItem?.status === 'active' && newItem.id === prevItem.id) {
-            setSoldBanner(newItem);
-            Animated.sequence([
-              Animated.timing(soldBannerOpacity, {
-                toValue: 1,
-                duration: 300,
-                useNativeDriver: true,
-              }),
-              Animated.delay(5000),
-              Animated.timing(soldBannerOpacity, {
-                toValue: 0,
-                duration: 300,
-                useNativeDriver: true,
-              }),
-            ]).start(() => setSoldBanner(null));
+          if (
+            newItem &&
+            newItem.status === 'sold' &&
+            !announcedSoldIds.current.has(newItem.id)
+          ) {
+            announcedSoldIds.current.add(newItem.id);
+            if (initialized) {
+              setSoldBanner(newItem);
+              Animated.sequence([
+                Animated.timing(soldBannerOpacity, {
+                  toValue: 1,
+                  duration: 300,
+                  useNativeDriver: true,
+                }),
+                Animated.delay(5000),
+                Animated.timing(soldBannerOpacity, {
+                  toValue: 0,
+                  duration: 300,
+                  useNativeDriver: true,
+                }),
+              ]).start(() => setSoldBanner(null));
+            }
           }
 
           setAuctionItem(newItem);
-          auctionItemRef.current = newItem;
         }
+
+        initialized = true;
       } catch (err) {
         console.error('Poll error:', err);
+      } finally {
+        if (!cancelled) {
+          timeoutId = setTimeout(doPoll, POLL_INTERVAL);
+        }
       }
     }
 
     doPoll();
-    const interval = setInterval(doPoll, POLL_INTERVAL);
-    return () => clearInterval(interval);
-  }, [numericEventId, raffleAnimation, user?.id]);
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [numericEventId]);
+
+  // Clear raffle animation timers and queue on unmount
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      raffleTimeouts.current.forEach(clearTimeout);
+      raffleTimeouts.current = [];
+      pendingRaffles.current = [];
+    };
+  }, []);
 
   const handleSend = useCallback(async () => {
     const text = messageText.trim();
-    if (!text || sending) return;
+    // Ref guard: two calls in the same tick (button + submit) can't both pass
+    if (!text || sendingRef.current) return;
 
+    sendingRef.current = true;
     setSending(true);
     setMessageText('');
     try {
       const msg = await sendEventMessage(numericEventId, text);
       setMessages((prev) => {
         if (prev.some((m) => m.id === msg.id)) return prev;
-        return [...prev, msg];
+        const next = [...prev, msg];
+        return next.length > MAX_MESSAGES ? next.slice(-MAX_MESSAGES) : next;
       });
-      lastMessageTime.current = msg.created_at;
+      // Deliberately NOT advancing lastMessageTime here: the poll cursor
+      // must only move via poll responses, otherwise messages other users
+      // posted between the last poll and this send would be skipped.
     } catch (err) {
       console.error('Send error:', err);
       setMessageText(text);
     } finally {
+      sendingRef.current = false;
       setSending(false);
     }
-  }, [messageText, sending, numericEventId]);
+  }, [messageText, numericEventId]);
 
-  function startRaffleAnimation(data: {
-    prizeName: string;
-    winnerName: string;
-    isCurrentUser: boolean;
-    viewerNames: string[];
-  }) {
+  function clearRaffleTimeouts() {
+    raffleTimeouts.current.forEach(clearTimeout);
+    raffleTimeouts.current = [];
+  }
+
+  function startRaffleAnimation(data: RaffleAnimationData) {
+    if (!mountedRef.current) return;
+
+    raffleActive.current = true;
     setRaffleAnimation(data);
     setAnimationPhase('shuffling');
     raffleOverlayOpacity.setValue(0);
@@ -275,7 +348,7 @@ export default function LivestreamScreen() {
     }).start();
 
     // Shuffle through names with deceleration
-    const { viewerNames, winnerName } = data;
+    const { viewerNames, winnerNames } = data;
     let elapsed = 0;
     let delay = 50;
 
@@ -288,8 +361,7 @@ export default function LivestreamScreen() {
 
     function tick() {
       if (elapsed >= 2800) {
-        // Reveal the winner
-        setShuffleName(winnerName);
+        // Reveal the winner(s)
         setAnimationPhase('revealing');
 
         Animated.spring(winnerScale, {
@@ -311,15 +383,17 @@ export default function LivestreamScreen() {
         }
 
         // Auto-dismiss after 5 seconds
-        setTimeout(() => {
-          setAnimationPhase('done');
-          dismissRaffle();
-        }, 5000);
+        raffleTimeouts.current.push(
+          setTimeout(() => {
+            setAnimationPhase('done');
+            dismissRaffle();
+          }, 5000)
+        );
         return;
       }
 
-      // Pick a random name (avoid showing the winner too early)
-      const pool = viewerNames.filter((n) => n !== winnerName);
+      // Pick a random name (avoid showing a winner too early)
+      const pool = viewerNames.filter((n) => !winnerNames.includes(n));
       const randomName = pool.length > 0
         ? pool[Math.floor(Math.random() * pool.length)]
         : viewerNames[Math.floor(Math.random() * viewerNames.length)];
@@ -327,20 +401,32 @@ export default function LivestreamScreen() {
 
       delay = getDelay();
       elapsed += delay;
-      setTimeout(tick, delay);
+      raffleTimeouts.current.push(setTimeout(tick, delay));
     }
 
     tick();
   }
 
   function dismissRaffle() {
+    if (raffleDismissing.current) return;
+    raffleDismissing.current = true;
+    clearRaffleTimeouts();
     Animated.timing(raffleOverlayOpacity, {
       toValue: 0,
       duration: 300,
       useNativeDriver: true,
     }).start(() => {
-      setRaffleAnimation(null);
+      raffleDismissing.current = false;
+      if (!mountedRef.current) return;
       setShuffleName('');
+      // Play the next queued draw, if any arrived during this animation
+      const next = pendingRaffles.current.shift();
+      if (next) {
+        startRaffleAnimation(next);
+      } else {
+        raffleActive.current = false;
+        setRaffleAnimation(null);
+      }
     });
   }
 
@@ -466,7 +552,7 @@ export default function LivestreamScreen() {
                   <Text style={styles.rafflePrizeText}>{t('events.drawingFor')}: {raffleAnimation.prizeName}</Text>
                 </View>
 
-                {/* Shuffling / Winner name */}
+                {/* Shuffling / Winner name(s) */}
                 <Animated.View style={[
                   styles.raffleNameContainer,
                   animationPhase !== 'shuffling' && { transform: [{ scale: winnerScale }] },
@@ -474,12 +560,18 @@ export default function LivestreamScreen() {
                   {animationPhase !== 'shuffling' && (
                     <Ionicons name="trophy" size={40} color={colors.warning} style={{ marginBottom: spacing.sm }} />
                   )}
-                  <Text style={[
-                    styles.raffleShuffleName,
-                    animationPhase !== 'shuffling' && styles.raffleWinnerName,
-                  ]}>
-                    {shuffleName}
-                  </Text>
+                  {animationPhase === 'shuffling' ? (
+                    <Text style={styles.raffleShuffleName}>{shuffleName}</Text>
+                  ) : (
+                    raffleAnimation.winnerNames.map((name, index) => (
+                      <Text
+                        key={`${name}-${index}`}
+                        style={[styles.raffleShuffleName, styles.raffleWinnerName]}
+                      >
+                        {name}
+                      </Text>
+                    ))
+                  )}
                 </Animated.View>
 
                 {/* YOU WON! */}

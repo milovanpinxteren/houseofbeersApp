@@ -69,7 +69,14 @@ class RaffleAdmin(admin.ModelAdmin):
     def draw_winners(self, request, queryset):
         for raffle in queryset.filter(status='pending'):
             winners = raffle.draw_winners()
-            if winners:
+            if winners is None:
+                # Another request (e.g. a double click) already drew this raffle
+                self.message_user(
+                    request,
+                    f"Raffle '{raffle.prize_name}': already drawn, skipped.",
+                    level='warning',
+                )
+            elif winners:
                 names = ', '.join(w.user.email for w in winners)
                 self.message_user(
                     request,
@@ -148,7 +155,6 @@ class AuctionItemAdmin(admin.ModelAdmin):
     list_display = ['event', 'title', 'starting_price', 'final_price',
                     'winner_display', 'status', 'created_at']
     list_filter = ['status', 'event']
-    list_editable = ['status']
     search_fields = ['title', 'event__title']
     raw_id_fields = ['winner']
     ordering = ['-created_at']
@@ -162,14 +168,21 @@ class AuctionItemAdmin(admin.ModelAdmin):
 
     @admin.action(description='Set selected item as ACTIVE (deactivates others in same event)')
     def set_active(self, request, queryset):
-        for item in queryset:
-            # Deactivate other active items in the same event
-            AuctionItem.objects.filter(
-                event=item.event, status='active',
-            ).exclude(id=item.id).update(status='pending')
-            item.status = 'active'
-            item.save()
-            self.message_user(request, f"'{item.title}' is now active.")
+        if queryset.count() != 1:
+            self.message_user(
+                request,
+                'Select exactly one item to set as active.',
+                level='error',
+            )
+            return
+        item = queryset.first()
+        # Deactivate other active items in the same event
+        AuctionItem.objects.filter(
+            event=item.event, status='active',
+        ).exclude(id=item.id).update(status='pending')
+        item.status = 'active'
+        item.save()
+        self.message_user(request, f"'{item.title}' is now active.")
 
     @admin.action(description='Export selected items as CSV')
     def export_auction_results_csv(self, request, queryset):

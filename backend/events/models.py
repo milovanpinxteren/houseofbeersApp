@@ -1,7 +1,11 @@
 import random
-from django.db import models
+from django.db import models, transaction
 from django.conf import settings
 from django.utils import timezone
+
+# Single presence window used for both the active viewer count and raffle
+# eligibility. Matches the client heartbeat (~60s) with margin.
+PRESENCE_WINDOW_SECONDS = 90
 
 
 class Event(models.Model):
@@ -40,7 +44,7 @@ class Event(models.Model):
         return f"{self.title} ({self.get_status_display()}) - {self.scheduled_at:%Y-%m-%d %H:%M}"
 
     def active_viewer_count(self):
-        cutoff = timezone.now() - timezone.timedelta(seconds=90)
+        cutoff = timezone.now() - timezone.timedelta(seconds=PRESENCE_WINDOW_SECONDS)
         return self.viewers.filter(last_seen_at__gte=cutoff).count()
 
 
@@ -52,7 +56,7 @@ class EventViewer(models.Model):
         related_name='event_views',
     )
     joined_at = models.DateTimeField(auto_now_add=True)
-    last_seen_at = models.DateTimeField(auto_now=True)
+    last_seen_at = models.DateTimeField(auto_now=True, db_index=True)
 
     class Meta:
         unique_together = ['event', 'user']
@@ -74,6 +78,9 @@ class EventMessage(models.Model):
 
     class Meta:
         ordering = ['created_at']
+        indexes = [
+            models.Index(fields=['event', 'created_at']),
+        ]
 
     def __str__(self):
         return f"Message by {self.user.email} in {self.event.title}"
@@ -100,44 +107,55 @@ class Raffle(models.Model):
         return f"{self.prize_name} ({self.get_status_display()}) - {self.event.title}"
 
     def draw_winners(self):
-        """Draw random winners from active viewers."""
-        cutoff = timezone.now() - timezone.timedelta(minutes=5)
-        active_viewer_user_ids = list(
-            self.event.viewers
-            .filter(last_seen_at__gte=cutoff)
-            .values_list('user_id', flat=True)
-        )
+        """Draw random winners from active viewers.
 
-        eligible = list(active_viewer_user_ids)
+        Atomic: locks the raffle row and re-checks status so a concurrent
+        (double-clicked) draw can't run twice. Returns None if the raffle
+        was already drawn, a (possibly empty) list of RaffleWinner otherwise.
+        """
+        with transaction.atomic():
+            raffle = Raffle.objects.select_for_update().get(pk=self.pk)
+            if raffle.status != 'pending':
+                return None
 
-        # Optionally exclude users who already won in this event
-        if self.event.exclude_past_winners:
-            existing_winner_ids = set(
-                RaffleWinner.objects
-                .filter(raffle__event=self.event)
+            cutoff = timezone.now() - timezone.timedelta(seconds=PRESENCE_WINDOW_SECONDS)
+            eligible = list(
+                raffle.event.viewers
+                .filter(last_seen_at__gte=cutoff)
                 .values_list('user_id', flat=True)
             )
-            eligible = [uid for uid in eligible if uid not in existing_winner_ids]
 
-        num_to_draw = min(self.num_winners, len(eligible))
-        if num_to_draw == 0:
-            return []
+            # Optionally exclude users who already won in this event
+            if raffle.event.exclude_past_winners:
+                existing_winner_ids = set(
+                    RaffleWinner.objects
+                    .filter(raffle__event=raffle.event)
+                    .values_list('user_id', flat=True)
+                )
+                eligible = [uid for uid in eligible if uid not in existing_winner_ids]
 
-        winner_ids = random.sample(eligible, num_to_draw)
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-        winners = User.objects.filter(id__in=winner_ids)
+            num_to_draw = min(raffle.num_winners, len(eligible))
+            if num_to_draw == 0:
+                return []
 
-        created_winners = []
-        for user in winners:
-            winner = RaffleWinner.objects.create(raffle=self, user=user)
-            created_winners.append(winner)
+            winner_ids = random.sample(eligible, num_to_draw)
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            winners = User.objects.filter(id__in=winner_ids)
 
-        self.status = 'drawn'
-        self.drawn_at = timezone.now()
-        self.save()
+            created_winners = RaffleWinner.objects.bulk_create(
+                [RaffleWinner(raffle=raffle, user=user) for user in winners]
+            )
 
-        return created_winners
+            raffle.status = 'drawn'
+            raffle.drawn_at = timezone.now()
+            raffle.save(update_fields=['status', 'drawn_at'])
+
+            # Keep the in-memory instance consistent with the DB
+            self.status = raffle.status
+            self.drawn_at = raffle.drawn_at
+
+            return created_winners
 
 
 class AuctionItem(models.Model):
@@ -161,6 +179,7 @@ class AuctionItem(models.Model):
     )
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ['created_at']

@@ -106,7 +106,7 @@ export default function IOSInstallPrompt() {
               <Text style={styles.stepNumberText}>2</Text>
             </View>
             <Text style={styles.stepText}>
-              {t('install.step2')} <Ionicons name="add-square-outline" size={16} color={colors.primary} />
+              {t('install.step2')} <Ionicons name="add-outline" size={16} color={colors.primary} />
             </Text>
           </View>
         </View>

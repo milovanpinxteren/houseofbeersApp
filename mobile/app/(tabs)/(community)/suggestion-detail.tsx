@@ -11,10 +11,11 @@ import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
 import { colors, spacing, borderRadius } from '../../../src/theme/colors';
 import {
-  getSuggestions, getSuggestionComments, addSuggestionComment,
+  getSuggestionDetail, getSuggestionComments, addSuggestionComment,
   deleteSuggestionComment, toggleSuggestionVote, toggleSuggestionCommentVote,
   Suggestion, SuggestionComment,
 } from '../../../src/api/community';
+import { timeAgo } from '../../../src/utils/timeAgo';
 
 const STATUS_COLORS: Record<string, string> = {
   open: colors.primary,
@@ -22,17 +23,6 @@ const STATUS_COLORS: Record<string, string> = {
   done: colors.success,
   declined: colors.textMuted,
 };
-
-function timeAgo(dateStr: string): string {
-  const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
-  if (seconds < 60) return '<1m';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.floor(hours / 24);
-  return `${days}d`;
-}
 
 export default function SuggestionDetailScreen() {
   const { language } = useLanguage();
@@ -50,12 +40,11 @@ export default function SuggestionDetailScreen() {
   const load = useCallback(async () => {
     if (!id) return;
     try {
-      // Fetch the suggestion from the list (with annotations)
-      const sugData = await getSuggestions(1, 'new');
-      const found = sugData.results.find(s => s.id === id);
-      if (found) setSuggestion(found);
-
-      const commData = await getSuggestionComments(id);
+      const [sug, commData] = await Promise.all([
+        getSuggestionDetail(id),
+        getSuggestionComments(id),
+      ]);
+      setSuggestion(sug);
       setComments(commData.comments);
     } catch {
       Alert.alert(t('error'), t('community.loadError'));
@@ -225,7 +214,7 @@ export default function SuggestionDetailScreen() {
         }}
         ListEmptyComponent={
           <View style={styles.emptyComments}>
-            <Text style={styles.emptyText}>{t('community.noPosts')}</Text>
+            <Text style={styles.emptyText}>{t('community.noComments')}</Text>
           </View>
         }
         contentContainerStyle={{ padding: spacing.md, flexGrow: 1 }}

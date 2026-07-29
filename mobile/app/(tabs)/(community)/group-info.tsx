@@ -29,13 +29,14 @@ export default function GroupInfoScreen() {
     Alert.alert(t('community.leaveGroup'), t('community.leaveGroupConfirm'), [
       { text: t('cancel'), style: 'cancel' },
       { text: t('community.leaveGroup'), style: 'destructive', onPress: async () => {
-        try { await leaveGroup(gId); router.back(); } catch {}
+        // Go back to the community tab root — the group chat behind us is now inaccessible.
+        try { await leaveGroup(gId); router.replace('/(tabs)/community'); } catch {}
       }},
     ]);
   };
 
   if (isLoading) return <View style={[styles.container, styles.center]}><ActivityIndicator size="large" color={colors.primary} /></View>;
-  if (!group) return <View style={[styles.container, styles.center]}><Text style={styles.emptyText}>Group not found</Text></View>;
+  if (!group) return <View style={[styles.container, styles.center]}><Text style={styles.emptyText}>{t('community.groupNotFound')}</Text></View>;
 
   return (
     <ScrollView style={styles.container}>
@@ -62,7 +63,7 @@ export default function GroupInfoScreen() {
             <Text style={styles.memberName}>{member.display_name}</Text>
             {member.role === 'admin' && (
               <View style={styles.adminBadge}>
-                <Text style={styles.adminBadgeText}>Admin</Text>
+                <Text style={styles.adminBadgeText}>{t('community.admin')}</Text>
               </View>
             )}
           </TouchableOpacity>

@@ -15,17 +15,7 @@ import {
   getSuggestions, toggleSuggestionVote, deleteSuggestion,
   Post, Group, ChatItem, Suggestion,
 } from '../../src/api/community';
-
-function timeAgo(dateStr: string): string {
-  const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
-  if (seconds < 60) return '<1m';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.floor(hours / 24);
-  return `${days}d`;
-}
+import { timeAgo } from '../../src/utils/timeAgo';
 
 const STATUS_COLORS: Record<string, string> = {
   open: colors.primary,
@@ -373,11 +363,14 @@ function ForumTab({ userId }: { userId: number }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [sortBy, setSortBy] = useState<'top' | 'new'>('top');
+  const [nextPage, setNextPage] = useState<number | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const load = useCallback(async () => {
     try {
       const data = await getSuggestions(1, sortBy);
       setSuggestions(data.results);
+      setNextPage(data.next ? 2 : null);
     } catch {
       Alert.alert(t('error'), t('community.loadError'));
     } finally {
@@ -385,6 +378,16 @@ function ForumTab({ userId }: { userId: number }) {
       setIsRefreshing(false);
     }
   }, [sortBy]);
+
+  const loadMore = useCallback(async () => {
+    if (!nextPage || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const data = await getSuggestions(nextPage, sortBy);
+      setSuggestions(prev => [...prev, ...data.results]);
+      setNextPage(data.next ? nextPage + 1 : null);
+    } catch {} finally { setLoadingMore(false); }
+  }, [nextPage, loadingMore, sortBy]);
 
   useFocusEffect(
     useCallback(() => { load(); }, [load])
@@ -420,7 +423,9 @@ function ForumTab({ userId }: { userId: number }) {
           <TouchableOpacity
             key={key}
             style={[styles.sortBtn, sortBy === key && styles.sortBtnActive]}
-            onPress={() => { setSortBy(key); setIsLoading(true); }}
+            onPress={() => {
+              if (sortBy !== key) { setSortBy(key); setIsLoading(true); }
+            }}
           >
             <Ionicons
               name={key === 'top' ? 'trending-up' : 'time-outline'}
@@ -499,6 +504,9 @@ function ForumTab({ userId }: { userId: number }) {
           </View>
         }
         refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={() => { setIsRefreshing(true); load(); }} tintColor={colors.primary} />}
+        onEndReached={loadMore}
+        onEndReachedThreshold={0.5}
+        ListFooterComponent={loadingMore ? <ActivityIndicator color={colors.primary} style={{ padding: spacing.md }} /> : null}
         contentContainerStyle={suggestions.length === 0 ? { flex: 1 } : { paddingBottom: spacing.lg }}
       />
       <TouchableOpacity style={styles.fab} onPress={() => router.push('/(tabs)/(community)/new-suggestion')} activeOpacity={0.8}>

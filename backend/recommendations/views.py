@@ -10,7 +10,7 @@ from .services import RecommendationService, RecommendationAPIError
 from .serializers import (
     UntappdProfileSerializer, LinkUntappdSerializer,
     FavoriteSerializer, AddFavoriteSerializer,
-    RecommendationFilterSerializer
+    RecommendationFilterSerializer, SelectedFavoritesSerializer
 )
 
 logger = logging.getLogger(__name__)
@@ -40,6 +40,32 @@ EMPTY_TASTE_PROFILE = {
     'abv_profile': None,
     'rating_profile': None,
 }
+
+
+def _is_empty_taste_profile(result):
+    """
+    True when the upstream returned 200 but the profile carries no usable data.
+
+    Untappd scrapes can succeed at the HTTP level while yielding nothing (for
+    example when Untappd blocks the beer-list pages), which would otherwise
+    render an empty taste wheel instead of triggering the Shopify fallback.
+    """
+    if not result:
+        return True
+    if result.get('total_checkins'):
+        return False
+    radar = result.get('radar_chart') or {}
+    return not radar.get('axes') and not result.get('style_distribution')
+
+
+def _is_empty_recommendations(result):
+    """True when a 200 recommendations payload carries no beers at all."""
+    if not result:
+        return True
+    return not any(
+        result.get(key)
+        for key in ('recommendations', 'discovery_picks', 'tried_beers')
+    )
 
 
 class RecommendationsView(APIView):
@@ -72,13 +98,32 @@ class RecommendationsView(APIView):
                         username=untappd_profile.username,
                         **filters
                     )
-                    profile_source = 'untappd'
-                    profile_identifier = untappd_profile.username
+                    # Handle async response (new user, needs profile building).
+                    # This sits INSIDE the try so a failed build task still
+                    # falls back to Shopify order history.
+                    if result.get('status') == 'pending' and result.get('task_id'):
+                        result = service.poll_for_result(result['task_id'])
+                    # A 200 with no beers is still a failed profile — fall back
+                    # rather than showing the user an empty screen. Pending
+                    # results are not yet resolved, so leave those alone.
+                    if (
+                        result.get('status') != 'pending'
+                        and _is_empty_recommendations(result)
+                    ):
+                        logger.warning(
+                            f"Untappd recommendations empty for {user.email} "
+                            f"(username: {untappd_profile.username}) — falling back to Shopify"
+                        )
+                        result = None
+                    else:
+                        profile_source = 'untappd'
+                        profile_identifier = untappd_profile.username
                 except RecommendationAPIError as e:
                     logger.warning(
                         f"Untappd recommendations failed for {user.email} "
                         f"(username: {untappd_profile.username}): {e} — falling back to Shopify"
                     )
+                    result = None
 
             # Fall back to Shopify if Untappd failed or not linked
             if result is None:
@@ -86,16 +131,41 @@ class RecommendationsView(APIView):
                     email=user.email,
                     **filters
                 )
+                if result.get('status') == 'pending' and result.get('task_id'):
+                    result = service.poll_for_result(result['task_id'])
                 profile_source = 'shopify'
                 profile_identifier = user.email
 
-            # Handle async response (new user, needs profile building)
+            # Still pending after the short inline poll — hand the task to the
+            # client, which long-polls the status endpoint instead of us
+            # blocking a gunicorn worker.
             if result.get('status') == 'pending' and result.get('task_id'):
-                result = service.poll_for_result(result['task_id'])
+                return Response({
+                    'status': 'pending',
+                    'task_id': result['task_id'],
+                    'profile_source': profile_source,
+                    'profile_identifier': profile_identifier,
+                })
 
             # Add profile source info
             result['profile_source'] = profile_source
             result['profile_identifier'] = profile_identifier
+
+            if _is_empty_recommendations(result) and not result.get('message'):
+                summary = result.get('profile_summary') or {}
+                if summary.get('total_checkins'):
+                    # The user has a taste profile — there is simply nothing in
+                    # stock to match it against right now. Telling them to
+                    # "start shopping" here would be plainly wrong.
+                    result['message'] = (
+                        "We couldn't match any beers to your taste profile right "
+                        "now. Please check back soon!"
+                    )
+                else:
+                    result['message'] = (
+                        'No purchase history found yet. Start shopping to get '
+                        'personalized recommendations!'
+                    )
 
             from analytics.tracker import track
             track('recommendations', user=user, source=profile_source)
@@ -111,9 +181,11 @@ class RecommendationsView(APIView):
                     'profile_identifier': profile_identifier,
                     'message': 'No purchase history found yet. Start shopping to get personalized recommendations!'
                 })
+            # Never proxy upstream status codes (401/429/...) to the client —
+            # they would be misread as app-level auth/rate-limit errors.
             return Response(
                 {'error': str(e)},
-                status=e.status_code or status.HTTP_502_BAD_GATEWAY
+                status=status.HTTP_502_BAD_GATEWAY
             )
         except Exception as e:
             logger.error(f"Unexpected error getting recommendations for {user.email}: {e}")
@@ -147,8 +219,18 @@ class TasteProfileView(APIView):
                         untappd_profile.username,
                         profile_type='untappd'
                     )
-                    profile_source = 'untappd'
-                    profile_identifier = untappd_profile.username
+                    # A 200 with no check-ins/styles means the Untappd scrape
+                    # produced nothing usable — fall back instead of rendering
+                    # an empty taste wheel.
+                    if _is_empty_taste_profile(result):
+                        logger.warning(
+                            f"Untappd taste profile empty for {user.email} "
+                            f"(username: {untappd_profile.username}) — falling back to Shopify"
+                        )
+                        result = None
+                    else:
+                        profile_source = 'untappd'
+                        profile_identifier = untappd_profile.username
                 except RecommendationAPIError as e:
                     logger.warning(
                         f"Untappd profile fetch failed for {user.email} "
@@ -167,6 +249,12 @@ class TasteProfileView(APIView):
             result['profile_source'] = profile_source
             result['profile_identifier'] = profile_identifier
 
+            if _is_empty_taste_profile(result) and not result.get('message'):
+                result['message'] = (
+                    'No taste profile available yet. Start shopping or link your '
+                    'Untappd account to build your profile!'
+                )
+
             from analytics.tracker import track
             track('taste_profile', user=user)
 
@@ -181,9 +269,10 @@ class TasteProfileView(APIView):
                     'profile_identifier': profile_identifier,
                     'message': 'No taste profile available yet. Start shopping or link your Untappd account to build your profile!'
                 })
+            # Never proxy upstream status codes (401/429/...) to the client.
             return Response(
                 {'error': str(e)},
-                status=e.status_code or status.HTTP_502_BAD_GATEWAY
+                status=status.HTTP_502_BAD_GATEWAY
             )
         except Exception as e:
             logger.error(f"Unexpected error getting profile for {user.email}: {e}")
@@ -191,6 +280,48 @@ class TasteProfileView(APIView):
                 {'error': 'Failed to get taste profile'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+class RecommendationStatusView(APIView):
+    """
+    Proxy a single task-status check to the recommender API so the mobile
+    client (not a gunicorn worker) does the long polling for profile builds.
+
+    Always returns HTTP 200 with one of:
+      {status: 'pending'}
+      {status: 'completed', result: {...}}
+      {status: 'failed', error: '...'}
+
+    On 'completed' or 'failed' the client refetches /api/recommendations/,
+    which returns the finished profile or falls back to Shopify order history.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, task_id):
+        service = RecommendationService()
+        try:
+            result = service.get_task_status(task_id)
+        except RecommendationAPIError as e:
+            logger.warning(
+                f"Task status check failed for {request.user.email} "
+                f"(task: {task_id}): {e}"
+            )
+            # Report as failed so the client refetches /recommendations/,
+            # which will fall back to Shopify order history if needed.
+            return Response({'status': 'failed', 'error': str(e)})
+
+        task_status = result.get('status')
+        if task_status == 'completed':
+            return Response({
+                'status': 'completed',
+                'result': result.get('result', result),
+            })
+        if task_status == 'failed':
+            return Response({
+                'status': 'failed',
+                'error': result.get('error', 'Task failed'),
+            })
+        return Response({'status': 'pending'})
 
 
 class UntappdProfileView(APIView):
@@ -222,6 +353,12 @@ class UntappdProfileView(APIView):
             # This will fail if the profile doesn't exist or is private
             service.get_profile(username, profile_type='untappd')
         except RecommendationAPIError as e:
+            if e.status_code == 404:
+                # Stable message the mobile client can match on
+                return Response(
+                    {'error': 'Untappd profile not found or is private'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
             return Response(
                 {'error': f'Could not verify Untappd profile: {e}'},
                 status=status.HTTP_400_BAD_REQUEST
@@ -293,29 +430,24 @@ class FavoritesListView(APIView):
     def post(self, request):
         serializer = AddFavoriteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
 
-        # Check if already favorited
-        if Favorite.objects.filter(
+        # get_or_create is atomic against the unique_together constraint, so
+        # a double-tap can't race check-then-create into an IntegrityError
+        favorite, created = Favorite.objects.get_or_create(
             user=request.user,
-            beer_id=serializer.validated_data['beer_id']
-        ).exists():
-            return Response(
-                {'error': 'Beer already in favorites'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        favorite = Favorite.objects.create(
-            user=request.user,
-            **serializer.validated_data
+            beer_id=data['beer_id'],
+            defaults={k: v for k, v in data.items() if k != 'beer_id'}
         )
 
-        from analytics.tracker import track
-        track('favorite_add', user=request.user, beer=serializer.validated_data.get('title', ''))
+        if created:
+            from analytics.tracker import track
+            track('favorite_add', user=request.user, beer=data.get('title', ''))
 
         return Response({
             'success': True,
             'favorite': FavoriteSerializer(favorite).data
-        }, status=status.HTTP_201_CREATED)
+        }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
 
 class FavoriteDetailView(APIView):
@@ -385,13 +517,9 @@ class FavoritesSelectedCartLinkView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        favorite_ids = request.data.get('favorite_ids', [])
-
-        if not favorite_ids:
-            return Response(
-                {'error': 'No favorites selected'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        serializer = SelectedFavoritesSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        favorite_ids = serializer.validated_data['favorite_ids']
 
         favorites = Favorite.objects.filter(
             id__in=favorite_ids,

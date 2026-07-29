@@ -1,11 +1,11 @@
-import { Tabs, router } from 'expo-router';
+import { Tabs, router, useNavigation } from 'expo-router';
 import { Image, StyleSheet, View, Text, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { useLanguage } from '../../src/context/LanguageContext';
 import { t } from '../../src/i18n';
 import { colors } from '../../src/theme/colors';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { getFavorites } from '../../src/api/recommendations';
 import { getUnreadCount } from '../../src/api/community';
 
@@ -23,19 +23,27 @@ function LogoTitle() {
 
 export default function TabsLayout() {
   const { language } = useLanguage();
+  const navigation = useNavigation();
   const [favoritesCount, setFavoritesCount] = useState(0);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  useFocusEffect(
-    useCallback(() => {
-      getFavorites()
-        .then((data) => setFavoritesCount(data.favorites.length))
-        .catch(() => {});
-      getUnreadCount()
-        .then((data) => setUnreadCount(data.unread_count))
-        .catch(() => {});
-    }, [])
-  );
+  const refreshBadges = useCallback(() => {
+    getFavorites()
+      .then((data) => setFavoritesCount(data.favorites.length))
+      .catch(() => {});
+    getUnreadCount()
+      .then((data) => setUnreadCount(data.unread_count))
+      .catch(() => {});
+  }, []);
+
+  useFocusEffect(refreshBadges);
+
+  // Refresh badges on any navigation state change (e.g. returning from a chat),
+  // so the unread count updates after conversations are read.
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('state', refreshBadges);
+    return unsubscribe;
+  }, [navigation, refreshBadges]);
 
   return (
     <Tabs

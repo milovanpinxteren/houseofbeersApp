@@ -41,6 +41,29 @@ export interface RecommendationsResponse {
   message?: string;
 }
 
+// Returned when the recommender is still building the user's taste profile.
+// The client should poll getRecommendationStatus(task_id) and then refetch.
+export interface PendingRecommendationsResponse {
+  status: 'pending';
+  task_id: string;
+  profile_source: 'untappd' | 'shopify';
+  profile_identifier: string;
+}
+
+export type RecommendationsResult = RecommendationsResponse | PendingRecommendationsResponse;
+
+export function isPendingRecommendations(
+  result: RecommendationsResult
+): result is PendingRecommendationsResponse {
+  return 'status' in result && result.status === 'pending';
+}
+
+export interface RecommendationStatusResponse {
+  status: 'pending' | 'completed' | 'failed';
+  result?: RecommendationsResponse;
+  error?: string;
+}
+
 export interface RadarChartData {
   axes: string[];
   values: number[];
@@ -127,7 +150,7 @@ export async function getRecommendations(params?: {
   limit?: number;
   price_max?: number;
   style_filter?: string;
-}): Promise<RecommendationsResponse> {
+}): Promise<RecommendationsResult> {
   const queryParams = new URLSearchParams();
   if (params?.limit && params.limit > 0) {
     queryParams.set('limit', params.limit.toString());
@@ -142,7 +165,15 @@ export async function getRecommendations(params?: {
   const query = queryParams.toString();
   const endpoint = '/recommendations/' + (query ? '?' + query : '');
 
-  return apiFetch<RecommendationsResponse>(endpoint);
+  return apiFetch<RecommendationsResult>(endpoint);
+}
+
+export async function getRecommendationStatus(
+  taskId: string
+): Promise<RecommendationStatusResponse> {
+  return apiFetch<RecommendationStatusResponse>(
+    `/recommendations/status/${encodeURIComponent(taskId)}/`
+  );
 }
 
 export async function getTasteProfile(): Promise<TasteProfileResponse> {

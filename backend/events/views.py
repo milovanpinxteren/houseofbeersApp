@@ -1,16 +1,28 @@
 from django.db.models import Count, Exists, OuterRef
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.throttling import UserRateThrottle
 from rest_framework.views import APIView
 
-from .models import Event, EventViewer, EventMessage, RaffleWinner, AuctionItem
+from .models import (
+    Event, EventViewer, EventMessage, RaffleWinner, AuctionItem,
+    PRESENCE_WINDOW_SECONDS,
+)
 from .serializers import (
     EventListSerializer, EventDetailSerializer,
     EventMessageSerializer, EventViewerNameSerializer,
     RaffleWinnerSerializer, AuctionItemSerializer,
 )
+
+
+class ChatPostRateThrottle(UserRateThrottle):
+    """Per-user rate limit for chat posting. `rate` is set directly so no
+    DEFAULT_THROTTLE_RATES settings entry is required."""
+    scope = 'event_chat_post'
+    rate = '15/min'
 
 
 def _annotate_events(queryset, user):
@@ -20,6 +32,31 @@ def _annotate_events(queryset, user):
             EventViewer.objects.filter(event=OuterRef('pk'), user=user)
         ),
     )
+
+
+def _parse_after_param(request):
+    """Parse the `after` query param into an aware datetime, or None if
+    missing/malformed (malformed values are ignored, never a 500)."""
+    raw = request.query_params.get('after')
+    if not raw:
+        return None
+    parsed = parse_datetime(raw)
+    if parsed is None:
+        return None
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed)
+    return parsed
+
+
+def _parse_int_param(request, name):
+    """Parse an int query param, or None if missing/malformed."""
+    raw = request.query_params.get(name)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 class EventsListView(APIView):
@@ -74,6 +111,12 @@ class EventJoinView(APIView):
 class EventChatView(APIView):
     permission_classes = [IsAuthenticated]
 
+    def get_throttles(self):
+        # Only throttle chat posting, never reads
+        if self.request.method == 'POST':
+            return [ChatPostRateThrottle()]
+        return []
+
     def get(self, request, event_id):
         try:
             event = Event.objects.get(id=event_id)
@@ -88,16 +131,15 @@ class EventChatView(APIView):
 
         messages = (
             event.messages
-            .select_related('user', 'user__community_profile')
+            .select_related('user', 'user__community_profile', 'user__untappd_profile')
             .order_by('created_at')
         )
 
-        after = request.query_params.get('after')
+        after = _parse_after_param(request)
         if after:
             messages = messages.filter(created_at__gt=after)
-
-        # Limit to last 100 messages if no after param
-        if not after:
+        else:
+            # Limit to last 100 messages if no (valid) after param
             messages = messages.order_by('-created_at')[:100]
             messages = sorted(messages, key=lambda m: m.created_at)
 
@@ -112,6 +154,12 @@ class EventChatView(APIView):
             event = Event.objects.get(id=event_id)
         except Event.DoesNotExist:
             return Response({'error': 'Event not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if event.status != 'live':
+            return Response(
+                {'error': 'Chat is only available while the event is live'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         message_text = request.data.get('message', '').strip()
         if not message_text:
@@ -143,15 +191,15 @@ class EventAuctionActiveView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, event_id):
-        try:
-            item = (
-                AuctionItem.objects
-                .filter(event_id=event_id, status='active')
-                .select_related('winner', 'winner__community_profile')
-                .first()
-            )
-        except Event.DoesNotExist:
+        if not Event.objects.filter(id=event_id).exists():
             return Response({'error': 'Event not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        item = (
+            AuctionItem.objects
+            .filter(event_id=event_id, status='active')
+            .select_related('winner', 'winner__community_profile')
+            .first()
+        )
 
         if not item:
             return Response({'item': None})
@@ -205,10 +253,10 @@ class EventPollView(APIView):
         # Chat messages
         messages = (
             event.messages
-            .select_related('user', 'user__community_profile')
+            .select_related('user', 'user__community_profile', 'user__untappd_profile')
             .order_by('created_at')
         )
-        after = request.query_params.get('after')
+        after = _parse_after_param(request)
         if after:
             messages = messages.filter(created_at__gt=after)
         else:
@@ -230,18 +278,19 @@ class EventPollView(APIView):
             response_data['active_viewer_count'] = event.active_viewer_count()
 
         # Include full winner data + viewer names when count changed
-        known_count = request.query_params.get('known_winner_count')
-        if known_count is not None and int(known_count) != winner_count:
+        known_count = _parse_int_param(request, 'known_winner_count')
+        if known_count is not None and known_count != winner_count:
             winners = (
                 RaffleWinner.objects
                 .filter(raffle__event=event)
-                .select_related('raffle', 'user', 'user__community_profile')
+                .select_related('raffle', 'user', 'user__community_profile',
+                                'user__untappd_profile')
                 .order_by('-drawn_at')
             )
             response_data['winners'] = RaffleWinnerSerializer(winners, many=True).data
 
             # Include viewer names for raffle animation
-            cutoff = timezone.now() - timezone.timedelta(minutes=5)
+            cutoff = timezone.now() - timezone.timedelta(seconds=PRESENCE_WINDOW_SECONDS)
             viewers = (
                 EventViewer.objects
                 .filter(event=event, last_seen_at__gte=cutoff)
@@ -251,7 +300,9 @@ class EventPollView(APIView):
                 [v.user for v in viewers], many=True
             ).data
 
-        # Auction item (only for auction events)
+        # Auction item (only for auction events). When no item is active,
+        # fall back to the most recently sold item so clients can detect
+        # the active -> sold transition and show the sold banner.
         if event.event_type == 'auction':
             item = (
                 AuctionItem.objects
@@ -259,6 +310,14 @@ class EventPollView(APIView):
                 .select_related('winner', 'winner__community_profile')
                 .first()
             )
+            if not item:
+                item = (
+                    AuctionItem.objects
+                    .filter(event=event, status='sold')
+                    .select_related('winner', 'winner__community_profile')
+                    .order_by('-updated_at', '-id')
+                    .first()
+                )
             response_data['auction_item'] = (
                 AuctionItemSerializer(item).data if item else None
             )
@@ -271,7 +330,7 @@ class EventViewersView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, event_id):
-        cutoff = timezone.now() - timezone.timedelta(minutes=5)
+        cutoff = timezone.now() - timezone.timedelta(seconds=PRESENCE_WINDOW_SECONDS)
         viewers = (
             EventViewer.objects
             .filter(event_id=event_id, last_seen_at__gte=cutoff)
@@ -289,7 +348,8 @@ class EventRaffleWinnersView(APIView):
         winners = (
             RaffleWinner.objects
             .filter(raffle__event_id=event_id)
-            .select_related('raffle', 'user', 'user__community_profile')
+            .select_related('raffle', 'user', 'user__community_profile',
+                            'user__untappd_profile')
             .order_by('-drawn_at')
         )
         serializer = RaffleWinnerSerializer(winners, many=True)

@@ -4,12 +4,13 @@ from .views import (
     FeedView, PostCreateView, PostDeleteView, PostLikeView,
     PostCommentsView, CommentDeleteView,
     ConversationsListView, ConversationCreateView,
-    MessagesListView, SendMessageView, MarkReadView, UnreadCountView,
+    MessagesListView, SendMessageView, MessageDeleteView, MarkReadView, UnreadCountView,
     MemberCheckinsView,
     GroupsListView, AvailableGroupsListView, GroupDetailView,
     GroupJoinView, GroupLeaveView, GroupMessagesListView, GroupSendMessageView,
+    GroupMessageDeleteView, GroupMarkReadView,
     UnifiedChatsView,
-    SuggestionsListView, SuggestionCreateView, SuggestionDeleteView,
+    SuggestionsListView, SuggestionCreateView, SuggestionDetailView, SuggestionDeleteView,
     SuggestionVoteView, SuggestionCommentsView, SuggestionCommentDeleteView,
     SuggestionCommentVoteView,
 )
@@ -40,6 +41,7 @@ urlpatterns = [
     path('conversations/create/', ConversationCreateView.as_view(), name='community-conversation-create'),
     path('conversations/<int:conversation_id>/messages/', MessagesListView.as_view(), name='community-messages'),
     path('conversations/<int:conversation_id>/messages/send/', SendMessageView.as_view(), name='community-message-send'),
+    path('conversations/<int:conversation_id>/messages/<int:message_id>/', MessageDeleteView.as_view(), name='community-message-delete'),
     path('conversations/<int:conversation_id>/read/', MarkReadView.as_view(), name='community-conversation-read'),
 
     # Groups
@@ -50,6 +52,8 @@ urlpatterns = [
     path('groups/<int:group_id>/leave/', GroupLeaveView.as_view(), name='community-group-leave'),
     path('groups/<int:group_id>/messages/', GroupMessagesListView.as_view(), name='community-group-messages'),
     path('groups/<int:group_id>/messages/send/', GroupSendMessageView.as_view(), name='community-group-message-send'),
+    path('groups/<int:group_id>/messages/<int:message_id>/', GroupMessageDeleteView.as_view(), name='community-group-message-delete'),
+    path('groups/<int:group_id>/read/', GroupMarkReadView.as_view(), name='community-group-read'),
 
     # Unified chats
     path('chats/', UnifiedChatsView.as_view(), name='community-chats'),
@@ -61,6 +65,7 @@ urlpatterns = [
     path('suggestions/', SuggestionsListView.as_view(), name='community-suggestions'),
     path('suggestions/create/', SuggestionCreateView.as_view(), name='community-suggestion-create'),
     path('suggestions/<int:suggestion_id>/', SuggestionDeleteView.as_view(), name='community-suggestion-delete'),
+    path('suggestions/<int:suggestion_id>/detail/', SuggestionDetailView.as_view(), name='community-suggestion-detail'),
     path('suggestions/<int:suggestion_id>/vote/', SuggestionVoteView.as_view(), name='community-suggestion-vote'),
     path('suggestions/<int:suggestion_id>/comments/', SuggestionCommentsView.as_view(), name='community-suggestion-comments'),
     path('suggestions/comments/<int:comment_id>/', SuggestionCommentDeleteView.as_view(), name='community-suggestion-comment-delete'),

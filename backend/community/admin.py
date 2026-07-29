@@ -26,6 +26,11 @@ class CommunityProfileAdmin(admin.ModelAdmin):
         return obj.bio[:60] + '...' if len(obj.bio) > 60 else obj.bio
     bio_preview.short_description = 'Bio'
 
+    def has_add_permission(self, request):
+        # Profiles are created automatically per user; the readonly user FK
+        # makes the add form unusable.
+        return False
+
 
 @admin.register(Post)
 class PostAdmin(admin.ModelAdmin):
@@ -51,6 +56,10 @@ class PostAdmin(admin.ModelAdmin):
     def comment_count(self, obj):
         return obj.comments.count()
     comment_count.short_description = 'Comments'
+
+    def has_add_permission(self, request):
+        # Posts are user-generated; the readonly author FK makes the add form unusable.
+        return False
 
 
 @admin.register(PostComment)
