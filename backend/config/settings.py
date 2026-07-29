@@ -216,6 +216,12 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'notifications.tasks.prune_push_subscriptions',
         'schedule': crontab(hour=4, minute=30),
     },
+    # Picks up admin-scheduled push messages whose send time has passed.
+    # Every 5 minutes, so a scheduled message is never more than that late.
+    'process-scheduled-broadcasts': {
+        'task': 'notifications.tasks.process_scheduled_broadcasts',
+        'schedule': 5 * 60,
+    },
 }
 
 # Web Push (VAPID)

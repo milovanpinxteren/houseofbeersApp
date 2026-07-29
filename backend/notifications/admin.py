@@ -3,7 +3,7 @@ from django.contrib import admin, messages
 from django.db import models
 from django.utils import timezone
 
-from .models import (NotificationDelivery, NotificationKindSetting,
+from .models import (Broadcast, NotificationDelivery, NotificationKindSetting,
                      NotificationPreference, PushSubscription)
 
 
@@ -218,3 +218,150 @@ class NotificationDeliveryAdmin(admin.ModelAdmin):
 
     def has_change_permission(self, request, obj=None):
         return False
+
+
+@admin.register(Broadcast)
+class BroadcastAdmin(admin.ModelAdmin):
+    """
+    Write a message, choose who gets it, send now or schedule it.
+
+    Sending is queued to a background worker rather than done in this request:
+    a few hundred pushes and emails would take far longer than a web request
+    is allowed to run.
+    """
+
+    list_display = ['title', 'kind', 'audience', 'status', 'scheduled_for',
+                    'delivery_summary', 'created_at']
+    list_filter = ['status', 'kind', 'audience', 'created_at']
+    search_fields = ['title', 'body']
+    filter_horizontal = ['recipients']
+    date_hierarchy = 'created_at'
+    actions = ['queue_selected', 'send_test_to_myself']
+
+    fieldsets = (
+        ('Message', {
+            'fields': ('title', 'body', 'url', 'kind'),
+        }),
+        ('Who gets it', {
+            'fields': ('audience', 'recipients'),
+            'description': 'Recipients are worked out when the message is '
+                           'actually sent, so a scheduled message reaches '
+                           'whoever qualifies at that moment.'
+        }),
+        ('When', {
+            'fields': ('scheduled_for', 'send_now'),
+            'description': 'To send straight away: leave the time empty and '
+                           'tick "Send now". To schedule: set a time and tick '
+                           '"Send now" - it will go out then.'
+        }),
+        ('Result', {
+            'fields': ('status', 'recipient_count', 'push_sent_count',
+                       'email_sent_count', 'sent_at', 'error', 'created_by'),
+            'classes': ('collapse',),
+        }),
+    )
+
+    def get_readonly_fields(self, request, obj=None):
+        base = ['status', 'recipient_count', 'push_sent_count',
+                'email_sent_count', 'sent_at', 'error', 'created_by']
+        if obj and not obj.is_editable:
+            # Editing an already-sent message would misrepresent what went out.
+            return base + ['title', 'body', 'url', 'kind', 'audience',
+                           'recipients', 'scheduled_for', 'send_now']
+        return base
+
+    def delivery_summary(self, obj):
+        if obj.status != Broadcast.STATUS_SENT:
+            return '-'
+        return (f"{obj.recipient_count} recipients / "
+                f"{obj.push_sent_count} push / {obj.email_sent_count} email")
+    delivery_summary.short_description = 'Delivered'
+
+    def save_model(self, request, obj, form, change):
+        if not obj.created_by_id:
+            obj.created_by = request.user
+
+        queue_it = obj.send_now and obj.is_editable
+        if queue_it:
+            obj.status = (Broadcast.STATUS_SCHEDULED if obj.scheduled_for
+                          else Broadcast.STATUS_DRAFT)
+        super().save_model(request, obj, form, change)
+
+        if not queue_it:
+            return
+
+        if obj.scheduled_for:
+            self.message_user(
+                request,
+                f'"{obj.title}" is scheduled for '
+                f'{timezone.localtime(obj.scheduled_for):%d %b %Y %H:%M}. '
+                f'It will be sent automatically.',
+            )
+        else:
+            # M2M recipients are not saved yet at this point, so the actual
+            # dispatch happens in save_related below.
+            self._queue_after_save = obj.pk
+
+    def save_related(self, request, form, formsets, change):
+        super().save_related(request, form, formsets, change)
+        pk = getattr(self, '_queue_after_save', None)
+        if pk is None:
+            return
+        self._queue_after_save = None
+
+        from .tasks import send_broadcast
+        obj = Broadcast.objects.get(pk=pk)
+        count = obj.resolve_recipients().count()
+        send_broadcast.delay(pk)
+        self.message_user(
+            request,
+            f'"{obj.title}" queued for {count} recipient(s). '
+            f'Refresh in a moment to see the result.',
+        )
+
+    @admin.action(description='Send selected messages now')
+    def queue_selected(self, request, queryset):
+        from .tasks import send_broadcast
+
+        queued, skipped = 0, 0
+        for broadcast in queryset:
+            if not broadcast.is_editable:
+                skipped += 1
+                continue
+            send_broadcast.delay(broadcast.pk)
+            queued += 1
+
+        if queued:
+            self.message_user(request, f"Queued {queued} message(s) for sending.")
+        if skipped:
+            self.message_user(
+                request,
+                f"Skipped {skipped} already sent or in progress.",
+                level=messages.WARNING,
+            )
+
+    @admin.action(description='Send a preview to myself only')
+    def send_test_to_myself(self, request, queryset):
+        """
+        Check wording and the deep link before it reaches customers.
+
+        Bypasses the audience entirely and delivers only to the admin running
+        it, with its own dedupe key so the real send is unaffected.
+        """
+        from .services import send_notification
+
+        stamp = timezone.now().strftime('%Y%m%d%H%M%S')
+        for broadcast in queryset:
+            delivery = send_notification(
+                request.user,
+                kind=broadcast.kind,
+                title=broadcast.title,
+                body=broadcast.body,
+                data={'url': broadcast.url or '/'},
+                dedupe_key=f'broadcast-preview:{broadcast.pk}:{request.user.pk}:{stamp}',
+            )
+            self.message_user(
+                request,
+                f'Preview of "{broadcast.title}" to {request.user.email}: '
+                f'push={delivery.push_status}, email={delivery.email_status}',
+            )

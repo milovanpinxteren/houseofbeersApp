@@ -218,3 +218,123 @@ class NotificationKindSetting(models.Model):
             'fallback': 'email only if push fails',
             'always': 'push and email',
         }[self.email_policy]
+
+
+class Broadcast(models.Model):
+    """
+    A message an admin writes once and sends to many users.
+
+    Sending never happens in the request that saves this row - a few hundred
+    pushes and emails would block a web worker well past its timeout. The
+    admin queues it and a Celery task fans it out, one NotificationDelivery
+    per recipient, so per-user success and failure stay individually visible.
+    """
+
+    STATUS_DRAFT = 'draft'
+    STATUS_SCHEDULED = 'scheduled'
+    STATUS_SENDING = 'sending'
+    STATUS_SENT = 'sent'
+    STATUS_FAILED = 'failed'
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, 'Draft - not sent'),
+        (STATUS_SCHEDULED, 'Scheduled'),
+        (STATUS_SENDING, 'Sending...'),
+        (STATUS_SENT, 'Sent'),
+        (STATUS_FAILED, 'Failed'),
+    ]
+
+    AUDIENCE_ALL = 'all'
+    AUDIENCE_SELECTED = 'selected'
+    AUDIENCE_PUSH_ONLY = 'push_only'
+    AUDIENCE_CHOICES = [
+        (AUDIENCE_ALL, 'Everyone'),
+        (AUDIENCE_SELECTED, 'Only the users I pick below'),
+        (AUDIENCE_PUSH_ONLY, 'Only users who can receive push'),
+    ]
+
+    title = models.CharField(
+        max_length=120,
+        help_text='The notification heading. Keep it short - phones truncate.',
+    )
+    body = models.TextField(
+        max_length=500,
+        help_text='The message itself.',
+    )
+    url = models.CharField(
+        max_length=300, blank=True, default='/',
+        help_text='Where tapping the notification opens, e.g. /loyalty. '
+                  'Defaults to the home screen.',
+    )
+
+    kind = models.CharField(
+        max_length=50,
+        choices=NotificationKindSetting.KIND_CHOICES,
+        default='announcement',
+        help_text='Decides whether an email follows the push - see '
+                  'Notification delivery settings.',
+    )
+
+    audience = models.CharField(
+        max_length=20, choices=AUDIENCE_CHOICES, default=AUDIENCE_ALL,
+    )
+    recipients = models.ManyToManyField(
+        settings.AUTH_USER_MODEL, blank=True, related_name='broadcasts',
+        help_text='Only used when the audience is "Only the users I pick below".',
+    )
+
+    scheduled_for = models.DateTimeField(
+        null=True, blank=True,
+        help_text='Leave empty to send immediately when you tick "Send now". '
+                  'Set a time to have it go out then instead.',
+    )
+
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT,
+    )
+    send_now = models.BooleanField(
+        'Send now',
+        default=False,
+        help_text='Tick and save to queue this message. Leave unticked to '
+                  'keep editing it as a draft.',
+    )
+
+    # Filled in as the fan-out runs.
+    recipient_count = models.IntegerField(default=0)
+    push_sent_count = models.IntegerField(default=0)
+    email_sent_count = models.IntegerField(default=0)
+    error = models.TextField(blank=True)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='created_broadcasts',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Push message'
+        verbose_name_plural = 'Push messages'
+
+    def __str__(self):
+        return f"{self.title} ({self.get_status_display()})"
+
+    @property
+    def is_editable(self):
+        """Once it has gone out, editing would misrepresent what was sent."""
+        return self.status in (self.STATUS_DRAFT, self.STATUS_SCHEDULED)
+
+    def resolve_recipients(self):
+        """
+        The users this goes to, evaluated at send time rather than frozen at
+        authoring time, so a scheduled message reaches whoever qualifies then.
+        """
+        from django.contrib.auth import get_user_model
+
+        if self.audience == self.AUDIENCE_SELECTED:
+            return self.recipients.filter(is_active=True)
+
+        queryset = get_user_model().objects.filter(is_active=True)
+        if self.audience == self.AUDIENCE_PUSH_ONLY:
+            queryset = queryset.filter(push_subscriptions__is_active=True).distinct()
+        return queryset

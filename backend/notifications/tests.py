@@ -946,3 +946,145 @@ class KindSettingTests(TestCase):
             dedupe_key='ks:missing')
         # birthday_gift is EMAIL_ALWAYS in code.
         self.assertEqual(delivery.email_status, 'sent')
+
+
+class BroadcastTests(TestCase):
+    """Admin-authored messages fanned out to an audience."""
+
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        self.a = User.objects.create_user(
+            username='ba', email='ba@example.com', password='pw12345!')
+        self.b = User.objects.create_user(
+            username='bb', email='bb@example.com', password='pw12345!')
+        self.inactive = User.objects.create_user(
+            username='bc', email='bc@example.com', password='pw12345!',
+            is_active=False)
+        mail.outbox = []
+
+    def _broadcast(self, **kwargs):
+        from .models import Broadcast
+        kwargs.setdefault('title', 'New drop')
+        kwargs.setdefault('body', 'Fresh beers just landed.')
+        kwargs.setdefault('url', '/loyalty')
+        return Broadcast.objects.create(**kwargs)
+
+    def test_everyone_audience_excludes_inactive_accounts(self):
+        from .models import Broadcast
+        b = self._broadcast(audience=Broadcast.AUDIENCE_ALL,
+                            status=Broadcast.STATUS_SCHEDULED)
+        emails = {u.email for u in b.resolve_recipients()}
+        self.assertEqual(emails, {'ba@example.com', 'bb@example.com'})
+
+    def test_selected_audience_only_reaches_the_chosen_users(self):
+        from .models import Broadcast
+        b = self._broadcast(audience=Broadcast.AUDIENCE_SELECTED,
+                            status=Broadcast.STATUS_SCHEDULED)
+        b.recipients.add(self.a)
+        self.assertEqual([u.pk for u in b.resolve_recipients()], [self.a.pk])
+
+    def test_push_only_audience_excludes_users_without_a_subscription(self):
+        from .models import Broadcast, PushSubscription
+        PushSubscription.objects.create(
+            user=self.a, endpoint='https://push.example/a',
+            p256dh='x', auth='y', is_active=True)
+        b = self._broadcast(audience=Broadcast.AUDIENCE_PUSH_ONLY,
+                            status=Broadcast.STATUS_SCHEDULED)
+        self.assertEqual([u.pk for u in b.resolve_recipients()], [self.a.pk])
+
+    def test_send_creates_one_delivery_per_recipient(self):
+        from .models import Broadcast
+        from .tasks import send_broadcast
+        b = self._broadcast(status=Broadcast.STATUS_SCHEDULED)
+        send_broadcast(b.pk)
+
+        b.refresh_from_db()
+        self.assertEqual(b.status, Broadcast.STATUS_SENT)
+        self.assertEqual(b.recipient_count, 2)
+        self.assertEqual(
+            NotificationDelivery.objects.filter(
+                dedupe_key__startswith=f'broadcast:{b.pk}:').count(),
+            2,
+        )
+
+    def test_resending_does_not_duplicate(self):
+        """The claim plus per-recipient dedupe keys make a re-run safe."""
+        from .models import Broadcast
+        from .tasks import send_broadcast
+        b = self._broadcast(status=Broadcast.STATUS_SCHEDULED)
+        send_broadcast(b.pk)
+        before = len(mail.outbox)
+
+        # A retry, or the scheduler firing while a manual send ran.
+        result = send_broadcast(b.pk)
+        self.assertEqual(result, {'skipped': 'not claimable'})
+        self.assertEqual(len(mail.outbox), before)
+        self.assertEqual(
+            NotificationDelivery.objects.filter(
+                dedupe_key__startswith=f'broadcast:{b.pk}:').count(),
+            2,
+        )
+
+    def test_push_only_audience_never_emails(self):
+        """Choosing push-only must override the kind's email policy."""
+        from .models import Broadcast, PushSubscription
+        from .tasks import send_broadcast
+        PushSubscription.objects.create(
+            user=self.a, endpoint='https://push.example/a',
+            p256dh='x', auth='y', is_active=True)
+        b = self._broadcast(audience=Broadcast.AUDIENCE_PUSH_ONLY,
+                            kind='transactional',  # normally EMAIL_ALWAYS
+                            status=Broadcast.STATUS_SCHEDULED)
+        send_broadcast(b.pk)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_one_bad_recipient_does_not_abandon_the_rest(self):
+        from .models import Broadcast
+        from .tasks import send_broadcast
+        b = self._broadcast(status=Broadcast.STATUS_SCHEDULED)
+
+        real = send_notification
+        calls = {'n': 0}
+
+        def flaky(user, **kwargs):
+            calls['n'] += 1
+            if calls['n'] == 1:
+                raise RuntimeError('boom')
+            return real(user, **kwargs)
+
+        # tasks.py imports send_notification inside the function, so patch it
+        # where it is defined rather than where it is used.
+        with patch('notifications.services.send_notification', side_effect=flaky):
+            send_broadcast(b.pk)
+
+        b.refresh_from_db()
+        self.assertEqual(b.status, Broadcast.STATUS_SENT)
+        # The second recipient still got theirs.
+        self.assertEqual(
+            NotificationDelivery.objects.filter(
+                dedupe_key__startswith=f'broadcast:{b.pk}:').count(),
+            1,
+        )
+
+    def test_scheduler_only_queues_messages_that_are_due(self):
+        from .models import Broadcast
+        from .tasks import process_scheduled_broadcasts
+        due = self._broadcast(
+            status=Broadcast.STATUS_SCHEDULED,
+            scheduled_for=timezone.now() - timezone.timedelta(minutes=1))
+        self._broadcast(
+            status=Broadcast.STATUS_SCHEDULED,
+            scheduled_for=timezone.now() + timezone.timedelta(hours=2))
+        self._broadcast(status=Broadcast.STATUS_DRAFT)
+
+        with patch('notifications.tasks.send_broadcast.delay') as mock_delay:
+            result = process_scheduled_broadcasts()
+
+        self.assertEqual(result, {'queued': 1})
+        mock_delay.assert_called_once_with(due.pk)
+
+    def test_a_sent_message_cannot_be_resent_by_the_admin_action(self):
+        from .models import Broadcast
+        b = self._broadcast(status=Broadcast.STATUS_SENT)
+        self.assertFalse(b.is_editable)
