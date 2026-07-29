@@ -16,8 +16,10 @@ This app allows House of Beers customers to:
 |-----------|------------|
 | Backend | Django 5 + Django REST Framework |
 | Database | PostgreSQL (prod) / SQLite (dev) |
-| Mobile App | Expo (React Native) with TypeScript |
-| Hosting | Dokku on VPS |
+| Android App | Expo (React Native) - Google Play Store |
+| iOS App | Progressive Web App (PWA) |
+| Backend Hosting | Dokku on VPS |
+| PWA Hosting | Netlify (auto-deploy from GitHub) |
 | Build Service | Expo Application Services (EAS) |
 | E-commerce | Shopify (customer data, orders, discounts) |
 
@@ -38,18 +40,23 @@ house_of_beers_app/
 │   │   ├── context/       # React contexts
 │   │   ├── i18n/          # Translations (EN/NL)
 │   │   └── theme/         # Colors, spacing
+│   ├── public/            # PWA assets (icons, manifest, service worker)
+│   ├── scripts/           # Build scripts
 │   └── assets/            # Images, icons
 │
+├── netlify.toml            # Netlify PWA deployment config
 ├── CLAUDE.md               # Detailed developer documentation
 └── README.md               # This file
 ```
 
 ## Environments
 
-| Environment | Backend URL | Purpose |
-|-------------|-------------|---------|
-| Production | https://appadmin.houseofbeers.nl | Live app |
-| Development | http://localhost:8000 | Local development |
+| Environment | URL | Purpose |
+|-------------|-----|---------|
+| Backend API | https://appadmin.houseofbeers.nl | Production API |
+| PWA (iOS) | https://app.houseofbeers.nl | iOS Progressive Web App |
+| Android | Google Play Store | Native Android app |
+| Development | http://localhost:8000 | Local backend |
 
 ## Quick Start
 
@@ -103,11 +110,14 @@ npx expo start
 
 ### Backend (Dokku)
 
-The backend is deployed to a Dokku server at `89.145.161.168`.
+The backend is deployed to a Dokku server at `89.145.161.168` using git subtree (since backend is part of a monorepo).
 
 ```bash
-cd backend
-git push dokku master:main
+# First time: add dokku remote
+git remote add dokku dokku@89.145.161.168:houseofbeers-api
+
+# Deploy backend folder to Dokku
+git subtree push --prefix backend dokku main
 ```
 
 Key files for Dokku deployment:
@@ -115,7 +125,18 @@ Key files for Dokku deployment:
 - `runtime.txt` - Python version
 - `requirements.txt` - Dependencies
 
-### Mobile (EAS Build)
+### PWA (Netlify) - For iOS Users
+
+The PWA auto-deploys from GitHub when you push to `main`. Configuration is in `netlify.toml`.
+
+```bash
+# Local testing
+cd mobile
+npm run build:web
+npm run serve:web
+```
+
+### Android (EAS Build)
 
 Mobile builds are created using Expo Application Services.
 
@@ -177,12 +198,16 @@ See [CLAUDE.md](./CLAUDE.md) for complete API documentation.
 ### Implemented
 - User authentication (JWT)
 - Shopify customer linking
-- Order history from Shopify
+- Order history from Shopify with estimated delivery dates
 - Loyalty points system
 - Rewards redemption with Shopify discount codes
 - Admin-managed notifications
 - Multi-language support (EN/NL)
 - Account deletion (GDPR/Play Store compliance)
+- Beer recommendations based on taste profile
+- Untappd integration
+- Favorites system with cart integration
+- PWA for iOS users (installable, offline support)
 
 ### Planned
 - Push notifications
