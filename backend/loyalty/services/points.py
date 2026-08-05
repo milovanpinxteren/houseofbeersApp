@@ -5,7 +5,7 @@ from decimal import Decimal
 from datetime import timedelta
 from typing import Optional, List, Dict, Any
 
-from django.db import transaction
+from django.db import models, transaction
 from django.utils import timezone
 
 from loyalty.models import (
@@ -46,7 +46,6 @@ class LoyaltyService:
         This ensures that promotional rules apply to orders placed during the promotion,
         even if points are synced/calculated later.
         """
-        from django.db import models
         from datetime import datetime
 
         # Use order creation date for rule validity check
@@ -168,6 +167,7 @@ class LoyaltyService:
             points=total_points,
             balance_after=balance.balance,
             description=f"Points earned from order {shopify_order_name}",
+            breakdown=calculation['breakdown'],
             shopify_order_id=shopify_order_id,
             shopify_order_name=shopify_order_name,
         )
@@ -256,25 +256,44 @@ class LoyaltyService:
                 skipped_count += 1
                 continue
 
-            # Points differ — create a correction adjustment
+            # Points differ — update the original earned transaction in place so
+            # users always see one row per order with the current correct amount.
+            # lifetime_spent is reserved for reward redemptions and never touched here.
             balance = self.get_or_create_balance(user)
             balance.balance += diff
-            if diff > 0:
-                balance.lifetime_earned += diff
-            else:
-                balance.lifetime_spent += abs(diff)
+            balance.lifetime_earned += diff
             balance.save()
 
-            PointsTransaction.objects.create(
+            earned_txn = PointsTransaction.objects.filter(
                 user=user,
-                transaction_type='adjusted',
-                points=diff,
-                balance_after=balance.balance,
-                description=f"Points correction for order {shopify_order_name} "
-                            f"({was_awarded} → {should_award})",
+                transaction_type='earned',
                 shopify_order_id=shopify_order_id,
-                shopify_order_name=shopify_order_name,
-            )
+            ).first()
+
+            if should_award <= 0:
+                if earned_txn:
+                    earned_txn.delete()
+            elif earned_txn:
+                earned_txn.points = should_award
+                earned_txn.description = f"Points earned from order {shopify_order_name}"
+                earned_txn.breakdown = calculation['breakdown']
+                earned_txn.save(update_fields=['points', 'description', 'breakdown'])
+            else:
+                new_txn = PointsTransaction.objects.create(
+                    user=user,
+                    transaction_type='earned',
+                    points=should_award,
+                    balance_after=balance.balance,
+                    description=f"Points earned from order {shopify_order_name}",
+                    breakdown=calculation['breakdown'],
+                    shopify_order_id=shopify_order_id,
+                    shopify_order_name=shopify_order_name,
+                )
+                # Keep history chronological: date the row at the original processing
+                # time (auto_now_add can't be overridden on create)
+                PointsTransaction.objects.filter(pk=new_txn.pk).update(
+                    created_at=processed.processed_at
+                )
 
             # Update the processed order record
             processed.points_awarded = should_award
@@ -305,8 +324,6 @@ class LoyaltyService:
 
     def get_available_rewards(self, user) -> List[Reward]:
         """Get rewards available for redemption."""
-        from django.db import models
-
         now = timezone.now()
         balance = self.get_or_create_balance(user)
 
@@ -546,11 +563,10 @@ class LoyaltyService:
         """
         balance = self.get_or_create_balance(user)
 
+        # lifetime_spent only tracks reward redemptions; adjustments (positive
+        # or negative) are applied to lifetime_earned so "spent" stays truthful.
         balance.balance += points
-        if points > 0:
-            balance.lifetime_earned += points
-        else:
-            balance.lifetime_spent += abs(points)
+        balance.lifetime_earned += points
         balance.save()
 
         PointsTransaction.objects.create(
@@ -566,7 +582,9 @@ class LoyaltyService:
 
     def get_user_transactions(self, user, limit: int = 50) -> List[PointsTransaction]:
         """Get recent transactions for a user."""
-        return list(PointsTransaction.objects.filter(user=user)[:limit])
+        return list(
+            PointsTransaction.objects.filter(user=user).select_related('reward')[:limit]
+        )
 
     def get_user_redemptions(self, user) -> List[Redemption]:
         """Get redemptions for a user."""

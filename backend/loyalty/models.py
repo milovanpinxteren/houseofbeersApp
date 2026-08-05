@@ -238,6 +238,11 @@ class PointsTransaction(models.Model):
 
     # Reference to what caused this transaction
     description = models.CharField(max_length=500)
+    breakdown = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Per-rule breakdown of earned points: [{rule_id, rule_name, rule_type, points}]"
+    )
     rule = models.ForeignKey(
         PointsRule,
         on_delete=models.SET_NULL,

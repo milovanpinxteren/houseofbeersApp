@@ -315,11 +315,9 @@ class PointsBalanceAdmin(admin.ModelAdmin):
             points_diff = obj.balance - old_balance
 
             if points_diff != 0:
-                # Update lifetime stats
-                if points_diff > 0:
-                    obj.lifetime_earned += points_diff
-                else:
-                    obj.lifetime_spent += abs(points_diff)
+                # lifetime_spent only tracks reward redemptions; manual
+                # adjustments go into lifetime_earned (signed)
+                obj.lifetime_earned += points_diff
 
                 # Save the balance first
                 super().save_model(request, obj, form, change)

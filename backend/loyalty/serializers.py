@@ -8,7 +8,8 @@ class PointsRuleSerializer(serializers.ModelSerializer):
     class Meta:
         model = PointsRule
         fields = ['id', 'name', 'description', 'rule_type', 'rule_type_display',
-                  'points', 'condition_value', 'multiplier', 'is_active']
+                  'points', 'condition_value', 'multiplier', 'only_after_registration',
+                  'is_active']
 
 
 class RewardCategorySerializer(serializers.ModelSerializer):
@@ -46,11 +47,13 @@ class PointsBalanceSerializer(serializers.ModelSerializer):
 
 class PointsTransactionSerializer(serializers.ModelSerializer):
     transaction_type_display = serializers.CharField(source='get_transaction_type_display', read_only=True)
+    reward_name = serializers.CharField(source='reward.name', read_only=True, default=None)
 
     class Meta:
         model = PointsTransaction
         fields = ['id', 'transaction_type', 'transaction_type_display', 'points',
-                  'balance_after', 'description', 'shopify_order_name', 'created_at']
+                  'balance_after', 'description', 'breakdown', 'reward_name',
+                  'shopify_order_name', 'created_at']
 
 
 class RedemptionSerializer(serializers.ModelSerializer):

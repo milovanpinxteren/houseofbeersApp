@@ -8,7 +8,8 @@ from .models import PointsBalance, Redemption
 from .services import LoyaltyService
 from .serializers import (
     RewardSerializer, PointsBalanceSerializer, PointsTransactionSerializer,
-    RedemptionSerializer, RedeemRewardSerializer, LoyaltySummarySerializer
+    RedemptionSerializer, RedeemRewardSerializer, LoyaltySummarySerializer,
+    PointsRuleSerializer
 )
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,17 @@ class PointsTransactionsView(APIView):
         transactions = service.get_user_transactions(request.user)
         serializer = PointsTransactionSerializer(transactions, many=True)
         return Response({'transactions': serializer.data})
+
+
+class PointsRulesView(APIView):
+    """List the currently active points rules so the app can explain how points are earned."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        service = LoyaltyService()
+        rules = service.get_active_rules()
+        serializer = PointsRuleSerializer(rules, many=True)
+        return Response({'rules': serializer.data})
 
 
 class RewardsListView(APIView):
