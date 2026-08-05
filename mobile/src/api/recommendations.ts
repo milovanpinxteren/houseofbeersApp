@@ -134,6 +134,23 @@ export interface StyleOption {
   count: number;
 }
 
+export interface RandomBeer {
+  id: number;
+  title: string;
+  product_type: string;
+  tags: string[];
+  price: string | null;
+  image_url: string;
+  handle: string;
+  shop_url: string;
+}
+
+export interface RandomBeerResponse {
+  found: boolean;
+  beer?: RandomBeer;
+  styles: string[];
+}
+
 export interface CartLinkResponse {
   cart_url: string;
   item_count: number;
@@ -182,6 +199,29 @@ export async function getTasteProfile(): Promise<TasteProfileResponse> {
 
 export async function getStyles(): Promise<{ styles: StyleOption[] }> {
   return apiFetch<{ styles: StyleOption[] }>('/recommendations/styles/');
+}
+
+export async function getRandomBeer(params?: {
+  style?: string;
+  max_price?: number;
+}): Promise<RandomBeerResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.style) {
+    queryParams.set('style', params.style);
+  }
+  if (params?.max_price && params.max_price > 0) {
+    queryParams.set('max_price', params.max_price.toFixed(2));
+  }
+
+  const query = queryParams.toString();
+  return apiFetch<RandomBeerResponse>(
+    '/recommendations/random-beer/' + (query ? '?' + query : '')
+  );
+}
+
+// Lightweight prefetch of the style filter chips — no beer is picked.
+export async function getRandomBeerStyles(): Promise<{ styles: string[] }> {
+  return apiFetch<{ styles: string[] }>('/recommendations/random-beer/?styles_only=1');
 }
 
 // Untappd Profile

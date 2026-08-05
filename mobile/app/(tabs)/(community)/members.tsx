@@ -7,40 +7,42 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
-import { colors, spacing, borderRadius } from '../../../src/theme/colors';
+import { colors, spacing, borderRadius, fonts } from '../../../src/theme/colors';
+import { Card, EmptyState, SkeletonCard } from '../../../src/components/ui';
 import { getMembers, CommunityProfile } from '../../../src/api/community';
 
 function MemberCard({ member }: { member: CommunityProfile }) {
   const { language } = useLanguage();
   return (
-    <TouchableOpacity
+    <Card
       style={styles.memberCard}
       onPress={() => router.push(`/(tabs)/(community)/member-profile?userId=${member.user_id}`)}
-      activeOpacity={0.7}
     >
-      <View style={styles.avatar}>
-        <Ionicons name="person" size={24} color={colors.textMuted} />
-      </View>
-      <View style={styles.memberInfo}>
-        <Text style={styles.memberName}>{member.display_name_resolved}</Text>
-        {member.bio ? <Text style={styles.memberBio} numberOfLines={2}>{member.bio}</Text> : null}
-        <View style={styles.memberMeta}>
-          {member.has_untappd && (
-            <View style={styles.metaBadge}>
-              <Ionicons name="beer" size={12} color={colors.primary} />
-              <Text style={styles.metaText}>Untappd</Text>
-            </View>
-          )}
-          {(member.favorite_count ?? 0) > 0 && (
-            <Text style={styles.metaStat}>{member.favorite_count} {t('community.favorites')}</Text>
-          )}
-          {(member.checkin_count ?? 0) > 0 && (
-            <Text style={styles.metaStat}>{member.checkin_count} {t('community.beersTried')}</Text>
-          )}
+      <View style={styles.memberRow}>
+        <View style={styles.avatar}>
+          <Ionicons name="person" size={22} color={colors.tertiary} />
         </View>
+        <View style={styles.memberInfo}>
+          <Text style={styles.memberName}>{member.display_name_resolved}</Text>
+          {member.bio ? <Text style={styles.memberBio} numberOfLines={2}>{member.bio}</Text> : null}
+          <View style={styles.memberMeta}>
+            {member.has_untappd && (
+              <View style={styles.metaBadge}>
+                <Ionicons name="beer" size={11} color={colors.primary} />
+                <Text style={styles.metaText}>Untappd</Text>
+              </View>
+            )}
+            {(member.favorite_count ?? 0) > 0 && (
+              <Text style={styles.metaStat}>{member.favorite_count} {t('community.favorites')}</Text>
+            )}
+            {(member.checkin_count ?? 0) > 0 && (
+              <Text style={styles.metaStat}>{member.checkin_count} {t('community.beersTried')}</Text>
+            )}
+          </View>
+        </View>
+        <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
       </View>
-      <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
-    </TouchableOpacity>
+    </Card>
   );
 }
 
@@ -101,10 +103,6 @@ export default function MembersScreen() {
     loadMembers('');
   };
 
-  if (isLoading && !searchQuery) {
-    return <View style={[styles.container, styles.center]}><ActivityIndicator size="large" color={colors.primary} /></View>;
-  }
-
   return (
     <View style={styles.container}>
       <View style={styles.searchBar}>
@@ -117,46 +115,91 @@ export default function MembersScreen() {
           onChangeText={handleSearchChange}
         />
         {searchQuery ? (
-          <TouchableOpacity onPress={handleClearSearch}>
+          <TouchableOpacity onPress={handleClearSearch} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
             <Ionicons name="close-circle" size={18} color={colors.textMuted} />
           </TouchableOpacity>
         ) : null}
       </View>
-      <FlatList
-        data={members}
-        keyExtractor={(item) => item.user_id.toString()}
-        renderItem={({ item }) => <MemberCard member={item} />}
-        ListEmptyComponent={
-          <View style={[styles.center, { paddingTop: 60 }]}>
-            <Ionicons name="people-outline" size={48} color={colors.textMuted} />
-            <Text style={styles.emptyText}>{t('community.noMembers')}</Text>
-          </View>
-        }
-        refreshControl={
-          <RefreshControl refreshing={isRefreshing} onRefresh={() => { setIsRefreshing(true); loadMembers(searchQuery); }} tintColor={colors.primary} />
-        }
-        onEndReached={loadMore}
-        onEndReachedThreshold={0.5}
-        ListFooterComponent={loadingMore ? <ActivityIndicator color={colors.primary} style={{ padding: spacing.md }} /> : null}
-        contentContainerStyle={members.length === 0 ? { flex: 1 } : { paddingBottom: spacing.lg }}
-      />
+      {isLoading ? (
+        <View style={styles.skeletonWrap}>
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </View>
+      ) : (
+        <FlatList
+          data={members}
+          keyExtractor={(item) => item.user_id.toString()}
+          renderItem={({ item }) => <MemberCard member={item} />}
+          ListEmptyComponent={
+            <EmptyState
+              icon="people-outline"
+              title={t('community.noMembers')}
+            />
+          }
+          refreshControl={
+            <RefreshControl refreshing={isRefreshing} onRefresh={() => { setIsRefreshing(true); loadMembers(searchQuery); }} tintColor={colors.primary} />
+          }
+          onEndReached={loadMore}
+          onEndReachedThreshold={0.5}
+          ListFooterComponent={loadingMore ? <ActivityIndicator color={colors.primary} style={{ padding: spacing.md }} /> : null}
+          contentContainerStyle={members.length === 0 ? styles.emptyListContent : styles.listContent}
+        />
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  center: { justifyContent: 'center', alignItems: 'center' },
-  searchBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, marginHorizontal: spacing.md, marginTop: spacing.sm, borderRadius: borderRadius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, gap: spacing.sm },
-  searchInput: { flex: 1, color: colors.text, fontSize: 15 },
-  memberCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, marginHorizontal: spacing.md, marginTop: spacing.sm, borderRadius: borderRadius.md, padding: spacing.md },
-  avatar: { width: 48, height: 48, borderRadius: 24, backgroundColor: colors.tertiary + '30', justifyContent: 'center', alignItems: 'center', marginRight: spacing.md },
+  skeletonWrap: { padding: spacing.md },
+  listContent: { paddingBottom: spacing.xl },
+  emptyListContent: { flexGrow: 1, justifyContent: 'center' },
+
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surfaceLow,
+    marginHorizontal: spacing.md,
+    marginTop: spacing.sm,
+    borderRadius: borderRadius.md,
+    paddingHorizontal: spacing.md,
+    gap: spacing.sm,
+    minHeight: 44,
+  },
+  searchInput: { flex: 1, color: colors.text, fontSize: 15, paddingVertical: spacing.sm },
+
+  memberCard: { marginHorizontal: spacing.md, marginTop: spacing.sm },
+  memberRow: { flexDirection: 'row', alignItems: 'center' },
+  avatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: colors.surfaceHigh,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: spacing.md,
+  },
   memberInfo: { flex: 1 },
-  memberName: { color: colors.text, fontSize: 16, fontWeight: '600' },
-  memberBio: { color: colors.textMuted, fontSize: 13, marginTop: 2 },
-  memberMeta: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: 4 },
-  metaBadge: { flexDirection: 'row', alignItems: 'center', gap: 2, backgroundColor: colors.primary + '20', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
-  metaText: { fontSize: 11, color: colors.primary, fontWeight: '600' },
+  memberName: { fontFamily: fonts.heading, fontSize: 16, letterSpacing: 0.4, color: colors.text },
+  memberBio: { color: colors.textMuted, fontSize: 13, lineHeight: 18, marginTop: 3 },
+  memberMeta: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: 6, flexWrap: 'wrap' },
+  metaBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: colors.primary + '18',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: borderRadius.pill,
+  },
+  metaText: {
+    fontFamily: fonts.heading,
+    fontSize: 10,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    color: colors.primary,
+  },
   metaStat: { fontSize: 12, color: colors.textMuted },
-  emptyText: { color: colors.textMuted, fontSize: 15, marginTop: spacing.md },
 });

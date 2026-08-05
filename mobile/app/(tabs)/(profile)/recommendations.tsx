@@ -2,11 +2,9 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
-  ScrollView,
-  TouchableOpacity,
+  Pressable,
   StyleSheet,
   ActivityIndicator,
-  RefreshControl,
   Image,
   Linking,
   FlatList,
@@ -27,7 +25,8 @@ import {
   UntappdProfile,
   Favorite,
 } from '../../../src/api/recommendations';
-import { colors, spacing, borderRadius } from '../../../src/theme/colors';
+import { colors, spacing, borderRadius, fonts, type } from '../../../src/theme/colors';
+import { Card, EmptyState, Screen, Skeleton } from '../../../src/components/ui';
 import PriceSlider from '../../../src/components/PriceSlider';
 
 const MIN_PRICE = 0;
@@ -217,7 +216,7 @@ export default function RecommendationsScreen() {
     Linking.openURL(url);
   }
 
-  function renderBeerCard(item: ScoredBeer, index: number) {
+  function renderBeerCard(item: ScoredBeer) {
     const beer = item.beer;
     const beerId = String(beer.id);
     const isFavorite = favoriteIds.has(beerId);
@@ -225,10 +224,9 @@ export default function RecommendationsScreen() {
 
     return (
       <View style={styles.beerCard} key={beerId}>
-        <TouchableOpacity
-          style={styles.beerImageContainer}
+        <Pressable
+          style={({ pressed }) => [styles.beerImageContainer, pressed && styles.pressed]}
           onPress={() => openProduct(beer.product_url)}
-          activeOpacity={0.8}
         >
           {beer.image_url ? (
             <Image source={{ uri: beer.image_url }} style={styles.beerImage} />
@@ -237,33 +235,50 @@ export default function RecommendationsScreen() {
               <Ionicons name="beer-outline" size={40} color={colors.textMuted} />
             </View>
           )}
-        </TouchableOpacity>
+        </Pressable>
 
         <View style={styles.beerInfo}>
-          <TouchableOpacity onPress={() => openProduct(beer.product_url)}>
+          <Pressable
+            onPress={() => openProduct(beer.product_url)}
+            style={({ pressed }) => pressed && styles.pressed}
+          >
             <Text style={styles.beerTitle} numberOfLines={2}>{beer.title}</Text>
-          </TouchableOpacity>
+          </Pressable>
 
           <View style={styles.beerMeta}>
-            {beer.untappd_rating != null && (
-              <View style={styles.ratingBadge}>
-                <Ionicons name="star" size={12} color="#FFD700" />
-                <Text style={styles.ratingText}>{parseFloat(String(beer.untappd_rating)).toFixed(1)}</Text>
+            {beer.style_category ? (
+              <View style={styles.metaChip}>
+                <Text style={styles.metaChipText} numberOfLines={1}>
+                  {beer.style_category}
+                </Text>
+              </View>
+            ) : null}
+            {beer.abv != null && (
+              <View style={styles.metaChip}>
+                <Text style={styles.metaChipText}>{beer.abv}%</Text>
               </View>
             )}
-            {beer.abv != null && (
-              <Text style={styles.abvText}>{beer.abv}%</Text>
+            {beer.untappd_rating != null && (
+              <View style={styles.metaChip}>
+                <Ionicons name="star" size={10} color={colors.primary} />
+                <Text style={styles.metaChipText}>
+                  {parseFloat(String(beer.untappd_rating)).toFixed(1)}
+                </Text>
+              </View>
             )}
           </View>
 
           <View style={styles.beerFooter}>
-            {beer.price != null && (
+            {beer.price != null ? (
               <Text style={styles.priceText}>€{parseFloat(beer.price).toFixed(2)}</Text>
+            ) : (
+              <View />
             )}
-            <TouchableOpacity
-              style={styles.favoriteButton}
+            <Pressable
+              style={({ pressed }) => [styles.favoriteButton, pressed && styles.pressed]}
               onPress={() => toggleFavorite(beer)}
               disabled={isLoadingThis}
+              hitSlop={4}
             >
               {isLoadingThis ? (
                 <ActivityIndicator size="small" color={colors.primary} />
@@ -271,10 +286,10 @@ export default function RecommendationsScreen() {
                 <Ionicons
                   name={isFavorite ? 'heart' : 'heart-outline'}
                   size={22}
-                  color={isFavorite ? colors.error : colors.textMuted}
+                  color={isFavorite ? colors.secondary : colors.textMuted}
                 />
               )}
-            </TouchableOpacity>
+            </Pressable>
           </View>
         </View>
       </View>
@@ -300,7 +315,7 @@ export default function RecommendationsScreen() {
           horizontal
           showsHorizontalScrollIndicator={false}
           keyExtractor={(item) => String(item.beer.id)}
-          renderItem={({ item, index }) => renderBeerCard(item, index)}
+          renderItem={({ item }) => renderBeerCard(item)}
           contentContainerStyle={styles.carouselContent}
         />
       </View>
@@ -309,33 +324,67 @@ export default function RecommendationsScreen() {
 
   if (isLoading) {
     return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color={colors.primary} />
-        <Text style={styles.loadingText}>{t('recommendations.analyzing')}</Text>
-        <Text style={styles.loadingSubtext}>{t('recommendations.analyzingSubtext')}</Text>
-      </View>
+      <Screen scroll={false} padded={false}>
+        <View style={styles.loadingHint}>
+          <ActivityIndicator size="small" color={colors.primary} />
+          <View style={styles.loadingHintText}>
+            <Text style={styles.loadingTitle}>{t('recommendations.analyzing')}</Text>
+            <Text style={styles.loadingSubtext}>{t('recommendations.analyzingSubtext')}</Text>
+          </View>
+        </View>
+        <View style={styles.skeletonHeader}>
+          <Skeleton width="55%" height={16} />
+          <Skeleton width="35%" height={12} style={{ marginTop: spacing.sm }} />
+        </View>
+        {[0, 1].map((row) => (
+          <View key={row}>
+            <Skeleton
+              width={140}
+              height={13}
+              style={{ marginLeft: spacing.md, marginTop: spacing.lg }}
+            />
+            <View style={styles.skeletonCarousel}>
+              {[0, 1, 2].map((i) => (
+                <View key={i} style={styles.skeletonBeerCard}>
+                  <Skeleton width={168} height={150} radius={0} />
+                  <View style={{ padding: spacing.sm + spacing.xs }}>
+                    <Skeleton width="85%" height={13} />
+                    <Skeleton width="50%" height={11} style={{ marginTop: spacing.sm }} />
+                  </View>
+                </View>
+              ))}
+            </View>
+          </View>
+        ))}
+      </Screen>
     );
   }
 
   if (isBuildingProfile) {
     return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color={colors.primary} />
-        <Text style={styles.loadingText}>{t('recommendations.buildingProfile')}</Text>
-        <Text style={styles.loadingSubtext}>{t('recommendations.buildingProfileSubtext')}</Text>
-      </View>
+      <Screen scroll={false}>
+        <View style={styles.centerContainer}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.buildingTitle}>{t('recommendations.buildingProfile')}</Text>
+          <Text style={styles.buildingSubtext}>{t('recommendations.buildingProfileSubtext')}</Text>
+        </View>
+      </Screen>
     );
   }
 
   if (error) {
     return (
-      <View style={styles.centerContainer}>
-        <Ionicons name="alert-circle-outline" size={48} color={colors.error} />
-        <Text style={styles.errorText}>{error}</Text>
-        <TouchableOpacity style={styles.retryButton} onPress={() => handleRetry()}>
-          <Text style={styles.retryButtonText}>{t('common.retry')}</Text>
-        </TouchableOpacity>
-      </View>
+      <Screen scroll={false}>
+        <View style={styles.centerContainer}>
+          <EmptyState
+            icon="alert-circle-outline"
+            title={t('common.error')}
+            message={error}
+            actionLabel={t('common.retry')}
+            onAction={handleRetry}
+          />
+        </View>
+      </Screen>
     );
   }
 
@@ -350,30 +399,24 @@ export default function RecommendationsScreen() {
   );
 
   return (
-    <ScrollView
-      style={styles.container}
-      refreshControl={
-          <RefreshControl
-            refreshing={isRefreshing}
-            onRefresh={handleRefresh}
-            tintColor={colors.primary}
-          />
-        }
-      >
-        {/* Profile Source Card */}
-        <View style={styles.profileCard}>
-          <Ionicons
-            name={profileSource === 'untappd' ? 'beer' : 'cart'}
-            size={24}
-            color={colors.primary}
-          />
+    <Screen padded={false} refreshing={isRefreshing} onRefresh={handleRefresh}>
+      {/* Profile source + quick stats */}
+      <Card variant="elevated" style={styles.headerCard} padded={false}>
+        <View style={styles.profileRow}>
+          <View style={styles.profileIconWrap}>
+            <Ionicons
+              name={profileSource === 'untappd' ? 'beer' : 'cart'}
+              size={20}
+              color={colors.primary}
+            />
+          </View>
           <View style={styles.profileInfo}>
-            <Text style={styles.profileTitle}>
+            <Text style={styles.profileLabel}>
               {profileSource === 'untappd'
                 ? t('recommendations.untappdProfile')
                 : t('recommendations.orderHistory')}
             </Text>
-            <Text style={styles.profileSubtitle}>
+            <Text style={styles.profileValue} numberOfLines={1}>
               {profileSource === 'untappd'
                 ? (untappdProfile?.username ?? recommendations?.profile_identifier ?? '')
                 : t('recommendations.basedOnOrders')}
@@ -381,7 +424,6 @@ export default function RecommendationsScreen() {
           </View>
         </View>
 
-        {/* Quick Stats */}
         {recommendations?.profile_summary && (
           <View style={styles.quickStats}>
             <View style={styles.quickStat}>
@@ -392,187 +434,217 @@ export default function RecommendationsScreen() {
             </View>
             <View style={styles.quickStatDivider} />
             <View style={styles.quickStat}>
-              <Text style={styles.quickStatValue}>
+              <Text style={styles.quickStatValue} numberOfLines={1}>
                 {recommendations.profile_summary.preferred_styles?.[0] || '-'}
               </Text>
               <Text style={styles.quickStatLabel}>{t('recommendations.topStyle')}</Text>
             </View>
           </View>
         )}
+      </Card>
 
-        {/* Price Filter */}
-        <View style={styles.filterCard}>
-          <View style={styles.filterHeader}>
-            <View style={styles.filterLabelRow}>
-              <Ionicons name="pricetag-outline" size={18} color={colors.primary} />
-              <Text style={styles.filterLabel}>{t('recommendations.maxPrice')}</Text>
-            </View>
-            <View style={styles.priceValueRow}>
-              {isFiltering && (
-                <ActivityIndicator size="small" color={colors.primary} style={styles.filterSpinner} />
-              )}
-              <Text style={styles.priceValue}>
-                {maxPrice >= MAX_PRICE ? t('recommendations.allPrices') : `€${maxPrice}`}
-              </Text>
-            </View>
+      {/* Price Filter */}
+      <Card style={styles.filterCard}>
+        <View style={styles.filterHeader}>
+          <View style={styles.filterLabelRow}>
+            <Ionicons name="pricetag-outline" size={15} color={colors.primary} />
+            <Text style={styles.filterLabel}>{t('recommendations.maxPrice')}</Text>
           </View>
-          <PriceSlider
-            min={MIN_PRICE}
-            max={MAX_PRICE}
-            value={maxPrice}
-            step={5}
-            onChange={handlePriceChange}
-            onChangeEnd={handlePriceChangeEnd}
-          />
-        </View>
-
-        {!hasAnyBeers ? (
-          /* Nothing at all — show the backend's message or a fallback */
-          <View style={styles.emptyStateContainer}>
-            <Ionicons name="beer-outline" size={48} color={colors.textMuted} />
-            <Text style={styles.emptyStateText}>
-              {recommendations?.message || t('recommendations.noRecommendations')}
+          <View style={styles.priceValueRow}>
+            {isFiltering && (
+              <ActivityIndicator size="small" color={colors.primary} style={styles.filterSpinner} />
+            )}
+            <Text style={styles.priceValue}>
+              {maxPrice >= MAX_PRICE ? t('recommendations.allPrices') : `€${maxPrice}`}
             </Text>
           </View>
-        ) : (
-          <>
-            {/* Recommendations */}
-            {renderBeerCarousel(
-              t('recommendations.recommendedForYou'),
-              recommendations?.recommendations || [],
-              t('recommendations.noRecommendations')
-            )}
+        </View>
+        <PriceSlider
+          min={MIN_PRICE}
+          max={MAX_PRICE}
+          value={maxPrice}
+          step={5}
+          onChange={handlePriceChange}
+          onChangeEnd={handlePriceChangeEnd}
+        />
+      </Card>
 
-            {/* Discovery Picks */}
-            {renderBeerCarousel(
-              t('recommendations.discoverSomethingNew'),
-              recommendations?.discovery_picks || [],
-              t('recommendations.noDiscovery')
-            )}
+      {!hasAnyBeers ? (
+        /* Nothing at all — show the backend's message or a fallback */
+        <EmptyState
+          icon="beer-outline"
+          title={t('recommendations.noRecommendations')}
+          message={recommendations?.message || undefined}
+        />
+      ) : (
+        <>
+          {/* Recommendations */}
+          {renderBeerCarousel(
+            t('recommendations.recommendedForYou'),
+            recommendations?.recommendations || [],
+            t('recommendations.noRecommendations')
+          )}
 
-            {/* Tried Beers */}
-            {recommendations?.tried_beers && recommendations.tried_beers.length > 0 && (
-              renderBeerCarousel(
-                t('recommendations.triedBeers'),
-                recommendations.tried_beers,
-                ''
-              )
-            )}
-          </>
-        )}
+          {/* Discovery Picks */}
+          {renderBeerCarousel(
+            t('recommendations.discoverSomethingNew'),
+            recommendations?.discovery_picks || [],
+            t('recommendations.noDiscovery')
+          )}
 
-        <View style={styles.bottomPadding} />
-      </ScrollView>
+          {/* Tried Beers */}
+          {recommendations?.tried_beers && recommendations.tried_beers.length > 0 && (
+            renderBeerCarousel(
+              t('recommendations.triedBeers'),
+              recommendations.tried_beers,
+              ''
+            )
+          )}
+        </>
+      )}
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
+  pressed: {
+    opacity: 0.85,
   },
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: colors.background,
-    padding: spacing.lg,
-  },
-  loadingText: {
-    marginTop: spacing.md,
-    color: colors.text,
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  loadingSubtext: {
-    marginTop: spacing.xs,
-    color: colors.textMuted,
-    fontSize: 14,
-    textAlign: 'center',
-  },
-  errorText: {
-    marginTop: spacing.md,
-    color: colors.error,
-    fontSize: 14,
-    textAlign: 'center',
-  },
-  retryButton: {
-    marginTop: spacing.md,
-    backgroundColor: colors.primary,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-    borderRadius: borderRadius.md,
-  },
-  retryButtonText: {
-    color: colors.background,
-    fontWeight: '600',
   },
 
-  // Profile Card
-  profileCard: {
+  // Loading skeletons
+  loadingHint: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: spacing.md,
+    marginHorizontal: spacing.md,
+    marginTop: spacing.md,
+  },
+  loadingHintText: {
+    flex: 1,
+  },
+  loadingTitle: {
+    fontFamily: fonts.heading,
+    fontSize: 15,
+    letterSpacing: 0.4,
+    color: colors.text,
+  },
+  loadingSubtext: {
+    fontFamily: fonts.serif,
+    fontSize: 15,
+    color: colors.textMuted,
+    marginTop: 1,
+  },
+  skeletonHeader: {
     backgroundColor: colors.surface,
-    margin: spacing.md,
-    padding: spacing.md,
     borderRadius: borderRadius.lg,
-    borderWidth: 1,
-    borderColor: colors.primary + '40',
+    padding: spacing.md,
+    marginHorizontal: spacing.md,
+    marginTop: spacing.md,
+  },
+  skeletonCarousel: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    marginTop: spacing.sm,
+  },
+  skeletonBeerCard: {
+    width: 168,
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.lg,
+    overflow: 'hidden',
+  },
+
+  // Building profile
+  buildingTitle: {
+    fontFamily: fonts.heading,
+    fontSize: 18,
+    letterSpacing: 0.4,
+    color: colors.text,
+    marginTop: spacing.md,
+    textAlign: 'center',
+  },
+  buildingSubtext: {
+    fontFamily: fonts.serif,
+    fontSize: 16,
+    lineHeight: 22,
+    color: colors.textMuted,
+    marginTop: spacing.xs,
+    textAlign: 'center',
+    maxWidth: 280,
+  },
+
+  // Header card (source + stats)
+  headerCard: {
+    marginHorizontal: spacing.md,
+    marginTop: spacing.md,
+  },
+  profileRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    padding: spacing.md,
+  },
+  profileIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: colors.primary + '14',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   profileInfo: {
     flex: 1,
-    marginLeft: spacing.sm,
   },
-  profileTitle: {
-    fontSize: 14,
-    color: colors.textMuted,
+  profileLabel: {
+    ...type.label,
+    fontSize: 11,
+    letterSpacing: 1.4,
   },
-  profileSubtitle: {
+  profileValue: {
+    fontFamily: fonts.heading,
     fontSize: 16,
-    fontWeight: '600',
+    letterSpacing: 0.4,
     color: colors.text,
+    marginTop: 1,
   },
-
-  // Quick Stats
   quickStats: {
     flexDirection: 'row',
-    backgroundColor: colors.surface,
-    marginHorizontal: spacing.md,
-    marginBottom: spacing.md,
-    padding: spacing.md,
-    borderRadius: borderRadius.md,
-    borderWidth: 1,
-    borderColor: colors.tertiary + '30',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
   },
   quickStat: {
     flex: 1,
     alignItems: 'center',
   },
   quickStatValue: {
+    fontFamily: fonts.headingBold,
     fontSize: 18,
-    fontWeight: '700',
+    letterSpacing: 0.4,
     color: colors.primary,
   },
   quickStatLabel: {
-    fontSize: 12,
+    fontSize: 11,
     color: colors.textMuted,
     marginTop: 2,
   },
   quickStatDivider: {
-    width: 1,
-    backgroundColor: colors.tertiary + '30',
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: colors.border,
     marginHorizontal: spacing.md,
   },
 
   // Price Filter
   filterCard: {
-    backgroundColor: colors.surface,
     marginHorizontal: spacing.md,
-    marginBottom: spacing.md,
-    padding: spacing.md,
-    borderRadius: borderRadius.md,
-    borderWidth: 1,
-    borderColor: colors.tertiary + '30',
+    marginTop: spacing.sm,
+    marginBottom: spacing.xs,
   },
   filterHeader: {
     flexDirection: 'row',
@@ -586,31 +658,30 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   filterLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.text,
+    ...type.label,
+    fontSize: 12,
+    letterSpacing: 1.4,
   },
   priceValueRow: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   filterSpinner: {
-    marginRight: spacing.xs,
+    marginRight: spacing.sm,
   },
   priceValue: {
+    fontFamily: fonts.heading,
     fontSize: 16,
-    fontWeight: '700',
+    letterSpacing: 0.4,
     color: colors.primary,
   },
 
   // Sections
   section: {
-    marginBottom: spacing.lg,
+    marginTop: spacing.lg,
   },
   sectionTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colors.text,
+    ...type.label,
     marginHorizontal: spacing.md,
     marginBottom: spacing.sm,
   },
@@ -618,36 +689,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   emptySectionText: {
-    fontSize: 14,
+    fontFamily: fonts.serif,
+    fontSize: 15,
     color: colors.textMuted,
     marginHorizontal: spacing.md,
-  },
-  emptyStateContainer: {
-    alignItems: 'center',
-    padding: spacing.xl,
-  },
-  emptyStateText: {
-    marginTop: spacing.md,
-    fontSize: 14,
-    color: colors.textMuted,
-    textAlign: 'center',
-    lineHeight: 20,
   },
 
   // Beer Cards
   beerCard: {
-    width: 160,
+    width: 168,
     backgroundColor: colors.surface,
     borderRadius: borderRadius.lg,
     marginRight: spacing.sm,
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: colors.tertiary + '30',
   },
   beerImageContainer: {
     width: '100%',
     aspectRatio: 1,
-    backgroundColor: colors.background,
+    backgroundColor: colors.surfaceLow,
   },
   beerImage: {
     width: '100%',
@@ -661,36 +720,38 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   beerInfo: {
-    padding: spacing.sm,
+    padding: spacing.sm + spacing.xs,
   },
   beerTitle: {
+    fontFamily: fonts.heading,
     fontSize: 14,
-    fontWeight: '600',
+    letterSpacing: 0.3,
+    lineHeight: 19,
     color: colors.text,
-    lineHeight: 18,
+    minHeight: 38,
   },
   beerMeta: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-    marginTop: spacing.xs,
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+    marginTop: spacing.sm,
   },
-  ratingBadge: {
+  metaChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFD700' + '20',
-    paddingHorizontal: 6,
+    gap: 3,
+    backgroundColor: colors.surfaceHigh,
+    paddingHorizontal: spacing.sm,
     paddingVertical: 2,
-    borderRadius: 8,
-    gap: 2,
+    borderRadius: borderRadius.pill,
+    maxWidth: 148,
   },
-  ratingText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#B8860B',
-  },
-  abvText: {
-    fontSize: 12,
+  metaChipText: {
+    fontFamily: fonts.heading,
+    fontSize: 10,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
     color: colors.textMuted,
   },
   beerFooter: {
@@ -700,15 +761,17 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   priceText: {
+    fontFamily: fonts.heading,
     fontSize: 16,
-    fontWeight: '700',
-    color: colors.text,
+    letterSpacing: 0.4,
+    color: colors.primary,
   },
   favoriteButton: {
-    padding: spacing.xs,
-  },
-
-  bottomPadding: {
-    height: spacing.xl,
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: -spacing.xs,
+    marginBottom: -spacing.xs,
   },
 });

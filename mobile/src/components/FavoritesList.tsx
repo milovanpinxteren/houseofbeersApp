@@ -3,15 +3,15 @@ import {
   View,
   Text,
   ScrollView,
-  TouchableOpacity,
+  Pressable,
   StyleSheet,
   ActivityIndicator,
   RefreshControl,
   Image,
   Linking,
-  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { useLanguage } from '../context/LanguageContext';
 import { t } from '../i18n';
 import {
@@ -20,10 +20,13 @@ import {
   getSelectedCartLink,
   Favorite,
 } from '../api/recommendations';
-import { colors, spacing, borderRadius } from '../theme/colors';
+import { colors, spacing, borderRadius, fonts, type } from '../theme/colors';
+import { Button, Card, EmptyState, Skeleton, useToast } from './ui';
 
 export default function FavoritesList() {
+  const router = useRouter();
   const { language } = useLanguage();
+  const { showToast } = useToast();
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState('');
@@ -53,6 +56,11 @@ export default function FavoritesList() {
 
   function handleRefresh() {
     setIsRefreshing(true);
+    loadData();
+  }
+
+  function handleRetry() {
+    setIsLoading(true);
     loadData();
   }
 
@@ -95,7 +103,7 @@ export default function FavoritesList() {
       });
     } catch (err) {
       console.log('[Favorites] Remove error:', err);
-      Alert.alert(t('common.error'), t('recommendations.removeFavoriteError'));
+      showToast(t('recommendations.removeFavoriteError'), 'error');
     } finally {
       setRemovingId(null);
     }
@@ -107,7 +115,7 @@ export default function FavoritesList() {
       : favorites.map((f) => f.id);
 
     if (idsToAdd.length === 0) {
-      Alert.alert(t('common.error'), t('recommendations.noFavoritesSelected'));
+      showToast(t('recommendations.noFavoritesSelected'), 'info');
       return;
     }
 
@@ -117,7 +125,7 @@ export default function FavoritesList() {
       Linking.openURL(result.cart_url);
     } catch (err) {
       console.log('[Favorites] Cart error:', err);
-      Alert.alert(t('common.error'), t('recommendations.cartLinkError'));
+      showToast(t('recommendations.cartLinkError'), 'error');
     } finally {
       setIsGeneratingCart(false);
     }
@@ -129,9 +137,19 @@ export default function FavoritesList() {
 
   if (isLoading) {
     return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color={colors.primary} />
-        <Text style={styles.loadingText}>{t('loading')}</Text>
+      <View style={styles.container}>
+        <View style={styles.skeletonList}>
+          {[0, 1, 2, 3, 4].map((i) => (
+            <View key={i} style={styles.skeletonRow}>
+              <Skeleton width={72} height={72} radius={borderRadius.md} />
+              <View style={styles.skeletonLines}>
+                <Skeleton width="72%" height={14} />
+                <Skeleton width="48%" height={12} style={{ marginTop: spacing.sm }} />
+                <Skeleton width="28%" height={12} style={{ marginTop: spacing.xs }} />
+              </View>
+            </View>
+          ))}
+        </View>
       </View>
     );
   }
@@ -139,8 +157,13 @@ export default function FavoritesList() {
   if (error) {
     return (
       <View style={styles.centerContainer}>
-        <Ionicons name="alert-circle-outline" size={48} color={colors.error} />
-        <Text style={styles.errorText}>{error}</Text>
+        <EmptyState
+          icon="alert-circle-outline"
+          title={t('common.error')}
+          message={error}
+          actionLabel={t('common.retry')}
+          onAction={handleRetry}
+        />
       </View>
     );
   }
@@ -148,35 +171,57 @@ export default function FavoritesList() {
   if (favorites.length === 0) {
     return (
       <View style={styles.centerContainer}>
-        <Ionicons name="heart-outline" size={64} color={colors.textMuted} />
-        <Text style={styles.emptyTitle}>{t('recommendations.noFavorites')}</Text>
-        <Text style={styles.emptyText}>{t('recommendations.noFavoritesHint')}</Text>
+        <EmptyState
+          icon="heart-outline"
+          title={t('recommendations.noFavorites')}
+          message={t('recommendations.noFavoritesHint')}
+          actionLabel={t('recommendations.goToRecommendations')}
+          onAction={() => router.push('/(profile)/recommendations' as any)}
+        />
       </View>
     );
   }
 
+  const selectionActive = isSelectionMode && selectedIds.size > 0;
+
   return (
     <View style={styles.container}>
-      {/* Selection Header */}
+      {/* Count + selection controls */}
       <View style={styles.actionHeader}>
-        <TouchableOpacity
-          onPress={toggleSelectionMode}
-          style={styles.selectButton}
-        >
-          <Text style={styles.selectButtonText}>
-            {isSelectionMode ? t('common.done') : t('common.select')}
-          </Text>
-        </TouchableOpacity>
-        {isSelectionMode && (
-          <View style={styles.selectionActions}>
-            <TouchableOpacity onPress={selectAll} style={styles.selectionButton}>
-              <Text style={styles.selectionButtonText}>{t('common.selectAll')}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={clearSelection} style={styles.selectionButton}>
-              <Text style={styles.selectionButtonText}>{t('common.clearSelection')}</Text>
-            </TouchableOpacity>
-          </View>
-        )}
+        <Text style={styles.countLabel}>
+          {selectionActive
+            ? `${selectedIds.size} ${t('recommendations.selected')}`
+            : `${favorites.length} ${t('recommendations.beers')}`}
+        </Text>
+        <View style={styles.selectionActions}>
+          {isSelectionMode && (
+            <>
+              <Pressable
+                onPress={selectAll}
+                hitSlop={8}
+                style={({ pressed }) => [styles.selectionButton, pressed && styles.pressed]}
+              >
+                <Text style={styles.selectionButtonText}>{t('common.selectAll')}</Text>
+              </Pressable>
+              <Pressable
+                onPress={clearSelection}
+                hitSlop={8}
+                style={({ pressed }) => [styles.selectionButton, pressed && styles.pressed]}
+              >
+                <Text style={styles.selectionButtonText}>{t('common.clearSelection')}</Text>
+              </Pressable>
+            </>
+          )}
+          <Pressable
+            onPress={toggleSelectionMode}
+            hitSlop={8}
+            style={({ pressed }) => [styles.selectionButton, pressed && styles.pressed]}
+          >
+            <Text style={styles.selectToggleText}>
+              {isSelectionMode ? t('common.done') : t('common.select')}
+            </Text>
+          </Pressable>
+        </View>
       </View>
 
       <ScrollView
@@ -189,25 +234,19 @@ export default function FavoritesList() {
           />
         }
       >
-        {isSelectionMode && selectedIds.size > 0 && (
-          <Text style={styles.selectionCount}>
-            {selectedIds.size} {t('recommendations.selected')}
-          </Text>
-        )}
-
         {/* Favorites List */}
         <View style={styles.listContainer}>
           {favorites.map((favorite) => {
             const isSelected = selectedIds.has(favorite.id);
             const isRemoving = removingId === favorite.id;
+            const breweryLine = [favorite.vendor, favorite.style]
+              .filter(Boolean)
+              .join(' · ');
 
             return (
-              <TouchableOpacity
+              <Card
                 key={favorite.id}
-                style={[
-                  styles.favoriteCard,
-                  isSelectionMode && isSelected && styles.favoriteCardSelected,
-                ]}
+                padded={false}
                 onPress={() => {
                   if (isSelectionMode) {
                     toggleSelection(favorite.id);
@@ -215,78 +254,88 @@ export default function FavoritesList() {
                     openProduct(favorite.product_url);
                   }
                 }}
-                activeOpacity={0.7}
+                style={[
+                  styles.favoriteCard,
+                  isSelectionMode && isSelected && styles.favoriteCardSelected,
+                ]}
               >
-                {/* Selection Checkbox */}
-                {isSelectionMode && (
-                  <View style={styles.checkbox}>
+                <View style={styles.cardRow}>
+                  {/* Selection checkbox */}
+                  {isSelectionMode && (
                     <Ionicons
                       name={isSelected ? 'checkbox' : 'square-outline'}
                       size={24}
                       color={isSelected ? colors.primary : colors.textMuted}
+                      style={styles.checkbox}
                     />
-                  </View>
-                )}
-
-                {/* Beer Image */}
-                <View style={styles.imageContainer}>
-                  {favorite.image_url ? (
-                    <Image
-                      source={{ uri: favorite.image_url }}
-                      style={styles.beerImage}
-                    />
-                  ) : (
-                    <View style={styles.imagePlaceholder}>
-                      <Ionicons name="beer-outline" size={30} color={colors.textMuted} />
-                    </View>
                   )}
-                </View>
 
-                {/* Beer Info */}
-                <View style={styles.infoContainer}>
-                  <Text style={styles.beerTitle} numberOfLines={2}>
-                    {favorite.title}
-                  </Text>
-                  <View style={styles.beerMeta}>
-                    {favorite.untappd_rating != null && (
-                      <View style={styles.ratingBadge}>
-                        <Ionicons name="star" size={12} color="#FFD700" />
-                        <Text style={styles.ratingText}>
-                          {parseFloat(String(favorite.untappd_rating)).toFixed(1)}
-                        </Text>
+                  {/* Beer image */}
+                  <View style={styles.imageContainer}>
+                    {favorite.image_url ? (
+                      <Image
+                        source={{ uri: favorite.image_url }}
+                        style={styles.beerImage}
+                      />
+                    ) : (
+                      <View style={styles.imagePlaceholder}>
+                        <Ionicons name="beer-outline" size={28} color={colors.textMuted} />
                       </View>
                     )}
-                    {favorite.abv != null && (
-                      <Text style={styles.abvText}>{favorite.abv}%</Text>
-                    )}
-                    {favorite.style ? (
-                      <Text style={styles.styleText} numberOfLines={1}>
-                        {favorite.style}
+                  </View>
+
+                  {/* Beer info */}
+                  <View style={styles.infoContainer}>
+                    <Text style={styles.beerTitle} numberOfLines={2}>
+                      {favorite.title}
+                    </Text>
+                    {breweryLine ? (
+                      <Text style={styles.breweryLine} numberOfLines={1}>
+                        {breweryLine}
                       </Text>
                     ) : null}
+                    <View style={styles.beerMeta}>
+                      {favorite.untappd_rating != null && (
+                        <View style={styles.metaChip}>
+                          <Ionicons name="star" size={11} color={colors.primary} />
+                          <Text style={styles.metaChipText}>
+                            {parseFloat(String(favorite.untappd_rating)).toFixed(1)}
+                          </Text>
+                        </View>
+                      )}
+                      {favorite.abv != null && (
+                        <View style={styles.metaChip}>
+                          <Text style={styles.metaChipText}>{favorite.abv}%</Text>
+                        </View>
+                      )}
+                      {favorite.price != null && (
+                        <Text style={styles.priceText}>
+                          €{parseFloat(favorite.price).toFixed(2)}
+                        </Text>
+                      )}
+                    </View>
                   </View>
-                  {favorite.price != null && (
-                    <Text style={styles.priceText}>
-                      €{parseFloat(favorite.price).toFixed(2)}
-                    </Text>
+
+                  {/* Remove (heart) */}
+                  {!isSelectionMode && (
+                    <Pressable
+                      onPress={() => handleRemoveFavorite(favorite)}
+                      disabled={isRemoving}
+                      hitSlop={4}
+                      style={({ pressed }) => [
+                        styles.heartButton,
+                        pressed && styles.pressed,
+                      ]}
+                    >
+                      {isRemoving ? (
+                        <ActivityIndicator size="small" color={colors.secondary} />
+                      ) : (
+                        <Ionicons name="heart" size={22} color={colors.secondary} />
+                      )}
+                    </Pressable>
                   )}
                 </View>
-
-                {/* Actions */}
-                {!isSelectionMode && (
-                  <TouchableOpacity
-                    style={styles.removeButton}
-                    onPress={() => handleRemoveFavorite(favorite)}
-                    disabled={isRemoving}
-                  >
-                    {isRemoving ? (
-                      <ActivityIndicator size="small" color={colors.error} />
-                    ) : (
-                      <Ionicons name="trash-outline" size={20} color={colors.error} />
-                    )}
-                  </TouchableOpacity>
-                )}
-              </TouchableOpacity>
+              </Card>
             );
           })}
         </View>
@@ -294,11 +343,11 @@ export default function FavoritesList() {
         <View style={styles.bottomPadding} />
       </ScrollView>
 
-      {/* Add to Cart Footer */}
+      {/* Add to Cart footer */}
       <View style={styles.footer}>
         <View style={styles.footerInfo}>
           <Text style={styles.footerTitle}>
-            {isSelectionMode && selectedIds.size > 0
+            {selectionActive
               ? `${selectedIds.size} ${t('recommendations.beers')}`
               : `${favorites.length} ${t('recommendations.beers')}`}
           </Text>
@@ -306,23 +355,12 @@ export default function FavoritesList() {
             {t('recommendations.addToCartHint')}
           </Text>
         </View>
-        <TouchableOpacity
-          style={[
-            styles.cartButton,
-            isGeneratingCart && styles.cartButtonDisabled,
-          ]}
+        <Button
+          label={t('recommendations.addToCart')}
+          icon="cart"
           onPress={handleAddToCart}
-          disabled={isGeneratingCart}
-        >
-          {isGeneratingCart ? (
-            <ActivityIndicator size="small" color={colors.background} />
-          ) : (
-            <>
-              <Ionicons name="cart" size={20} color={colors.background} />
-              <Text style={styles.cartButtonText}>{t('recommendations.addToCart')}</Text>
-            </>
-          )}
-        </TouchableOpacity>
+          loading={isGeneratingCart}
+        />
       </View>
     </View>
   );
@@ -339,33 +377,28 @@ const styles = StyleSheet.create({
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
-    alignItems: 'center',
     backgroundColor: colors.background,
     padding: spacing.lg,
   },
-  loadingText: {
-    marginTop: spacing.md,
-    color: colors.textMuted,
-    fontSize: 14,
+  pressed: {
+    opacity: 0.7,
   },
-  errorText: {
-    marginTop: spacing.md,
-    color: colors.error,
-    fontSize: 14,
-    textAlign: 'center',
+
+  // Skeletons
+  skeletonList: {
+    padding: spacing.md,
+    gap: spacing.sm,
   },
-  emptyTitle: {
-    marginTop: spacing.md,
-    fontSize: 18,
-    fontWeight: '600',
-    color: colors.text,
+  skeletonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
   },
-  emptyText: {
-    marginTop: spacing.xs,
-    fontSize: 14,
-    color: colors.textMuted,
-    textAlign: 'center',
-    paddingHorizontal: spacing.xl,
+  skeletonLines: {
+    flex: 1,
   },
 
   // Action Header
@@ -373,71 +406,65 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: colors.surface,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.tertiary + '30',
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xs,
   },
-  selectButton: {
-    paddingVertical: spacing.xs,
-  },
-  selectButtonText: {
-    color: colors.primary,
-    fontSize: 16,
-    fontWeight: '600',
+  countLabel: {
+    ...type.label,
   },
   selectionActions: {
     flexDirection: 'row',
+    alignItems: 'center',
     gap: spacing.md,
   },
   selectionButton: {
     paddingVertical: spacing.xs,
+    minHeight: 32,
+    justifyContent: 'center',
   },
   selectionButtonText: {
-    fontSize: 14,
-    color: colors.primary,
+    fontSize: 13,
+    color: colors.textMuted,
     fontWeight: '500',
   },
-  selectionCount: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.text,
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.md,
+  selectToggleText: {
+    fontFamily: fonts.heading,
+    fontSize: 13,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    color: colors.primary,
   },
 
   // List
   listContainer: {
-    padding: spacing.md,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
   },
   favoriteCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    padding: spacing.md,
-    borderRadius: borderRadius.md,
     marginBottom: spacing.sm,
-    borderWidth: 1,
-    borderColor: colors.tertiary + '30',
   },
   favoriteCardSelected: {
-    borderColor: colors.primary,
-    backgroundColor: colors.primary + '10',
+    backgroundColor: colors.surfaceHigh,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
   },
-
-  // Checkbox
+  cardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: spacing.sm + spacing.xs,
+  },
   checkbox: {
     marginRight: spacing.sm,
   },
 
   // Image
   imageContainer: {
-    width: 70,
-    height: 70,
-    borderRadius: borderRadius.sm,
+    width: 72,
+    height: 72,
+    borderRadius: borderRadius.md,
     overflow: 'hidden',
-    backgroundColor: colors.background,
+    backgroundColor: colors.surfaceLow,
   },
   beerImage: {
     width: '100%',
@@ -457,52 +484,55 @@ const styles = StyleSheet.create({
     marginLeft: spacing.md,
   },
   beerTitle: {
+    fontFamily: fonts.heading,
     fontSize: 15,
-    fontWeight: '600',
-    color: colors.text,
+    letterSpacing: 0.3,
     lineHeight: 20,
+    color: colors.text,
+  },
+  breweryLine: {
+    fontFamily: fonts.serif,
+    fontSize: 15,
+    lineHeight: 19,
+    color: colors.textMuted,
+    marginTop: 2,
   },
   beerMeta: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
-    marginTop: spacing.xs,
+    marginTop: spacing.sm,
     flexWrap: 'wrap',
   },
-  ratingBadge: {
+  metaChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFD700' + '20',
-    paddingHorizontal: 6,
+    gap: 3,
+    backgroundColor: colors.surfaceHigh,
+    paddingHorizontal: spacing.sm,
     paddingVertical: 2,
-    borderRadius: 8,
-    gap: 2,
+    borderRadius: borderRadius.pill,
   },
-  ratingText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#B8860B',
-  },
-  abvText: {
-    fontSize: 12,
+  metaChipText: {
+    fontFamily: fonts.heading,
+    fontSize: 11,
+    letterSpacing: 0.4,
     color: colors.textMuted,
-  },
-  styleText: {
-    fontSize: 12,
-    color: colors.textMuted,
-    flex: 1,
   },
   priceText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.text,
-    marginTop: spacing.xs,
+    fontFamily: fonts.heading,
+    fontSize: 15,
+    letterSpacing: 0.4,
+    color: colors.primary,
   },
 
-  // Remove Button
-  removeButton: {
-    padding: spacing.sm,
-    marginLeft: spacing.sm,
+  // Heart / remove
+  heartButton: {
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: spacing.xs,
   },
 
   // Footer
@@ -510,41 +540,26 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: colors.surface,
+    gap: spacing.md,
+    backgroundColor: colors.surfaceHigh,
     paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
-    borderTopWidth: 1,
-    borderTopColor: colors.tertiary + '30',
+    paddingHorizontal: spacing.md,
+    borderTopLeftRadius: borderRadius.lg,
+    borderTopRightRadius: borderRadius.lg,
   },
   footerInfo: {
     flex: 1,
   },
   footerTitle: {
+    fontFamily: fonts.heading,
     fontSize: 16,
-    fontWeight: '600',
+    letterSpacing: 0.4,
     color: colors.text,
   },
   footerSubtitle: {
     fontSize: 12,
     color: colors.textMuted,
     marginTop: 2,
-  },
-  cartButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.primary,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    borderRadius: borderRadius.md,
-    gap: spacing.xs,
-  },
-  cartButtonDisabled: {
-    opacity: 0.7,
-  },
-  cartButtonText: {
-    color: colors.background,
-    fontSize: 16,
-    fontWeight: '600',
   },
 
   bottomPadding: {

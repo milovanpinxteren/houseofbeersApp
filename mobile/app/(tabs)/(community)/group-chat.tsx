@@ -1,5 +1,5 @@
 import React, { useCallback } from 'react';
-import { TouchableOpacity } from 'react-native';
+import { Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, router } from 'expo-router';
 import ChatScreen from '../../../src/components/ChatScreen';
@@ -22,9 +22,13 @@ export default function GroupChatScreen() {
       title={groupName || ''}
       showSenderNames
       headerAction={
-        <TouchableOpacity onPress={() => router.push(`/(tabs)/(community)/group-info?groupId=${gId}`)}>
+        <Pressable
+          onPress={() => router.push(`/(tabs)/(community)/group-info?groupId=${gId}`)}
+          style={({ pressed }) => [styles.infoBtn, pressed && { opacity: 0.7 }]}
+          hitSlop={8}
+        >
           <Ionicons name="information-circle-outline" size={24} color={colors.primary} />
-        </TouchableOpacity>
+        </Pressable>
       }
       fetchMessages={fetchMessages}
       onSend={handleSend}
@@ -33,3 +37,12 @@ export default function GroupChatScreen() {
     />
   );
 }
+
+const styles = StyleSheet.create({
+  infoBtn: {
+    minWidth: 44,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});

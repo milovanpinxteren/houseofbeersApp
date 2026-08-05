@@ -1,16 +1,16 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState } from 'react';
 import {
   View,
   Text,
-  ScrollView,
-  TouchableOpacity,
   StyleSheet,
   Platform,
   Modal,
   FlatList,
-  RefreshControl,
   TextInput,
   Alert,
+  ActivityIndicator,
+  TouchableOpacity,
+  Pressable,
 } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -18,30 +18,15 @@ import { useAuth } from '../../src/context/AuthContext';
 import { useLanguage } from '../../src/context/LanguageContext';
 import { syncShopify, updateProfile } from '../../src/api/auth';
 import { t } from '../../src/i18n';
-import { colors, spacing, borderRadius } from '../../src/theme/colors';
-import {
-  getUntappdProfile,
-  getFavorites,
-  UntappdProfile,
-} from '../../src/api/recommendations';
+import { colors, spacing, borderRadius, fonts, type } from '../../src/theme/colors';
+import { Screen, Card, Button, ListItem, SectionHeader, useToast } from '../../src/components/ui';
 import BirthdaySettings from '../../src/components/BirthdaySettings';
 import NotificationSettings from '../../src/components/NotificationSettings';
-
-type IconName = React.ComponentProps<typeof Ionicons>['name'];
-
-interface MenuItem {
-  id: string;
-  icon: IconName;
-  label: string;
-  subtitle?: string;
-  route: string;
-  badge?: number;
-  showChevron?: boolean;
-}
 
 export default function ProfileScreen() {
   const { user, logout, refreshUser } = useAuth();
   const { language, setLanguage, languages } = useLanguage();
+  const { showToast } = useToast();
   const [showConfirm, setShowConfirm] = useState(false);
   const [showLanguagePicker, setShowLanguagePicker] = useState(false);
   const [showEditProfile, setShowEditProfile] = useState(false);
@@ -51,29 +36,10 @@ export default function ProfileScreen() {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [untappdProfile, setUntappdProfile] = useState<UntappdProfile | null>(null);
-  const [favoritesCount, setFavoritesCount] = useState(0);
-
-  const loadProfileData = useCallback(async () => {
-    try {
-      const [untappdData, favoritesData] = await Promise.all([
-        getUntappdProfile(),
-        getFavorites(),
-      ]);
-      setUntappdProfile(untappdData.untappd);
-      setFavoritesCount(favoritesData.favorites.length);
-    } catch (err) {
-      console.log('[Profile] Load data error:', err);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadProfileData();
-  }, [loadProfileData]);
 
   function handleRefresh() {
     setIsRefreshing(true);
-    loadProfileData().finally(() => setIsRefreshing(false));
+    Promise.resolve(refreshUser?.()).finally(() => setIsRefreshing(false));
   }
 
   async function handleLogout() {
@@ -98,14 +64,17 @@ export default function ProfileScreen() {
   }
 
   async function handleSyncShopify() {
+    if (isSyncing) return;
     setIsSyncing(true);
     try {
       await syncShopify();
       if (refreshUser) {
         await refreshUser();
       }
+      showToast(t('profile.syncSuccess'), 'success');
     } catch (error) {
       console.log('[Profile] Sync error:', error);
+      showToast(t('profile.syncError'), 'error');
     } finally {
       setIsSyncing(false);
     }
@@ -141,221 +110,121 @@ export default function ProfileScreen() {
 
   const currentLanguage = languages.find((l) => l.code === language);
 
-  const menuItems: MenuItem[] = [
-    {
-      id: 'recommendations',
-      icon: 'beer',
-      label: t('profile.recommendations'),
-      subtitle: untappdProfile
-        ? t('profile.connectedAs', { username: untappdProfile.username })
-        : t('profile.basedOnOrders'),
-      route: '/(profile)/recommendations',
-      showChevron: true,
-    },
-    {
-      id: 'taste-profile',
-      icon: 'analytics',
-      label: t('profile.tasteProfile'),
-      subtitle: t('profile.tasteProfileSubtitle'),
-      route: '/(profile)/taste-profile',
-      showChevron: true,
-    },
-    {
-      id: 'favorites',
-      icon: 'heart',
-      label: t('profile.favorites'),
-      subtitle: t('profile.favoritesSubtitle'),
-      route: '/(profile)/favorites',
-      badge: favoritesCount > 0 ? favoritesCount : undefined,
-      showChevron: true,
-    },
-    {
-      id: 'orders',
-      icon: 'receipt',
-      label: t('profile.orders'),
-      subtitle: user?.shopify_customer_id
-        ? t('profile.viewOrderHistory')
-        : t('profile.linkShopifyFirst'),
-      route: '/(profile)/orders',
-      showChevron: true,
-    },
-  ];
+  const displayName =
+    user?.first_name || user?.last_name
+      ? `${user?.first_name || ''} ${user?.last_name || ''}`.trim()
+      : t('profile.guest');
 
-  function renderMenuItem(item: MenuItem) {
-    return (
-      <TouchableOpacity
-        key={item.id}
-        style={styles.menuItem}
-        onPress={() => router.push(item.route as any)}
-        activeOpacity={0.7}
-      >
-        <View style={styles.menuIconContainer}>
-          <Ionicons name={item.icon} size={22} color={colors.primary} />
-        </View>
-        <View style={styles.menuContent}>
-          <Text style={styles.menuLabel}>{item.label}</Text>
-          {item.subtitle && (
-            <Text style={styles.menuSubtitle} numberOfLines={1}>
-              {item.subtitle}
-            </Text>
-          )}
-        </View>
-        {item.badge && (
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>{item.badge}</Text>
-          </View>
-        )}
-        {item.showChevron && (
-          <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
-        )}
-      </TouchableOpacity>
-    );
-  }
+  const initials = (() => {
+    const first = user?.first_name?.trim()?.[0] || '';
+    const last = user?.last_name?.trim()?.[0] || '';
+    if (first || last) return `${first}${last}`.toUpperCase();
+    return (user?.email?.[0] || '?').toUpperCase();
+  })();
 
   return (
-    <ScrollView
-      style={styles.container}
-      refreshControl={
-        <RefreshControl
-          refreshing={isRefreshing}
-          onRefresh={handleRefresh}
-          tintColor={colors.primary}
-        />
-      }
-    >
-      {/* User Info Card */}
-      <TouchableOpacity
-        style={styles.userCard}
-        onPress={openEditProfile}
-        activeOpacity={0.7}
-      >
-        <View style={styles.avatarContainer}>
-          <Ionicons name="person-circle" size={60} color={colors.primary} />
-        </View>
-        <View style={styles.userInfo}>
-          <Text style={styles.userName}>
-            {user?.first_name || user?.last_name
-              ? `${user?.first_name || ''} ${user?.last_name || ''}`.trim()
-              : t('profile.guest')}
-          </Text>
-          <Text style={styles.userEmail}>{user?.email}</Text>
-          <Text style={styles.editHint}>{t('profile.tapToEdit')}</Text>
-        </View>
-        <Ionicons name="pencil" size={18} color={colors.textMuted} />
-      </TouchableOpacity>
-
-      {/* Untappd Connection Card */}
-      <TouchableOpacity
-        style={styles.untappdCard}
-        onPress={() => router.push('/(profile)/connect-untappd')}
-        activeOpacity={0.7}
-      >
-        <View style={styles.untappdLeft}>
-          <Ionicons
-            name={untappdProfile ? 'checkmark-circle' : 'link'}
-            size={24}
-            color={untappdProfile ? colors.success : colors.primary}
-          />
-          <View style={styles.untappdInfo}>
-            <Text style={styles.untappdTitle}>
-              {untappdProfile ? 'Untappd' : t('profile.connectUntappd')}
+    <Screen refreshing={isRefreshing} onRefresh={handleRefresh}>
+      {/* Identity */}
+      <Card style={styles.identityCard} onPress={openEditProfile}>
+        <View style={styles.identityRow}>
+          <View style={styles.avatar}>
+            <Text style={styles.avatarText}>{initials}</Text>
+          </View>
+          <View style={styles.identityInfo}>
+            <Text style={styles.userName} numberOfLines={1}>
+              {displayName}
             </Text>
-            <Text style={styles.untappdSubtitle}>
-              {untappdProfile
-                ? `@${untappdProfile.username}`
-                : t('profile.connectUntappdHint')}
+            <Text style={styles.userEmail} numberOfLines={1}>
+              {user?.email}
             </Text>
           </View>
+          <View style={styles.editIcon}>
+            <Ionicons name="pencil" size={15} color={colors.textMuted} />
+          </View>
         </View>
-        <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
-      </TouchableOpacity>
+      </Card>
 
-      {/* Menu Section */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>{t('profile.yourBeerJourney')}</Text>
-        <View style={styles.menuCard}>
-          {menuItems.map((item) => renderMenuItem(item))}
-        </View>
-      </View>
+      {/* Account */}
+      <SectionHeader title={t('profile.account')} />
+      <Card padded={false}>
+        <ListItem
+          icon="receipt-outline"
+          label={t('profile.orders')}
+          subtitle={
+            user?.shopify_customer_id
+              ? t('profile.viewOrderHistory')
+              : t('profile.linkShopifyFirst')
+          }
+          onPress={() => router.push('/(profile)/orders' as any)}
+        />
+        <ListItem
+          icon="beer-outline"
+          label={t('profile.connectUntappd')}
+          subtitle={t('profile.connectUntappdHint')}
+          onPress={() => router.push('/(profile)/connect-untappd' as any)}
+        />
+        <ListItem
+          icon="sync-outline"
+          label={t('profile.syncShopify')}
+          subtitle={
+            user?.shopify_customer_id
+              ? t('profile.shopifyLinked')
+              : t('profile.shopifyNotLinked')
+          }
+          chevron={false}
+          right={
+            isSyncing ? (
+              <ActivityIndicator size="small" color={colors.primary} />
+            ) : undefined
+          }
+          onPress={handleSyncShopify}
+          last
+        />
+      </Card>
 
-      {/* Birthday */}
-      <BirthdaySettings />
-
-      {/* Notification settings */}
-      <NotificationSettings />
-
-      {/* Settings Section */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>{t('profile.settings')}</Text>
-        <View style={styles.menuCard}>
-          {/* Shopify Sync */}
-          <TouchableOpacity
-            style={styles.menuItem}
-            onPress={handleSyncShopify}
-            disabled={isSyncing}
-            activeOpacity={0.7}
-          >
-            <View style={styles.menuIconContainer}>
-              <Ionicons name="sync" size={22} color={colors.primary} />
-            </View>
-            <View style={styles.menuContent}>
-              <Text style={styles.menuLabel}>{t('profile.syncShopify')}</Text>
-              <Text style={styles.menuSubtitle}>
-                {user?.shopify_customer_id
-                  ? t('profile.shopifyLinked')
-                  : t('profile.shopifyNotLinked')}
-              </Text>
-            </View>
-            {isSyncing && (
-              <Text style={styles.syncingText}>{t('profile.syncing')}</Text>
-            )}
-          </TouchableOpacity>
-
-          {/* Language */}
-          <TouchableOpacity
-            style={styles.menuItem}
-            onPress={() => setShowLanguagePicker(true)}
-            activeOpacity={0.7}
-          >
-            <View style={styles.menuIconContainer}>
-              <Ionicons name="language" size={22} color={colors.primary} />
-            </View>
-            <View style={styles.menuContent}>
-              <Text style={styles.menuLabel}>{t('profile.language')}</Text>
-              <Text style={styles.menuSubtitle}>{currentLanguage?.nativeName}</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
-          </TouchableOpacity>
-        </View>
-      </View>
+      {/* Preferences */}
+      <SectionHeader title={t('profile.preferences')} />
+      <Card padded={false}>
+        <BirthdaySettings />
+        <NotificationSettings />
+        <ListItem
+          icon="language-outline"
+          label={t('profile.language')}
+          subtitle={currentLanguage?.nativeName}
+          onPress={() => setShowLanguagePicker(true)}
+          last
+        />
+      </Card>
 
       {/* Logout */}
       {showConfirm ? (
-        <View style={styles.confirmBox}>
+        <Card variant="elevated" style={styles.confirmCard}>
           <Text style={styles.confirmText}>{t('profile.logoutConfirm')}</Text>
           <View style={styles.confirmButtons}>
-            <TouchableOpacity
-              style={styles.cancelButton}
+            <Button
+              label={t('cancel')}
+              variant="ghost"
               onPress={() => setShowConfirm(false)}
-            >
-              <Text style={styles.cancelText}>{t('cancel')}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.logoutButtonInline, isLoggingOut && styles.buttonDisabled]}
+              style={styles.confirmButton}
+            />
+            <Button
+              label={t('profile.logout')}
+              variant="danger"
+              loading={isLoggingOut}
               onPress={doLogout}
-              disabled={isLoggingOut}
-            >
-              <Text style={styles.logoutText}>
-                {isLoggingOut ? t('profile.loggingOut') : t('profile.logout')}
-              </Text>
-            </TouchableOpacity>
+              style={styles.confirmButton}
+            />
           </View>
-        </View>
+        </Card>
       ) : (
-        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-          <Ionicons name="log-out-outline" size={20} color={colors.text} />
-          <Text style={styles.logoutText}>{t('profile.logout')}</Text>
-        </TouchableOpacity>
+        <Button
+          label={t('profile.logout')}
+          variant="danger"
+          icon="log-out-outline"
+          loading={isLoggingOut}
+          onPress={handleLogout}
+          style={styles.logoutButton}
+        />
       )}
 
       {/* Edit Profile Modal */}
@@ -395,22 +264,19 @@ export default function ProfileScreen() {
                 autoCapitalize="words"
               />
             </View>
-            <View style={styles.editModalButtons}>
-              <TouchableOpacity
-                style={styles.editCancelButton}
+            <View style={styles.modalButtons}>
+              <Button
+                label={t('common.cancel')}
+                variant="ghost"
                 onPress={() => setShowEditProfile(false)}
-              >
-                <Text style={styles.editCancelText}>{t('common.cancel')}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.editSaveButton, isSavingProfile && styles.buttonDisabled]}
+                style={styles.modalButton}
+              />
+              <Button
+                label={t('save')}
+                loading={isSavingProfile}
                 onPress={handleSaveProfile}
-                disabled={isSavingProfile}
-              >
-                <Text style={styles.editSaveText}>
-                  {isSavingProfile ? t('loading') : t('save')}
-                </Text>
-              </TouchableOpacity>
+                style={styles.modalButton}
+              />
             </View>
           </View>
         </View>
@@ -434,10 +300,11 @@ export default function ProfileScreen() {
               data={languages}
               keyExtractor={(item) => item.code}
               renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={[
+                <Pressable
+                  style={({ pressed }) => [
                     styles.languageOption,
                     item.code === language && styles.languageOptionSelected,
+                    pressed && { opacity: 0.85 },
                   ]}
                   onPress={() => handleLanguageSelect(item.code)}
                 >
@@ -452,251 +319,142 @@ export default function ProfileScreen() {
                   {item.code === language && (
                     <Ionicons name="checkmark" size={20} color={colors.primary} />
                   )}
-                </TouchableOpacity>
+                </Pressable>
               )}
             />
           </View>
         </TouchableOpacity>
       </Modal>
-
-      <View style={styles.bottomPadding} />
-    </ScrollView>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
+  // Identity
+  identityCard: {
+    marginTop: spacing.md,
   },
-
-  // User Card
-  userCard: {
+  identityRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.surface,
-    margin: spacing.md,
-    padding: spacing.md,
-    borderRadius: borderRadius.lg,
-    borderWidth: 1,
-    borderColor: colors.primary + '40',
+    gap: spacing.md,
   },
-  avatarContainer: {
-    marginRight: spacing.md,
+  avatar: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colors.primary + '1A',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  userInfo: {
+  avatarText: {
+    fontFamily: fonts.heading,
+    fontSize: 22,
+    letterSpacing: 1,
+    color: colors.primary,
+  },
+  identityInfo: {
     flex: 1,
   },
   userName: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: colors.text,
+    ...type.title,
   },
   userEmail: {
-    fontSize: 14,
-    color: colors.textMuted,
-    marginTop: 2,
-  },
-  editHint: {
-    fontSize: 12,
-    color: colors.textMuted,
-    marginTop: 4,
-    fontStyle: 'italic',
-  },
-
-  // Untappd Card
-  untappdCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: colors.surface,
-    marginHorizontal: spacing.md,
-    marginBottom: spacing.md,
-    padding: spacing.md,
-    borderRadius: borderRadius.md,
-    borderWidth: 1,
-    borderColor: colors.tertiary + '30',
-  },
-  untappdLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  untappdInfo: {
-    marginLeft: spacing.md,
-    flex: 1,
-  },
-  untappdTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: colors.text,
-  },
-  untappdSubtitle: {
     fontSize: 13,
     color: colors.textMuted,
     marginTop: 2,
   },
-
-  // Sections
-  section: {
-    marginBottom: spacing.md,
-  },
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.textMuted,
-    textTransform: 'uppercase',
-    marginHorizontal: spacing.md,
-    marginBottom: spacing.sm,
-  },
-  menuCard: {
-    backgroundColor: colors.surface,
-    marginHorizontal: spacing.md,
-    borderRadius: borderRadius.md,
-    borderWidth: 1,
-    borderColor: colors.tertiary + '30',
-    overflow: 'hidden',
-  },
-
-  // Menu Items
-  menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.tertiary + '20',
-  },
-  menuIconContainer: {
+  editIcon: {
     width: 36,
     height: 36,
-    borderRadius: 8,
-    backgroundColor: colors.primary + '15',
+    borderRadius: 18,
+    backgroundColor: colors.surfaceHigh,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: spacing.md,
-  },
-  menuContent: {
-    flex: 1,
-  },
-  menuLabel: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: colors.text,
-  },
-  menuSubtitle: {
-    fontSize: 13,
-    color: colors.textMuted,
-    marginTop: 2,
-  },
-  badge: {
-    backgroundColor: colors.primary,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 10,
-    marginRight: spacing.sm,
-  },
-  badgeText: {
-    color: colors.background,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  syncingText: {
-    fontSize: 13,
-    color: colors.primary,
-    marginRight: spacing.sm,
   },
 
   // Logout
   logoutButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.secondary,
-    marginHorizontal: spacing.md,
-    padding: spacing.md,
-    borderRadius: borderRadius.md,
-    gap: spacing.sm,
+    marginTop: spacing.xl,
   },
-  logoutButtonInline: {
-    flex: 1,
-    backgroundColor: colors.secondary,
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
-    alignItems: 'center',
-  },
-  logoutText: {
-    color: colors.text,
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-
-  // Confirm Box
-  confirmBox: {
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.md,
-    padding: spacing.lg,
-    marginHorizontal: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.secondary,
+  confirmCard: {
+    marginTop: spacing.xl,
   },
   confirmText: {
-    color: colors.text,
-    fontSize: 16,
+    ...type.serifBody,
     textAlign: 'center',
     marginBottom: spacing.md,
   },
   confirmButtons: {
     flexDirection: 'row',
-    gap: spacing.md,
+    gap: spacing.sm,
   },
-  cancelButton: {
+  confirmButton: {
     flex: 1,
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.textMuted,
-  },
-  cancelText: {
-    color: colors.textMuted,
-    fontSize: 16,
-    fontWeight: '600',
   },
 
-  // Modal
+  // Modals
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    backgroundColor: 'rgba(0, 0, 0, 0.72)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   modalContent: {
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceHigh,
     borderRadius: borderRadius.lg,
     padding: spacing.lg,
     width: '80%',
     maxWidth: 300,
   },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: colors.text,
-    marginBottom: spacing.md,
-    textAlign: 'center',
+  editModalContent: {
+    backgroundColor: colors.surfaceHigh,
+    borderRadius: borderRadius.lg,
+    padding: spacing.lg,
+    width: '85%',
+    maxWidth: 340,
   },
+  modalTitle: {
+    ...type.heading,
+    fontSize: 18,
+    textAlign: 'center',
+    marginBottom: spacing.md,
+  },
+  inputGroup: {
+    marginBottom: spacing.md,
+  },
+  inputLabel: {
+    ...type.label,
+    fontSize: 12,
+    marginBottom: spacing.xs,
+  },
+  textInput: {
+    backgroundColor: colors.surfaceLow,
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    fontSize: 16,
+    color: colors.text,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  modalButton: {
+    flex: 1,
+  },
+
+  // Language options
   languageOption: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: spacing.md,
     borderRadius: borderRadius.md,
+    minHeight: 48,
   },
   languageOptionSelected: {
-    backgroundColor: colors.primary + '20',
+    backgroundColor: colors.primary + '18',
   },
   languageOptionText: {
     fontSize: 16,
@@ -705,65 +463,5 @@ const styles = StyleSheet.create({
   languageOptionTextSelected: {
     color: colors.primary,
     fontWeight: '600',
-  },
-
-  // Edit Profile Modal
-  editModalContent: {
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.lg,
-    padding: spacing.lg,
-    width: '85%',
-    maxWidth: 340,
-  },
-  inputGroup: {
-    marginBottom: spacing.md,
-  },
-  inputLabel: {
-    fontSize: 14,
-    color: colors.textMuted,
-    marginBottom: spacing.xs,
-  },
-  textInput: {
-    backgroundColor: colors.background,
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
-    fontSize: 16,
-    color: colors.text,
-    borderWidth: 1,
-    borderColor: colors.tertiary + '30',
-  },
-  editModalButtons: {
-    flexDirection: 'row',
-    gap: spacing.md,
-    marginTop: spacing.sm,
-  },
-  editCancelButton: {
-    flex: 1,
-    padding: spacing.md,
-    borderRadius: borderRadius.md,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.textMuted,
-  },
-  editCancelText: {
-    color: colors.textMuted,
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  editSaveButton: {
-    flex: 1,
-    padding: spacing.md,
-    borderRadius: borderRadius.md,
-    alignItems: 'center',
-    backgroundColor: colors.primary,
-  },
-  editSaveText: {
-    color: colors.background,
-    fontSize: 16,
-    fontWeight: '600',
-  },
-
-  bottomPadding: {
-    height: spacing.xl,
   },
 });

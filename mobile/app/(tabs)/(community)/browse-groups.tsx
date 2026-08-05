@@ -1,13 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity,
-  ActivityIndicator, RefreshControl,
-} from 'react-native';
+import { View, Text, StyleSheet, FlatList, RefreshControl } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
-import { colors, spacing, borderRadius } from '../../../src/theme/colors';
+import { colors, spacing, borderRadius, fonts } from '../../../src/theme/colors';
+import { Card, Button, EmptyState, SkeletonCard } from '../../../src/components/ui';
 import { getAvailableGroups, joinGroup, Group } from '../../../src/api/community';
 
 export default function BrowseGroupsScreen() {
@@ -32,7 +30,18 @@ export default function BrowseGroupsScreen() {
     } catch {} finally { setJoiningId(null); }
   };
 
-  if (isLoading) return <View style={[styles.container, styles.center]}><ActivityIndicator size="large" color={colors.primary} /></View>;
+  const openChat = (item: Group) =>
+    router.push(`/(tabs)/(community)/group-chat?groupId=${item.id}&groupName=${encodeURIComponent(item.name)}`);
+
+  if (isLoading) {
+    return (
+      <View style={[styles.container, { paddingTop: spacing.md, paddingHorizontal: spacing.md }]}>
+        <SkeletonCard />
+        <SkeletonCard />
+        <SkeletonCard />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -40,45 +49,59 @@ export default function BrowseGroupsScreen() {
         data={groups}
         keyExtractor={(item) => item.id.toString()}
         renderItem={({ item }) => (
-          <View style={styles.groupCard}>
-            <View style={styles.avatar}>
-              <Ionicons name="people" size={24} color={colors.primary} />
+          <Card
+            style={styles.groupCard}
+            onPress={item.is_member ? () => openChat(item) : undefined}
+          >
+            <View style={styles.cardRow}>
+              <View style={styles.avatar}>
+                <Ionicons name="people" size={22} color={colors.primary} />
+              </View>
+              <View style={styles.groupInfo}>
+                <Text style={styles.groupName} numberOfLines={1}>{item.name}</Text>
+                <Text style={styles.groupMeta}>
+                  {item.member_count} {t('community.groupMembers').toLowerCase()}
+                </Text>
+              </View>
+              {item.is_member ? (
+                <Button
+                  label={t('community.joined')}
+                  onPress={() => openChat(item)}
+                  variant="secondary"
+                  size="sm"
+                  icon="checkmark"
+                />
+              ) : (
+                <Button
+                  label={t('community.joinGroup')}
+                  onPress={() => handleJoin(item.id)}
+                  size="sm"
+                  loading={joiningId === item.id}
+                />
+              )}
             </View>
-            <View style={styles.groupInfo}>
-              <Text style={styles.groupName}>{item.name}</Text>
-              {item.description ? <Text style={styles.groupDesc} numberOfLines={2}>{item.description}</Text> : null}
-              <Text style={styles.groupMeta}>{item.member_count} {t('community.groupMembers').toLowerCase()}</Text>
-            </View>
-            {item.is_member ? (
-              <TouchableOpacity
-                style={styles.joinedBtn}
-                onPress={() => router.push(`/(tabs)/(community)/group-chat?groupId=${item.id}&groupName=${encodeURIComponent(item.name)}`)}
-              >
-                <Text style={styles.joinedBtnText}>{t('community.joined')}</Text>
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity
-                style={styles.joinBtn}
-                onPress={() => handleJoin(item.id)}
-                disabled={joiningId === item.id}
-              >
-                {joiningId === item.id ? (
-                  <ActivityIndicator size="small" color={colors.background} />
-                ) : (
-                  <Text style={styles.joinBtnText}>{t('community.joinGroup')}</Text>
-                )}
-              </TouchableOpacity>
-            )}
-          </View>
+            {item.description ? (
+              <Text style={styles.groupDesc} numberOfLines={2}>{item.description}</Text>
+            ) : null}
+          </Card>
         )}
         ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Ionicons name="people-outline" size={48} color={colors.textMuted} />
-            <Text style={styles.emptyText}>{t('community.noGroups')}</Text>
+          <View style={styles.emptyWrap}>
+            <EmptyState
+              icon="people-outline"
+              title={t('community.noGroups')}
+              message={t('community.noGroupsHint')}
+            />
           </View>
         }
-        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={() => { setIsRefreshing(true); load(); }} tintColor={colors.primary} />}
-        contentContainerStyle={groups.length === 0 ? { flex: 1 } : { paddingBottom: spacing.lg }}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={() => { setIsRefreshing(true); load(); }}
+            tintColor={colors.primary}
+          />
+        }
+        contentContainerStyle={groups.length === 0 ? { flex: 1 } : styles.listContent}
       />
     </View>
   );
@@ -86,17 +109,31 @@ export default function BrowseGroupsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  groupCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, marginHorizontal: spacing.md, marginTop: spacing.sm, borderRadius: borderRadius.md, padding: spacing.md },
-  avatar: { width: 48, height: 48, borderRadius: 24, backgroundColor: colors.primary + '20', justifyContent: 'center', alignItems: 'center', marginRight: spacing.md },
+  listContent: { padding: spacing.md, paddingBottom: spacing.xl },
+  groupCard: { marginBottom: spacing.sm },
+  cardRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  avatar: {
+    width: 46,
+    height: 46,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.primary + '14',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   groupInfo: { flex: 1 },
-  groupName: { color: colors.text, fontSize: 16, fontWeight: '600' },
-  groupDesc: { color: colors.textMuted, fontSize: 13, marginTop: 2 },
-  groupMeta: { color: colors.textMuted, fontSize: 12, marginTop: 4 },
-  joinBtn: { backgroundColor: colors.primary, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: borderRadius.sm },
-  joinBtnText: { color: colors.background, fontSize: 13, fontWeight: '700' },
-  joinedBtn: { backgroundColor: colors.primary + '20', paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: borderRadius.sm },
-  joinedBtnText: { color: colors.primary, fontSize: 13, fontWeight: '700' },
-  emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: spacing.md },
-  emptyText: { color: colors.textMuted, fontSize: 15 },
+  groupName: {
+    fontFamily: fonts.heading,
+    fontSize: 17,
+    letterSpacing: 0.4,
+    color: colors.text,
+  },
+  groupMeta: { color: colors.textMuted, fontSize: 12, marginTop: 2 },
+  groupDesc: {
+    fontFamily: fonts.serif,
+    fontSize: 15,
+    lineHeight: 21,
+    color: colors.textMuted,
+    marginTop: spacing.sm,
+  },
+  emptyWrap: { flex: 1, justifyContent: 'center' },
 });

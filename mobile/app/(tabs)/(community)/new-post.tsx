@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import {
-  View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView,
-  Image, ActivityIndicator, Alert, KeyboardAvoidingView, Platform,
+  View, Text, StyleSheet, TextInput, TouchableOpacity, Pressable, ScrollView,
+  Image, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
-import { colors, spacing, borderRadius } from '../../../src/theme/colors';
+import { colors, spacing, borderRadius, fonts, type } from '../../../src/theme/colors';
+import { Button, Card, useToast } from '../../../src/components/ui';
 import { createPost } from '../../../src/api/community';
 import { getFavorites } from '../../../src/api/recommendations';
 
@@ -28,6 +29,7 @@ export default function NewPostScreen() {
   const [favorites, setFavorites] = useState<any[]>([]);
   const [showBeerPicker, setShowBeerPicker] = useState(false);
   const [isPosting, setIsPosting] = useState(false);
+  const { showToast } = useToast();
 
   useEffect(() => {
     getFavorites()
@@ -53,7 +55,7 @@ export default function NewPostScreen() {
       });
       router.back();
     } catch {
-      Alert.alert(t('error'), t('community.postError'));
+      showToast(t('community.postError'), 'error');
     } finally {
       setIsPosting(false);
     }
@@ -83,20 +85,24 @@ export default function NewPostScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
+      <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
         {/* Post type selector */}
         <View style={styles.typeRow}>
           {postTypes.map(({ key, label, icon }) => (
-            <TouchableOpacity
+            <Pressable
               key={key}
-              style={[styles.typeBtn, postType === key && styles.typeBtnActive]}
+              style={({ pressed }) => [
+                styles.typeBtn,
+                postType === key && styles.typeBtnActive,
+                pressed && { opacity: 0.85 },
+              ]}
               onPress={() => setPostType(key)}
             >
-              <Ionicons name={icon} size={16} color={postType === key ? colors.background : colors.textMuted} />
+              <Ionicons name={icon} size={15} color={postType === key ? colors.background : colors.textMuted} />
               <Text style={[styles.typeText, postType === key && styles.typeTextActive]}>
                 {label}
               </Text>
-            </TouchableOpacity>
+            </Pressable>
           ))}
         </View>
 
@@ -115,71 +121,87 @@ export default function NewPostScreen() {
 
         {/* Attached beer */}
         {beer && (
-          <View style={styles.attachedBeer}>
-            {beer.beer_image_url ? (
-              <Image source={{ uri: beer.beer_image_url }} style={styles.attachedBeerImg} />
-            ) : null}
-            <View style={styles.attachedBeerInfo}>
-              <Text style={styles.attachedBeerTitle} numberOfLines={1}>{beer.beer_title}</Text>
-              <Text style={styles.attachedBeerVendor} numberOfLines={1}>{beer.beer_vendor}</Text>
+          <Card variant="inset" style={styles.attachedBeer} padded={false}>
+            <View style={styles.attachedBeerInner}>
+              {beer.beer_image_url ? (
+                <Image source={{ uri: beer.beer_image_url }} style={styles.attachedBeerImg} />
+              ) : (
+                <View style={styles.attachedBeerPlaceholder}>
+                  <Ionicons name="beer" size={20} color={colors.tertiary} />
+                </View>
+              )}
+              <View style={styles.attachedBeerInfo}>
+                <Text style={styles.attachedBeerTitle} numberOfLines={1}>{beer.beer_title}</Text>
+                {beer.beer_vendor ? (
+                  <Text style={styles.attachedBeerVendor} numberOfLines={1}>{beer.beer_vendor}</Text>
+                ) : null}
+              </View>
+              <TouchableOpacity
+                onPress={() => setBeer(null)}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Ionicons name="close-circle" size={22} color={colors.textMuted} />
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity onPress={() => setBeer(null)}>
-              <Ionicons name="close-circle" size={22} color={colors.textMuted} />
-            </TouchableOpacity>
-          </View>
+          </Card>
         )}
 
         {/* Attach beer button */}
         {!beer && (
-          <TouchableOpacity
-            style={styles.attachBtn}
+          <Button
+            label={t('community.attachBeer')}
             onPress={() => setShowBeerPicker(true)}
-          >
-            <Ionicons name="beer" size={18} color={colors.primary} />
-            <Text style={styles.attachBtnText}>{t('community.attachBeer')}</Text>
-          </TouchableOpacity>
+            variant="ghost"
+            size="sm"
+            icon="beer"
+            style={styles.attachBtn}
+          />
         )}
 
         {/* Beer picker */}
         {showBeerPicker && (
-          <View style={styles.beerPicker}>
+          <Card style={styles.beerPicker}>
             <Text style={styles.pickerTitle}>{t('community.selectBeer')}</Text>
             {favorites.length === 0 ? (
               <Text style={styles.noBeer}>{t('community.noBeerToAttach')}</Text>
             ) : (
-              favorites.map((fav: any) => (
-                <TouchableOpacity
+              favorites.map((fav: any, index: number) => (
+                <Pressable
                   key={fav.id}
-                  style={styles.pickerItem}
+                  style={({ pressed }) => [
+                    styles.pickerItem,
+                    index > 0 && styles.pickerItemDivider,
+                    pressed && { opacity: 0.7 },
+                  ]}
                   onPress={() => selectBeer(fav)}
                 >
                   {fav.image_url ? (
                     <Image source={{ uri: fav.image_url }} style={styles.pickerItemImg} />
-                  ) : null}
+                  ) : (
+                    <View style={styles.pickerItemPlaceholder}>
+                      <Ionicons name="beer" size={16} color={colors.tertiary} />
+                    </View>
+                  )}
                   <View style={{ flex: 1 }}>
                     <Text style={styles.pickerItemTitle} numberOfLines={1}>{fav.title}</Text>
-                    <Text style={styles.pickerItemMeta}>{fav.vendor}</Text>
+                    {fav.vendor ? <Text style={styles.pickerItemMeta}>{fav.vendor}</Text> : null}
                   </View>
-                </TouchableOpacity>
+                  <Ionicons name="add-circle-outline" size={20} color={colors.primary} />
+                </Pressable>
               ))
             )}
-          </View>
+          </Card>
         )}
       </ScrollView>
 
       {/* Post button */}
       <View style={styles.footer}>
-        <TouchableOpacity
-          style={[styles.postBtn, (!content.trim() || isPosting) && styles.postBtnDisabled]}
+        <Button
+          label={t('community.post')}
           onPress={handlePost}
-          disabled={!content.trim() || isPosting}
-        >
-          {isPosting ? (
-            <ActivityIndicator size="small" color={colors.background} />
-          ) : (
-            <Text style={styles.postBtnText}>{t('community.post')}</Text>
-          )}
-        </TouchableOpacity>
+          loading={isPosting}
+          disabled={!content.trim()}
+        />
       </View>
     </KeyboardAvoidingView>
   );
@@ -188,81 +210,96 @@ export default function NewPostScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   scrollContent: { padding: spacing.md },
+
   typeRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
   typeBtn: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
+    gap: 5,
+    minHeight: 40,
     paddingVertical: spacing.sm,
-    borderRadius: borderRadius.sm,
+    paddingHorizontal: spacing.xs,
+    borderRadius: borderRadius.pill,
     backgroundColor: colors.surface,
   },
   typeBtnActive: { backgroundColor: colors.primary },
-  typeText: { color: colors.textMuted, fontSize: 12, fontWeight: '600' },
+  typeText: {
+    fontFamily: fonts.heading,
+    fontSize: 11,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    color: colors.textMuted,
+  },
   typeTextActive: { color: colors.background },
+
   textInput: {
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.md,
+    backgroundColor: colors.surfaceLow,
+    borderRadius: borderRadius.lg,
     padding: spacing.md,
+    paddingTop: spacing.md,
     color: colors.text,
-    fontSize: 16,
-    minHeight: 120,
+    fontFamily: fonts.serif,
+    fontSize: 17,
+    lineHeight: 24,
+    minHeight: 140,
     textAlignVertical: 'top',
   },
-  charCount: { color: colors.textMuted, fontSize: 12, textAlign: 'right', marginTop: 4 },
-  attachedBeer: {
+  charCount: { color: colors.textMuted, fontSize: 12, textAlign: 'right', marginTop: spacing.xs },
+
+  attachedBeer: { marginTop: spacing.md },
+  attachedBeerInner: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.sm,
-    padding: spacing.sm,
-    marginTop: spacing.md,
     gap: spacing.sm,
-  },
-  attachedBeerImg: { width: 44, height: 44, borderRadius: 6 },
-  attachedBeerInfo: { flex: 1 },
-  attachedBeerTitle: { color: colors.text, fontSize: 14, fontWeight: '600' },
-  attachedBeerVendor: { color: colors.textMuted, fontSize: 12 },
-  attachBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    marginTop: spacing.md,
     padding: spacing.sm,
   },
-  attachBtnText: { color: colors.primary, fontSize: 14, fontWeight: '600' },
-  beerPicker: {
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
-    marginTop: spacing.sm,
+  attachedBeerImg: { width: 44, height: 44, borderRadius: borderRadius.sm },
+  attachedBeerPlaceholder: {
+    width: 44,
+    height: 44,
+    borderRadius: borderRadius.sm,
+    backgroundColor: colors.surfaceHigh,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  pickerTitle: { color: colors.text, fontSize: 14, fontWeight: '600', marginBottom: spacing.sm },
-  noBeer: { color: colors.textMuted, fontSize: 13 },
+  attachedBeerInfo: { flex: 1 },
+  attachedBeerTitle: { fontFamily: fonts.heading, fontSize: 14, letterSpacing: 0.3, color: colors.text },
+  attachedBeerVendor: { color: colors.textMuted, fontSize: 12, marginTop: 2 },
+
+  attachBtn: { alignSelf: 'flex-start', marginTop: spacing.sm },
+
+  beerPicker: { marginTop: spacing.sm },
+  pickerTitle: { ...type.label, marginBottom: spacing.sm },
+  noBeer: { fontFamily: fonts.serif, fontSize: 15, color: colors.textMuted },
   pickerItem: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
-    paddingVertical: spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: colors.tertiary + '20',
+    paddingVertical: spacing.sm + 2,
+    minHeight: 48,
   },
-  pickerItemImg: { width: 36, height: 36, borderRadius: 4 },
-  pickerItemTitle: { color: colors.text, fontSize: 14 },
-  pickerItemMeta: { color: colors.textMuted, fontSize: 12 },
-  footer: {
-    padding: spacing.md,
-    borderTopWidth: 1,
-    borderTopColor: colors.tertiary + '20',
+  pickerItemDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
   },
-  postBtn: {
-    backgroundColor: colors.primary,
-    borderRadius: borderRadius.md,
-    paddingVertical: spacing.md,
+  pickerItemImg: { width: 36, height: 36, borderRadius: borderRadius.sm },
+  pickerItemPlaceholder: {
+    width: 36,
+    height: 36,
+    borderRadius: borderRadius.sm,
+    backgroundColor: colors.surfaceHigh,
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  postBtnDisabled: { opacity: 0.5 },
-  postBtnText: { color: colors.background, fontSize: 16, fontWeight: '700' },
+  pickerItemTitle: { color: colors.text, fontSize: 14, fontWeight: '500' },
+  pickerItemMeta: { color: colors.textMuted, fontSize: 12, marginTop: 1 },
+
+  footer: {
+    padding: spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+    backgroundColor: colors.background,
+  },
 });

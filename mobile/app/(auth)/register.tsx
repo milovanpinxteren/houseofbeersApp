@@ -143,13 +143,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   title: {
+    fontFamily: 'Oswald_600SemiBold',
     fontSize: 32,
-    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
     color: colors.primary,
     marginBottom: spacing.sm,
   },
   subtitle: {
-    fontSize: 18,
+    fontFamily: 'CrimsonText_400Regular_Italic',
+    fontSize: 19,
     color: colors.textMuted,
   },
   form: {

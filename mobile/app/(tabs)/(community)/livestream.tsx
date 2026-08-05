@@ -19,7 +19,7 @@ import { useLocalSearchParams } from 'expo-router';
 import { useAuth } from '../../../src/context/AuthContext';
 import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
-import { colors, spacing, borderRadius } from '../../../src/theme/colors';
+import { colors, spacing, borderRadius, fonts } from '../../../src/theme/colors';
 import {
   Event,
   EventMessage,
@@ -448,7 +448,7 @@ export default function LivestreamScreen() {
           {!isMe && (
             <Text style={styles.chatAuthor}>{item.user.display_name}</Text>
           )}
-          <Text style={styles.chatText}>{item.message}</Text>
+          <Text style={[styles.chatText, isMe && styles.chatTextMe]}>{item.message}</Text>
         </View>
       );
     },
@@ -466,7 +466,7 @@ export default function LivestreamScreen() {
   if (!event) {
     return (
       <View style={styles.loadingContainer}>
-        <Text style={styles.errorText}>Event not found</Text>
+        <Text style={styles.errorText}>{t('events.notFound')}</Text>
       </View>
     );
   }
@@ -492,6 +492,7 @@ export default function LivestreamScreen() {
         <View style={styles.statusLeft}>
           {event.status === 'live' && (
             <View style={styles.liveBadge}>
+              <View style={styles.liveDot} />
               <Text style={styles.liveBadgeText}>{t('events.liveNow')}</Text>
             </View>
           )}
@@ -577,7 +578,7 @@ export default function LivestreamScreen() {
                 {/* YOU WON! */}
                 {raffleAnimation.isCurrentUser && animationPhase !== 'shuffling' && (
                   <Animated.View style={[styles.youWonContainer, { opacity: youWonOpacity }]}>
-                    <Text style={styles.youWonText}>YOU WON!</Text>
+                    <Text style={styles.youWonText}>{t('events.youWon')}</Text>
                   </Animated.View>
                 )}
 
@@ -647,7 +648,7 @@ export default function LivestreamScreen() {
                 <Ionicons name="trophy" size={20} color={colors.warning} />{' '}
                 {t('events.winners')}
               </Text>
-              <TouchableOpacity onPress={() => setShowWinnersModal(false)}>
+              <TouchableOpacity onPress={() => setShowWinnersModal(false)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
                 <Ionicons name="close" size={24} color={colors.text} />
               </TouchableOpacity>
             </View>
@@ -708,8 +709,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   noVideoText: {
+    fontFamily: fonts.heading,
     color: colors.textMuted,
     fontSize: 16,
+    letterSpacing: 0.4,
     marginTop: spacing.sm,
   },
 
@@ -720,8 +723,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.surface,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
   },
   statusLeft: {
     flexDirection: 'row',
@@ -729,47 +732,67 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   liveBadge: {
-    backgroundColor: '#e74c3c',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: colors.live,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+    borderRadius: borderRadius.pill,
+  },
+  liveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#fff',
   },
   liveBadgeText: {
+    fontFamily: fonts.headingBold,
     color: '#fff',
     fontSize: 11,
-    fontWeight: '700',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
   },
   viewerCount: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 5,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: 3,
+    borderRadius: borderRadius.pill,
   },
   viewerCountText: {
+    fontFamily: fonts.heading,
     color: colors.textMuted,
-    fontSize: 13,
+    fontSize: 12,
+    letterSpacing: 0.4,
   },
   winnersButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    backgroundColor: colors.surface,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: borderRadius.sm,
+    gap: 5,
+    backgroundColor: colors.surfaceHigh,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: borderRadius.pill,
+    minHeight: 30,
   },
   winnersButtonText: {
+    fontFamily: fonts.heading,
     color: colors.warning,
-    fontSize: 13,
-    fontWeight: '600',
+    fontSize: 12,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
   },
 
   // Auction panel
   auctionPanel: {
     backgroundColor: colors.surface,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.primary + '30',
+    paddingVertical: spacing.sm + 2,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.primary,
   },
   auctionHeader: {
     flexDirection: 'row',
@@ -778,15 +801,17 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   auctionLabel: {
+    fontFamily: fonts.heading,
     color: colors.primary,
-    fontSize: 12,
-    fontWeight: '600',
+    fontSize: 11,
+    letterSpacing: 1.5,
     textTransform: 'uppercase',
   },
   auctionTitle: {
+    fontFamily: fonts.heading,
     color: colors.text,
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 17,
+    letterSpacing: 0.4,
   },
   auctionPrice: {
     color: colors.textMuted,
@@ -798,17 +823,18 @@ const styles = StyleSheet.create({
   soldBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceHigh,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.sm + 2,
     gap: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.success + '30',
+    borderLeftWidth: 3,
+    borderLeftColor: colors.success,
   },
   soldBannerText: {
+    fontFamily: fonts.heading,
     color: colors.text,
     fontSize: 14,
-    fontWeight: '600',
+    letterSpacing: 0.3,
     flex: 1,
   },
 
@@ -833,9 +859,10 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xl,
   },
   rafflePrizeText: {
+    fontFamily: fonts.heading,
     color: colors.primary,
     fontSize: 18,
-    fontWeight: '600',
+    letterSpacing: 0.5,
   },
   raffleNameContainer: {
     alignItems: 'center',
@@ -843,30 +870,33 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   raffleShuffleName: {
+    fontFamily: fonts.headingRegular,
     color: colors.textMuted,
     fontSize: 28,
-    fontWeight: '500',
+    letterSpacing: 0.6,
     textAlign: 'center',
   },
   raffleWinnerName: {
+    fontFamily: fonts.headingBold,
     color: colors.text,
     fontSize: 36,
-    fontWeight: '700',
+    letterSpacing: 0.6,
   },
   youWonContainer: {
     marginTop: spacing.lg,
     paddingHorizontal: spacing.xl,
     paddingVertical: spacing.md,
-    borderRadius: borderRadius.lg,
+    borderRadius: borderRadius.pill,
     borderWidth: 2,
     borderColor: colors.warning,
   },
   youWonText: {
+    fontFamily: fonts.headingBold,
     color: colors.warning,
-    fontSize: 28,
-    fontWeight: '800',
+    fontSize: 26,
     textAlign: 'center',
     letterSpacing: 4,
+    textTransform: 'uppercase',
   },
   raffleDismissHint: {
     color: colors.textMuted,
@@ -883,21 +913,26 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.md,
   },
   chatBubble: {
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.sm,
-    padding: spacing.sm,
-    marginBottom: spacing.xs,
+    backgroundColor: colors.surfaceHigh,
+    borderRadius: 16,
+    borderBottomLeftRadius: 4,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm + 4,
+    marginBottom: spacing.xs + 2,
     maxWidth: '85%',
     alignSelf: 'flex-start',
   },
   chatBubbleMe: {
-    backgroundColor: colors.primary + '20',
+    backgroundColor: colors.primary,
     alignSelf: 'flex-end',
+    borderBottomLeftRadius: 16,
+    borderBottomRightRadius: 4,
   },
   chatAuthor: {
+    fontFamily: fonts.heading,
     color: colors.primary,
-    fontSize: 12,
-    fontWeight: '600',
+    fontSize: 11,
+    letterSpacing: 0.6,
     marginBottom: 2,
   },
   chatText: {
@@ -905,47 +940,51 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
   },
+  chatTextMe: {
+    color: colors.background,
+  },
   systemMessage: {
     alignItems: 'center',
     paddingVertical: spacing.xs,
   },
   systemMessageText: {
+    fontFamily: fonts.heading,
     color: colors.warning,
-    fontSize: 13,
-    fontWeight: '600',
+    fontSize: 12,
+    letterSpacing: 0.6,
   },
 
   // Input
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    paddingHorizontal: spacing.sm,
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: colors.surface,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
     backgroundColor: colors.background,
   },
   input: {
     flex: 1,
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.md,
+    backgroundColor: colors.surfaceLow,
+    borderRadius: borderRadius.pill,
     paddingHorizontal: spacing.md,
-    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
+    paddingVertical: Platform.OS === 'ios' ? 12 : 10,
     color: colors.text,
     fontSize: 14,
     maxHeight: 100,
   },
   sendButton: {
     backgroundColor: colors.primary,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     justifyContent: 'center',
     alignItems: 'center',
-    marginLeft: spacing.sm,
   },
   sendButtonDisabled: {
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceHigh,
   },
 
   // Winners Modal
@@ -955,9 +994,9 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   modalContent: {
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: borderRadius.lg,
-    borderTopRightRadius: borderRadius.lg,
+    backgroundColor: colors.surfaceHigh,
+    borderTopLeftRadius: borderRadius.xl,
+    borderTopRightRadius: borderRadius.xl,
     maxHeight: '60%',
     paddingBottom: spacing.xl,
   },
@@ -966,13 +1005,14 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.tertiary + '20',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
   },
   modalTitle: {
+    fontFamily: fonts.heading,
     color: colors.text,
     fontSize: 18,
-    fontWeight: '600',
+    letterSpacing: 0.5,
   },
   noWinnersText: {
     color: colors.textMuted,
@@ -985,9 +1025,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.tertiary + '10',
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
   },
   winnerInfo: {
     flexDirection: 'row',
@@ -995,9 +1035,10 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   winnerName: {
+    fontFamily: fonts.heading,
     color: colors.text,
     fontSize: 15,
-    fontWeight: '500',
+    letterSpacing: 0.3,
   },
   winnerPrize: {
     color: colors.primary,

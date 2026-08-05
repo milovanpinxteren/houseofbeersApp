@@ -38,6 +38,7 @@ export interface Post {
   comment_count: number;
   is_liked: boolean;
   created_at: string;
+  edited_at: string | null;
 }
 
 export interface Comment {
@@ -47,6 +48,7 @@ export interface Comment {
   parent_id: number | null;
   replies?: Comment[];
   created_at: string;
+  edited_at: string | null;
 }
 
 export interface ConversationSummary {
@@ -221,6 +223,13 @@ export async function deletePost(postId: number): Promise<void> {
   await apiFetch(`/community/posts/${postId}/`, { method: 'DELETE' });
 }
 
+export async function editPost(postId: number, content: string): Promise<Post> {
+  return apiFetch<Post>(`/community/posts/${postId}/`, {
+    method: 'PATCH',
+    body: JSON.stringify({ content }),
+  });
+}
+
 export async function toggleLike(postId: number): Promise<{ liked: boolean; like_count: number }> {
   return apiFetch(`/community/posts/${postId}/like/`, { method: 'POST' });
 }
@@ -238,6 +247,13 @@ export async function addComment(postId: number, content: string, parentId?: num
 
 export async function deleteComment(commentId: number): Promise<void> {
   await apiFetch(`/community/comments/${commentId}/`, { method: 'DELETE' });
+}
+
+export async function editComment(commentId: number, content: string): Promise<Comment> {
+  return apiFetch<Comment>(`/community/comments/${commentId}/`, {
+    method: 'PATCH',
+    body: JSON.stringify({ content }),
+  });
 }
 
 // --- Conversations (DMs) ---
@@ -344,6 +360,7 @@ export interface Suggestion {
   comment_count: number;
   is_voted: boolean;
   created_at: string;
+  edited_at: string | null;
 }
 
 export interface SuggestionComment {
@@ -353,6 +370,7 @@ export interface SuggestionComment {
   vote_count: number;
   is_voted: boolean;
   created_at: string;
+  edited_at: string | null;
 }
 
 export async function getSuggestions(page = 1, sort: 'top' | 'new' = 'top'): Promise<PaginatedResponse<Suggestion>> {
@@ -378,6 +396,13 @@ export async function deleteSuggestion(id: number): Promise<void> {
   await apiFetch(`/community/suggestions/${id}/`, { method: 'DELETE' });
 }
 
+export async function editSuggestion(id: number, data: { title?: string; content?: string }): Promise<Suggestion> {
+  return apiFetch<Suggestion>(`/community/suggestions/${id}/`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
 export async function toggleSuggestionVote(id: number): Promise<{ voted: boolean; vote_count: number }> {
   return apiFetch(`/community/suggestions/${id}/vote/`, { method: 'POST' });
 }
@@ -395,6 +420,13 @@ export async function addSuggestionComment(id: number, content: string): Promise
 
 export async function deleteSuggestionComment(commentId: number): Promise<void> {
   await apiFetch(`/community/suggestions/comments/${commentId}/`, { method: 'DELETE' });
+}
+
+export async function editSuggestionComment(commentId: number, content: string): Promise<SuggestionComment> {
+  return apiFetch<SuggestionComment>(`/community/suggestions/comments/${commentId}/`, {
+    method: 'PATCH',
+    body: JSON.stringify({ content }),
+  });
 }
 
 export async function toggleSuggestionCommentVote(commentId: number): Promise<{ voted: boolean; vote_count: number }> {

@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View,
   Text,
   TextInput,
-  TouchableOpacity,
+  Pressable,
   StyleSheet,
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -22,12 +22,13 @@ import {
   getUntappdProfile,
   UntappdProfile,
 } from '../../../src/api/recommendations';
-import { colors, spacing, borderRadius } from '../../../src/theme/colors';
-import { useEffect } from 'react';
+import { colors, spacing, borderRadius, fonts, type } from '../../../src/theme/colors';
+import { Button, Card, useToast } from '../../../src/components/ui';
 
 export default function ConnectUntappdScreen() {
   const router = useRouter();
   const { language } = useLanguage();
+  const { showToast } = useToast();
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [username, setUsername] = useState('');
@@ -65,11 +66,8 @@ export default function ConnectUntappdScreen() {
     try {
       const result = await linkUntappd(trimmedUsername);
       setProfile(result.untappd);
-      Alert.alert(
-        t('common.success'),
-        t('recommendations.untappdConnected'),
-        [{ text: t('common.ok'), onPress: () => router.back() }]
-      );
+      showToast(t('recommendations.untappdConnected'), 'success');
+      router.back();
     } catch (err) {
       console.log('[ConnectUntappd] Connect error:', err);
       if (err instanceof Error) {
@@ -103,13 +101,10 @@ export default function ConnectUntappdScreen() {
               await unlinkUntappd();
               setProfile(null);
               setUsername('');
-              Alert.alert(
-                t('common.success'),
-                t('recommendations.untappdDisconnected')
-              );
+              showToast(t('recommendations.untappdDisconnected'), 'success');
             } catch (err) {
               console.log('[ConnectUntappd] Disconnect error:', err);
-              Alert.alert(t('common.error'), t('recommendations.disconnectError'));
+              showToast(t('recommendations.disconnectError'), 'error');
             } finally {
               setIsSubmitting(false);
             }
@@ -135,120 +130,106 @@ export default function ConnectUntappdScreen() {
   if (profile) {
     return (
       <View style={styles.container}>
-          <View style={styles.connectedCard}>
-            <View style={styles.connectedIcon}>
-              <Ionicons name="checkmark-circle" size={48} color={colors.success} />
-            </View>
-            <Text style={styles.connectedTitle}>{t('recommendations.connected')}</Text>
-            <Text style={styles.connectedUsername}>@{profile.username}</Text>
-            {profile.linked_at && (
-              <Text style={styles.syncedText}>
-                {t('recommendations.linkedOn')}: {new Date(profile.linked_at).toLocaleDateString()}
-              </Text>
-            )}
+        <View style={styles.connectedWrap}>
+          <View style={styles.connectedIconCircle}>
+            <Ionicons name="checkmark" size={36} color={colors.success} />
           </View>
-
-          <TouchableOpacity
-            style={styles.disconnectButton}
+          <Text style={styles.connectedLabel}>{t('recommendations.connected')}</Text>
+          <Text style={styles.connectedUsername}>@{profile.username}</Text>
+          {profile.linked_at && (
+            <Text style={styles.syncedText}>
+              {t('recommendations.linkedOn')}: {new Date(profile.linked_at).toLocaleDateString()}
+            </Text>
+          )}
+          <Button
+            label={t('recommendations.disconnectUntappd')}
+            icon="unlink"
+            variant="danger"
             onPress={handleDisconnect}
-            disabled={isSubmitting}
-          >
-            {isSubmitting ? (
-              <ActivityIndicator size="small" color={colors.error} />
-            ) : (
-              <>
-                <Ionicons name="unlink" size={20} color={colors.error} />
-                <Text style={styles.disconnectButtonText}>
-                  {t('recommendations.disconnectUntappd')}
-                </Text>
-              </>
-            )}
-          </TouchableOpacity>
+            loading={isSubmitting}
+            style={styles.disconnectButton}
+          />
         </View>
+      </View>
     );
   }
 
   // Connect form
   return (
     <KeyboardAvoidingView
-        style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
       >
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
+        {/* Hero */}
+        <View style={styles.hero}>
+          <View style={styles.heroIconCircle}>
+            <Ionicons name="beer" size={34} color={colors.primary} />
+          </View>
+          <Text style={styles.heroTitle}>{t('recommendations.connectUntappdTitle')}</Text>
+          <Text style={styles.heroText}>{t('recommendations.connectUntappdDescription')}</Text>
+        </View>
+
+        {/* Benefits */}
+        <Card style={styles.benefitsCard}>
+          <Text style={styles.benefitsTitle}>{t('recommendations.benefits')}</Text>
+          <View style={styles.benefit}>
+            <Ionicons name="analytics" size={18} color={colors.primary} />
+            <Text style={styles.benefitText}>{t('recommendations.benefit1')}</Text>
+          </View>
+          <View style={styles.benefit}>
+            <Ionicons name="star" size={18} color={colors.primary} />
+            <Text style={styles.benefitText}>{t('recommendations.benefit2')}</Text>
+          </View>
+          <View style={[styles.benefit, styles.benefitLast]}>
+            <Ionicons name="thumbs-up" size={18} color={colors.primary} />
+            <Text style={styles.benefitText}>{t('recommendations.benefit3')}</Text>
+          </View>
+        </Card>
+
+        {/* Form */}
+        <View style={styles.form}>
+          <Text style={styles.formLabel}>{t('recommendations.untappdUsername')}</Text>
+          <View style={styles.inputContainer}>
+            <Text style={styles.inputPrefix}>@</Text>
+            <TextInput
+              style={styles.input}
+              value={username}
+              onChangeText={setUsername}
+              placeholder={t('recommendations.usernamePlaceholder')}
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!isSubmitting}
+            />
+          </View>
+          {error ? <Text style={styles.errorText}>{error}</Text> : null}
+
+          <Button
+            label={t('recommendations.connect')}
+            icon="link"
+            onPress={handleConnect}
+            loading={isSubmitting}
+            style={styles.connectButton}
+          />
+        </View>
+
+        {/* Note */}
+        <Text style={styles.noteText}>{t('recommendations.publicProfileNote')}</Text>
+
+        {/* Link to Untappd */}
+        <Pressable
+          style={({ pressed }) => [styles.untappdLink, pressed && { opacity: 0.7 }]}
+          onPress={openUntappd}
         >
-          {/* Info Card */}
-          <View style={styles.infoCard}>
-            <Ionicons name="beer" size={48} color={colors.primary} />
-            <Text style={styles.infoTitle}>{t('recommendations.connectUntappdTitle')}</Text>
-            <Text style={styles.infoText}>{t('recommendations.connectUntappdDescription')}</Text>
-          </View>
-
-          {/* Benefits */}
-          <View style={styles.benefitsCard}>
-            <Text style={styles.benefitsTitle}>{t('recommendations.benefits')}</Text>
-            <View style={styles.benefit}>
-              <Ionicons name="analytics" size={20} color={colors.primary} />
-              <Text style={styles.benefitText}>{t('recommendations.benefit1')}</Text>
-            </View>
-            <View style={styles.benefit}>
-              <Ionicons name="star" size={20} color={colors.primary} />
-              <Text style={styles.benefitText}>{t('recommendations.benefit2')}</Text>
-            </View>
-            <View style={styles.benefit}>
-              <Ionicons name="thumbs-up" size={20} color={colors.primary} />
-              <Text style={styles.benefitText}>{t('recommendations.benefit3')}</Text>
-            </View>
-          </View>
-
-          {/* Form */}
-          <View style={styles.formCard}>
-            <Text style={styles.formLabel}>{t('recommendations.untappdUsername')}</Text>
-            <View style={styles.inputContainer}>
-              <Text style={styles.inputPrefix}>@</Text>
-              <TextInput
-                style={styles.input}
-                value={username}
-                onChangeText={setUsername}
-                placeholder={t('recommendations.usernamePlaceholder')}
-                placeholderTextColor={colors.textMuted}
-                autoCapitalize="none"
-                autoCorrect={false}
-                editable={!isSubmitting}
-              />
-            </View>
-            {error ? <Text style={styles.errorText}>{error}</Text> : null}
-
-            <TouchableOpacity
-              style={[styles.connectButton, isSubmitting && styles.buttonDisabled]}
-              onPress={handleConnect}
-              disabled={isSubmitting}
-            >
-              {isSubmitting ? (
-                <ActivityIndicator size="small" color={colors.background} />
-              ) : (
-                <>
-                  <Ionicons name="link" size={20} color={colors.background} />
-                  <Text style={styles.connectButtonText}>{t('recommendations.connect')}</Text>
-                </>
-              )}
-            </TouchableOpacity>
-          </View>
-
-          {/* Note */}
-          <View style={styles.noteCard}>
-            <Ionicons name="information-circle" size={20} color={colors.textMuted} />
-            <Text style={styles.noteText}>{t('recommendations.publicProfileNote')}</Text>
-          </View>
-
-          {/* Link to Untappd */}
-          <TouchableOpacity style={styles.untappdLink} onPress={openUntappd}>
-            <Text style={styles.untappdLinkText}>{t('recommendations.dontHaveUntappd')}</Text>
-            <Ionicons name="open-outline" size={16} color={colors.primary} />
-          </TouchableOpacity>
-        </ScrollView>
-      </KeyboardAvoidingView>
+          <Text style={styles.untappdLinkText}>{t('recommendations.dontHaveUntappd')}</Text>
+          <Ionicons name="open-outline" size={15} color={colors.primary} />
+        </Pressable>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -264,83 +245,81 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   scrollContent: {
-    padding: spacing.md,
+    padding: spacing.lg,
+    maxWidth: 480,
+    width: '100%',
+    alignSelf: 'center',
   },
 
-  // Info Card
-  infoCard: {
-    backgroundColor: colors.surface,
-    padding: spacing.lg,
-    borderRadius: borderRadius.lg,
+  // Hero
+  hero: {
+    alignItems: 'center',
+    paddingVertical: spacing.lg,
+  },
+  heroIconCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: colors.primary + '14',
+    justifyContent: 'center',
     alignItems: 'center',
     marginBottom: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.primary + '40',
   },
-  infoTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: colors.text,
-    marginTop: spacing.md,
+  heroTitle: {
+    ...type.title,
     textAlign: 'center',
   },
-  infoText: {
-    fontSize: 14,
+  heroText: {
+    fontFamily: fonts.serif,
+    fontSize: 16,
+    lineHeight: 23,
     color: colors.textMuted,
     marginTop: spacing.sm,
     textAlign: 'center',
-    lineHeight: 20,
+    maxWidth: 320,
   },
 
   // Benefits
   benefitsCard: {
-    backgroundColor: colors.surface,
-    padding: spacing.md,
-    borderRadius: borderRadius.md,
-    marginBottom: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.tertiary + '30',
+    marginTop: spacing.md,
   },
   benefitsTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: colors.text,
+    ...type.label,
     marginBottom: spacing.md,
   },
   benefit: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-    marginBottom: spacing.sm,
+    gap: spacing.sm + spacing.xs,
+    marginBottom: spacing.sm + spacing.xs,
+  },
+  benefitLast: {
+    marginBottom: 0,
   },
   benefitText: {
-    fontSize: 14,
+    fontFamily: fonts.serif,
+    fontSize: 16,
+    lineHeight: 21,
     color: colors.text,
     flex: 1,
   },
 
   // Form
-  formCard: {
-    backgroundColor: colors.surface,
-    padding: spacing.md,
-    borderRadius: borderRadius.md,
-    marginBottom: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.tertiary + '30',
+  form: {
+    marginTop: spacing.lg,
   },
   formLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.text,
+    ...type.label,
+    fontSize: 12,
+    letterSpacing: 1.4,
     marginBottom: spacing.sm,
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.background,
+    backgroundColor: colors.surfaceLow,
     borderRadius: borderRadius.md,
-    borderWidth: 1,
-    borderColor: colors.tertiary + '50',
+    minHeight: 50,
   },
   inputPrefix: {
     paddingLeft: spacing.md,
@@ -349,7 +328,8 @@ const styles = StyleSheet.create({
   },
   input: {
     flex: 1,
-    padding: spacing.md,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.sm,
     fontSize: 16,
     color: colors.text,
   },
@@ -359,37 +339,18 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   connectButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.primary,
-    padding: spacing.md,
-    borderRadius: borderRadius.md,
     marginTop: spacing.md,
-    gap: spacing.xs,
-  },
-  buttonDisabled: {
-    opacity: 0.7,
-  },
-  connectButtonText: {
-    color: colors.background,
-    fontSize: 16,
-    fontWeight: '600',
   },
 
   // Note
-  noteCard: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: spacing.sm,
-    marginBottom: spacing.md,
-    paddingHorizontal: spacing.sm,
-  },
   noteText: {
-    fontSize: 13,
+    fontFamily: fonts.serifItalic,
+    fontSize: 15,
+    lineHeight: 20,
     color: colors.textMuted,
-    flex: 1,
-    lineHeight: 18,
+    textAlign: 'center',
+    marginTop: spacing.lg,
+    paddingHorizontal: spacing.md,
   },
 
   // Untappd Link
@@ -399,35 +360,41 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: spacing.xs,
     padding: spacing.md,
+    marginTop: spacing.sm,
+    minHeight: 44,
   },
   untappdLinkText: {
     fontSize: 14,
     color: colors.primary,
+    fontWeight: '500',
   },
 
   // Connected State
-  connectedCard: {
-    backgroundColor: colors.surface,
-    margin: spacing.md,
-    padding: spacing.xl,
-    borderRadius: borderRadius.lg,
+  connectedWrap: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.success + '40',
+    padding: spacing.lg,
   },
-  connectedIcon: {
-    marginBottom: spacing.sm,
+  connectedIconCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: colors.success + '14',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: spacing.md,
   },
-  connectedTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: colors.text,
+  connectedLabel: {
+    ...type.label,
+    color: colors.success,
   },
   connectedUsername: {
-    fontSize: 18,
+    fontFamily: fonts.headingBold,
+    fontSize: 28,
+    letterSpacing: 0.5,
     color: colors.primary,
     marginTop: spacing.xs,
-    fontWeight: '600',
   },
   syncedText: {
     fontSize: 13,
@@ -435,19 +402,8 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   disconnectButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginHorizontal: spacing.md,
-    padding: spacing.md,
-    borderRadius: borderRadius.md,
-    borderWidth: 1,
-    borderColor: colors.error + '40',
-    gap: spacing.xs,
-  },
-  disconnectButtonText: {
-    color: colors.error,
-    fontSize: 16,
-    fontWeight: '500',
+    marginTop: spacing.xl,
+    width: '100%',
+    maxWidth: 360,
   },
 });

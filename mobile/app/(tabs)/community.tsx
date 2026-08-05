@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity, Image, TextInput,
+  View, Text, StyleSheet, FlatList, TouchableOpacity, Pressable, Image, TextInput,
   RefreshControl, ActivityIndicator, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -9,9 +9,10 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useLanguage } from '../../src/context/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { t } from '../../src/i18n';
-import { colors, spacing, borderRadius } from '../../src/theme/colors';
+import { colors, spacing, borderRadius, fonts, type } from '../../src/theme/colors';
+import { Card, EmptyState, SkeletonCard, Badge, Button, useToast } from '../../src/components/ui';
 import {
-  getFeed, toggleLike, deletePost, getGroups, getChats,
+  getFeed, toggleLike, deletePost, editPost, getGroups, getChats,
   getSuggestions, toggleSuggestionVote, deleteSuggestion,
   Post, Group, ChatItem, Suggestion,
 } from '../../src/api/community';
@@ -24,37 +25,82 @@ const STATUS_COLORS: Record<string, string> = {
   declined: colors.textMuted,
 };
 
+function LoadingList() {
+  return (
+    <View style={styles.skeletonWrap}>
+      <SkeletonCard />
+      <SkeletonCard />
+      <SkeletonCard />
+    </View>
+  );
+}
+
 // --- Post Card ---
 
-function PostCard({ post, userId, onLike, onDelete, onComment }: {
+function PostCard({ post, userId, isStaff, onLike, onDelete, onComment, onEdit }: {
   post: Post;
   userId: number;
+  isStaff: boolean;
   onLike: (id: number) => void;
   onDelete: (id: number) => void;
   onComment: (id: number) => void;
+  onEdit: (id: number, content: string) => Promise<boolean>;
 }) {
   const { language } = useLanguage();
   const isOwn = post.author.user_id === userId;
+  const canModerate = isOwn || isStaff;
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+
+  const startEdit = () => {
+    setDraft(post.content);
+    setIsEditing(true);
+  };
+
+  const saveEdit = async () => {
+    if (!draft.trim() || isSaving) return;
+    setIsSaving(true);
+    const ok = await onEdit(post.id, draft.trim());
+    setIsSaving(false);
+    if (ok) setIsEditing(false);
+  };
 
   return (
-    <View style={styles.postCard}>
+    <Card style={styles.postCard}>
       <View style={styles.postHeader}>
-        <TouchableOpacity
-          style={styles.authorRow}
+        <Pressable
+          style={({ pressed }) => [styles.authorRow, pressed && { opacity: 0.7 }]}
           onPress={() => router.push(`/(tabs)/(community)/member-profile?userId=${post.author.user_id}`)}
         >
           <View style={styles.avatarSm}>
-            <Ionicons name="person" size={18} color={colors.textMuted} />
+            <Ionicons name="person" size={18} color={colors.tertiary} />
           </View>
           <View>
             <Text style={styles.authorName}>{post.author.display_name}</Text>
-            <Text style={styles.postTime}>{timeAgo(post.created_at)}</Text>
+            <Text style={styles.postTime}>
+              {timeAgo(post.created_at)}
+              {post.edited_at ? ` · ${t('community.edited')}` : ''}
+            </Text>
           </View>
-        </TouchableOpacity>
-        {isOwn && (
-          <TouchableOpacity onPress={() => onDelete(post.id)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <Ionicons name="trash-outline" size={18} color={colors.textMuted} />
-          </TouchableOpacity>
+        </Pressable>
+        {canModerate && !isEditing && (
+          <View style={styles.moderateRow}>
+            <Pressable
+              onPress={startEdit}
+              hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
+              style={({ pressed }) => pressed && { opacity: 0.6 }}
+            >
+              <Ionicons name="pencil-outline" size={18} color={colors.textMuted} />
+            </Pressable>
+            <Pressable
+              onPress={() => onDelete(post.id)}
+              hitSlop={{ top: 12, bottom: 12, left: 8, right: 12 }}
+              style={({ pressed }) => pressed && { opacity: 0.6 }}
+            >
+              <Ionicons name="trash-outline" size={18} color={colors.textMuted} />
+            </Pressable>
+          </View>
         )}
       </View>
 
@@ -62,7 +108,7 @@ function PostCard({ post, userId, onLike, onDelete, onComment }: {
         <View style={styles.postTypeBadge}>
           <Ionicons
             name={post.post_type === 'review' ? 'star' : 'share-social'}
-            size={12}
+            size={11}
             color={colors.primary}
           />
           <Text style={styles.postTypeText}>
@@ -71,7 +117,25 @@ function PostCard({ post, userId, onLike, onDelete, onComment }: {
         </View>
       )}
 
-      <Text style={styles.postContent}>{post.content}</Text>
+      {isEditing ? (
+        <View style={styles.editWrap}>
+          <TextInput
+            style={styles.editInput}
+            value={draft}
+            onChangeText={setDraft}
+            multiline
+            maxLength={1000}
+            placeholderTextColor={colors.textMuted}
+            autoFocus
+          />
+          <View style={styles.editActions}>
+            <Button label={t('cancel')} variant="ghost" size="sm" onPress={() => setIsEditing(false)} />
+            <Button label={t('save')} size="sm" onPress={saveEdit} loading={isSaving} disabled={!draft.trim()} />
+          </View>
+        </View>
+      ) : (
+        <Text style={styles.postContent}>{post.content}</Text>
+      )}
 
       {post.beer_title ? (
         <View style={styles.beerCard}>
@@ -84,7 +148,7 @@ function PostCard({ post, userId, onLike, onDelete, onComment }: {
             <View style={styles.beerMeta}>
               {post.beer_rating != null && (
                 <View style={styles.ratingBadge}>
-                  <Ionicons name="star" size={10} color="#B8860B" />
+                  <Ionicons name="star" size={10} color={colors.warning} />
                   <Text style={styles.ratingText}>{Number(post.beer_rating).toFixed(1)}</Text>
                 </View>
               )}
@@ -95,27 +159,36 @@ function PostCard({ post, userId, onLike, onDelete, onComment }: {
       ) : null}
 
       <View style={styles.postActions}>
-        <TouchableOpacity style={styles.actionBtn} onPress={() => onLike(post.id)}>
+        <Pressable
+          style={({ pressed }) => [styles.actionBtn, pressed && { opacity: 0.6 }]}
+          onPress={() => onLike(post.id)}
+          hitSlop={{ top: 8, bottom: 8 }}
+        >
           <Ionicons name={post.is_liked ? 'heart' : 'heart-outline'} size={20} color={post.is_liked ? colors.error : colors.textMuted} />
           <Text style={[styles.actionText, post.is_liked && { color: colors.error }]}>{post.like_count}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.actionBtn} onPress={() => onComment(post.id)}>
+        </Pressable>
+        <Pressable
+          style={({ pressed }) => [styles.actionBtn, pressed && { opacity: 0.6 }]}
+          onPress={() => onComment(post.id)}
+          hitSlop={{ top: 8, bottom: 8 }}
+        >
           <Ionicons name="chatbubble-outline" size={18} color={colors.textMuted} />
           <Text style={styles.actionText}>{post.comment_count}</Text>
-        </TouchableOpacity>
+        </Pressable>
       </View>
-    </View>
+    </Card>
   );
 }
 
 // --- Feed Tab ---
 
-function FeedTab({ userId }: { userId: number }) {
+function FeedTab({ userId, isStaff }: { userId: number; isStaff: boolean }) {
   const [posts, setPosts] = useState<Post[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const { showToast } = useToast();
 
   const loadFeed = useCallback(async () => {
     try {
@@ -123,12 +196,12 @@ function FeedTab({ userId }: { userId: number }) {
       setPosts(data.results);
       setNextCursor(data.next);
     } catch {
-      Alert.alert(t('error'), t('community.loadError'));
+      showToast(t('community.loadError'), 'error');
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, []);
+  }, [showToast]);
 
   const loadMore = useCallback(async () => {
     if (!nextCursor || loadingMore) return;
@@ -155,12 +228,30 @@ function FeedTab({ userId }: { userId: number }) {
     Alert.alert(t('community.deletePost'), t('community.deletePostConfirm'), [
       { text: t('cancel'), style: 'cancel' },
       { text: t('community.deletePost'), style: 'destructive', onPress: async () => {
-        try { await deletePost(postId); setPosts(prev => prev.filter(p => p.id !== postId)); } catch {}
+        try {
+          await deletePost(postId);
+          setPosts(prev => prev.filter(p => p.id !== postId));
+          showToast(t('community.deleted'), 'success');
+        } catch {
+          showToast(t('community.deleteError'), 'error');
+        }
       }},
     ]);
-  }, []);
+  }, [showToast]);
 
-  if (isLoading) return <View style={styles.center}><ActivityIndicator size="large" color={colors.primary} /></View>;
+  const handleEdit = useCallback(async (postId: number, content: string) => {
+    try {
+      const updated = await editPost(postId, content);
+      setPosts(prev => prev.map(p => (p.id === postId ? updated : p)));
+      showToast(t('community.editSaved'), 'success');
+      return true;
+    } catch {
+      showToast(t('community.editError'), 'error');
+      return false;
+    }
+  }, [showToast]);
+
+  if (isLoading) return <LoadingList />;
 
   return (
     <View style={{ flex: 1 }}>
@@ -168,24 +259,31 @@ function FeedTab({ userId }: { userId: number }) {
         data={posts}
         keyExtractor={(item) => item.id.toString()}
         renderItem={({ item }) => (
-          <PostCard post={item} userId={userId} onLike={handleLike} onDelete={handleDelete}
+          <PostCard post={item} userId={userId} isStaff={isStaff} onLike={handleLike}
+            onDelete={handleDelete} onEdit={handleEdit}
             onComment={(id) => router.push(`/(tabs)/(community)/post-comments?postId=${id}`)} />
         )}
         ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Ionicons name="chatbubbles-outline" size={48} color={colors.textMuted} />
-            <Text style={styles.emptyText}>{t('community.emptyFeed')}</Text>
-          </View>
+          <EmptyState
+            icon="chatbubbles-outline"
+            title={t('community.emptyFeedTitle')}
+            message={t('community.emptyFeedHint')}
+            actionLabel={t('community.newPost')}
+            onAction={() => router.push('/(tabs)/(community)/new-post')}
+          />
         }
         refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={() => { setIsRefreshing(true); loadFeed(); }} tintColor={colors.primary} />}
         onEndReached={loadMore}
         onEndReachedThreshold={0.5}
         ListFooterComponent={loadingMore ? <ActivityIndicator color={colors.primary} style={{ padding: spacing.md }} /> : null}
-        contentContainerStyle={posts.length === 0 ? { flex: 1 } : undefined}
+        contentContainerStyle={posts.length === 0 ? styles.emptyListContent : styles.listContent}
       />
-      <TouchableOpacity style={styles.fab} onPress={() => router.push('/(tabs)/(community)/new-post')} activeOpacity={0.8}>
+      <Pressable
+        style={({ pressed }) => [styles.fab, pressed && { opacity: 0.85, transform: [{ scale: 0.96 }] }]}
+        onPress={() => router.push('/(tabs)/(community)/new-post')}
+      >
         <Ionicons name="add" size={28} color={colors.background} />
-      </TouchableOpacity>
+      </Pressable>
     </View>
   );
 }
@@ -197,56 +295,67 @@ function GroupsTab() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const { showToast } = useToast();
 
   const load = useCallback(async () => {
     try { const data = await getGroups(); setGroups(data.groups); }
-    catch { Alert.alert(t('error'), t('community.loadError')); }
+    catch { showToast(t('community.loadError'), 'error'); }
     finally { setIsLoading(false); setIsRefreshing(false); }
-  }, []);
+  }, [showToast]);
 
   useFocusEffect(
     useCallback(() => { load(); }, [load])
   );
 
-  if (isLoading) return <View style={styles.center}><ActivityIndicator size="large" color={colors.primary} /></View>;
+  if (isLoading) return <LoadingList />;
 
   return (
     <FlatList
       data={groups}
       keyExtractor={(item) => item.id.toString()}
       ListHeaderComponent={
-        <TouchableOpacity style={styles.browseBtn} onPress={() => router.push('/(tabs)/(community)/browse-groups')}>
-          <Ionicons name="search" size={18} color={colors.primary} />
-          <Text style={styles.browseBtnText}>{t('community.browseGroups')}</Text>
-          <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
-        </TouchableOpacity>
+        <Card
+          style={styles.browseBtn}
+          onPress={() => router.push('/(tabs)/(community)/browse-groups')}
+        >
+          <View style={styles.browseBtnInner}>
+            <View style={styles.browseIconWrap}>
+              <Ionicons name="compass-outline" size={20} color={colors.primary} />
+            </View>
+            <Text style={styles.browseBtnText}>{t('community.browseGroups')}</Text>
+            <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+          </View>
+        </Card>
       }
       renderItem={({ item }) => (
-        <TouchableOpacity
+        <Card
           style={styles.chatRow}
           onPress={() => router.push(`/(tabs)/(community)/group-chat?groupId=${item.id}&groupName=${encodeURIComponent(item.name)}`)}
-          activeOpacity={0.7}
         >
-          <View style={styles.avatarGroup}>
-            <Ionicons name="people" size={22} color={colors.primary} />
+          <View style={styles.chatRowInner}>
+            <View style={styles.avatarGroup}>
+              <Ionicons name="people" size={22} color={colors.primary} />
+            </View>
+            <View style={styles.chatInfo}>
+              <Text style={styles.chatName}>{item.name}</Text>
+              {item.description ? <Text style={styles.chatPreview} numberOfLines={1}>{item.description}</Text> : null}
+              <Text style={styles.chatMeta}>{item.member_count} {t('community.groupMembers').toLowerCase()}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
           </View>
-          <View style={styles.chatInfo}>
-            <Text style={styles.chatName}>{item.name}</Text>
-            {item.description ? <Text style={styles.chatPreview} numberOfLines={1}>{item.description}</Text> : null}
-            <Text style={styles.chatMeta}>{item.member_count} {t('community.groupMembers').toLowerCase()}</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
-        </TouchableOpacity>
+        </Card>
       )}
       ListEmptyComponent={
-        <View style={styles.emptyState}>
-          <Ionicons name="people-outline" size={48} color={colors.textMuted} />
-          <Text style={styles.emptyText}>{t('community.noGroups')}</Text>
-          <Text style={styles.emptyHint}>{t('community.noGroupsHint')}</Text>
-        </View>
+        <EmptyState
+          icon="people-outline"
+          title={t('community.noGroups')}
+          message={t('community.noGroupsHint')}
+          actionLabel={t('community.browseGroups')}
+          onAction={() => router.push('/(tabs)/(community)/browse-groups')}
+        />
       }
       refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={() => { setIsRefreshing(true); load(); }} tintColor={colors.primary} />}
-      contentContainerStyle={groups.length === 0 ? { flex: 1 } : { paddingBottom: spacing.lg }}
+      contentContainerStyle={groups.length === 0 ? styles.emptyListWithHeader : styles.listContent}
     />
   );
 }
@@ -259,12 +368,13 @@ function ChatsTab({ userId }: { userId: number }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const { showToast } = useToast();
 
   const load = useCallback(async () => {
     try { const data = await getChats(); setChats(data.chats); }
-    catch { Alert.alert(t('error'), t('community.loadError')); }
+    catch { showToast(t('community.loadError'), 'error'); }
     finally { setIsLoading(false); setIsRefreshing(false); }
-  }, []);
+  }, [showToast]);
 
   useFocusEffect(
     useCallback(() => { load(); }, [load])
@@ -282,7 +392,7 @@ function ChatsTab({ userId }: { userId: number }) {
     }
   };
 
-  if (isLoading) return <View style={styles.center}><ActivityIndicator size="large" color={colors.primary} /></View>;
+  if (isLoading) return <LoadingList />;
 
   return (
     <View style={{ flex: 1 }}>
@@ -296,7 +406,7 @@ function ChatsTab({ userId }: { userId: number }) {
           onChangeText={setSearchQuery}
         />
         {searchQuery ? (
-          <TouchableOpacity onPress={() => setSearchQuery('')}>
+          <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
             <Ionicons name="close-circle" size={18} color={colors.textMuted} />
           </TouchableOpacity>
         ) : null}
@@ -313,51 +423,56 @@ function ChatsTab({ userId }: { userId: number }) {
               lastMsg.content
             : '';
           return (
-            <TouchableOpacity style={styles.chatRow} onPress={() => handleTap(item)} activeOpacity={0.7}>
-              <View style={item.type === 'group' ? styles.avatarGroup : styles.avatarDm}>
-                <Ionicons name={item.type === 'group' ? 'people' : 'person'} size={20} color={item.type === 'group' ? colors.primary : colors.textMuted} />
-              </View>
-              <View style={styles.chatInfo}>
-                <View style={styles.chatHeader}>
-                  <Text style={[styles.chatName, item.unread_count > 0 && styles.chatNameBold]} numberOfLines={1}>{item.name}</Text>
-                  {lastMsg && <Text style={styles.chatTime}>{timeAgo(lastMsg.created_at)}</Text>}
+            <Card style={styles.chatRow} onPress={() => handleTap(item)}>
+              <View style={styles.chatRowInner}>
+                <View style={item.type === 'group' ? styles.avatarGroup : styles.avatarDm}>
+                  <Ionicons name={item.type === 'group' ? 'people' : 'person'} size={20} color={item.type === 'group' ? colors.primary : colors.tertiary} />
                 </View>
-                {preview ? (
-                  <Text style={[styles.chatPreview, item.unread_count > 0 && styles.chatPreviewUnread]} numberOfLines={1}>{preview}</Text>
-                ) : (
-                  item.type === 'group' && item.member_count ? (
-                    <Text style={styles.chatMeta}>{item.member_count} {t('community.groupMembers').toLowerCase()}</Text>
-                  ) : null
+                <View style={styles.chatInfo}>
+                  <View style={styles.chatHeader}>
+                    <Text style={[styles.chatName, item.unread_count > 0 && styles.chatNameBold]} numberOfLines={1}>{item.name}</Text>
+                    {lastMsg && <Text style={styles.chatTime}>{timeAgo(lastMsg.created_at)}</Text>}
+                  </View>
+                  {preview ? (
+                    <Text style={[styles.chatPreview, item.unread_count > 0 && styles.chatPreviewUnread]} numberOfLines={1}>{preview}</Text>
+                  ) : (
+                    item.type === 'group' && item.member_count ? (
+                      <Text style={styles.chatMeta}>{item.member_count} {t('community.groupMembers').toLowerCase()}</Text>
+                    ) : null
+                  )}
+                </View>
+                {item.unread_count > 0 && (
+                  <Badge value={item.unread_count > 9 ? '9+' : item.unread_count} />
                 )}
               </View>
-              {item.unread_count > 0 && (
-                <View style={styles.unreadBadge}>
-                  <Text style={styles.unreadText}>{item.unread_count > 9 ? '9+' : item.unread_count}</Text>
-                </View>
-              )}
-            </TouchableOpacity>
+            </Card>
           );
         }}
         ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Ionicons name="chatbubbles-outline" size={48} color={colors.textMuted} />
-            <Text style={styles.emptyText}>{t('community.noChats')}</Text>
-            <Text style={styles.emptyHint}>{t('community.noChatsHint')}</Text>
-          </View>
+          <EmptyState
+            icon="chatbubbles-outline"
+            title={t('community.noChats')}
+            message={t('community.noChatsHint')}
+            actionLabel={t('community.members')}
+            onAction={() => router.push('/(tabs)/(community)/members')}
+          />
         }
         refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={() => { setIsRefreshing(true); load(); }} tintColor={colors.primary} />}
-        contentContainerStyle={filteredChats.length === 0 ? { flex: 1 } : { paddingBottom: spacing.lg }}
+        contentContainerStyle={filteredChats.length === 0 ? styles.emptyListContent : styles.listContent}
       />
-      <TouchableOpacity style={styles.fab} onPress={() => router.push('/(tabs)/(community)/members')} activeOpacity={0.8}>
+      <Pressable
+        style={({ pressed }) => [styles.fab, pressed && { opacity: 0.85, transform: [{ scale: 0.96 }] }]}
+        onPress={() => router.push('/(tabs)/(community)/members')}
+      >
         <Ionicons name="person-add" size={22} color={colors.background} />
-      </TouchableOpacity>
+      </Pressable>
     </View>
   );
 }
 
 // --- Forum Tab ---
 
-function ForumTab({ userId }: { userId: number }) {
+function ForumTab({ userId, isStaff }: { userId: number; isStaff: boolean }) {
   const { language } = useLanguage();
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -365,6 +480,7 @@ function ForumTab({ userId }: { userId: number }) {
   const [sortBy, setSortBy] = useState<'top' | 'new'>('top');
   const [nextPage, setNextPage] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const { showToast } = useToast();
 
   const load = useCallback(async () => {
     try {
@@ -372,12 +488,12 @@ function ForumTab({ userId }: { userId: number }) {
       setSuggestions(data.results);
       setNextPage(data.next ? 2 : null);
     } catch {
-      Alert.alert(t('error'), t('community.loadError'));
+      showToast(t('community.loadError'), 'error');
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, [sortBy]);
+  }, [sortBy, showToast]);
 
   const loadMore = useCallback(async () => {
     if (!nextPage || loadingMore) return;
@@ -406,36 +522,46 @@ function ForumTab({ userId }: { userId: number }) {
     Alert.alert(t('community.deleteSuggestion'), t('community.deleteSuggestionConfirm'), [
       { text: t('cancel'), style: 'cancel' },
       { text: t('community.deleteSuggestion'), style: 'destructive', onPress: async () => {
-        try { await deleteSuggestion(id); setSuggestions(prev => prev.filter(s => s.id !== id)); } catch {}
+        try {
+          await deleteSuggestion(id);
+          setSuggestions(prev => prev.filter(s => s.id !== id));
+          showToast(t('community.deleted'), 'success');
+        } catch {
+          showToast(t('community.deleteError'), 'error');
+        }
       }},
     ]);
-  }, []);
+  }, [showToast]);
 
   const statusLabel = (s: string) => t(`community.status${s.charAt(0).toUpperCase() + s.slice(1)}`);
 
-  if (isLoading) return <View style={styles.center}><ActivityIndicator size="large" color={colors.primary} /></View>;
+  if (isLoading) return <LoadingList />;
 
   return (
     <View style={{ flex: 1 }}>
       {/* Sort toggle */}
       <View style={styles.sortBar}>
         {(['top', 'new'] as const).map(key => (
-          <TouchableOpacity
+          <Pressable
             key={key}
-            style={[styles.sortBtn, sortBy === key && styles.sortBtnActive]}
+            style={({ pressed }) => [
+              styles.sortBtn,
+              sortBy === key && styles.sortBtnActive,
+              pressed && { opacity: 0.85 },
+            ]}
             onPress={() => {
               if (sortBy !== key) { setSortBy(key); setIsLoading(true); }
             }}
           >
             <Ionicons
               name={key === 'top' ? 'trending-up' : 'time-outline'}
-              size={14}
+              size={13}
               color={sortBy === key ? colors.background : colors.textMuted}
             />
             <Text style={[styles.sortBtnText, sortBy === key && styles.sortBtnTextActive]}>
               {t(`community.sort${key === 'top' ? 'Top' : 'New'}`)}
             </Text>
-          </TouchableOpacity>
+          </Pressable>
         ))}
       </View>
 
@@ -443,75 +569,94 @@ function ForumTab({ userId }: { userId: number }) {
         data={suggestions}
         keyExtractor={(item) => item.id.toString()}
         renderItem={({ item }) => {
-          const isOwn = item.author.user_id === userId;
+          const canModerate = item.author.user_id === userId || isStaff;
           return (
-            <TouchableOpacity
+            <Card
               style={styles.suggestionCard}
               onPress={() => router.push(`/(tabs)/(community)/suggestion-detail?suggestionId=${item.id}`)}
-              activeOpacity={0.7}
             >
-              {/* Vote column */}
-              <TouchableOpacity style={styles.voteCol} onPress={() => handleVote(item.id)}>
-                <Ionicons
-                  name={item.is_voted ? 'arrow-up-circle' : 'arrow-up-circle-outline'}
-                  size={28}
-                  color={item.is_voted ? colors.primary : colors.textMuted}
-                />
-                <Text style={[styles.voteCount, item.is_voted && { color: colors.primary }]}>
-                  {item.vote_count}
-                </Text>
-              </TouchableOpacity>
+              <View style={styles.suggestionInner}>
+                {/* Vote column */}
+                <Pressable
+                  style={({ pressed }) => [styles.voteCol, pressed && { opacity: 0.7 }]}
+                  onPress={() => handleVote(item.id)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons
+                    name={item.is_voted ? 'arrow-up-circle' : 'arrow-up-circle-outline'}
+                    size={28}
+                    color={item.is_voted ? colors.primary : colors.textMuted}
+                  />
+                  <Text style={[styles.voteCount, item.is_voted && { color: colors.primary }]}>
+                    {item.vote_count}
+                  </Text>
+                </Pressable>
 
-              {/* Content */}
-              <View style={styles.suggestionContent}>
-                <View style={styles.suggestionTopRow}>
-                  {item.tag ? (
-                    <View style={styles.tagBadge}>
-                      <Text style={styles.tagText}>{item.tag}</Text>
-                    </View>
-                  ) : null}
-                  {item.status !== 'open' && (
-                    <View style={[styles.statusBadge, { backgroundColor: (STATUS_COLORS[item.status] || colors.textMuted) + '25' }]}>
-                      <Text style={[styles.statusText, { color: STATUS_COLORS[item.status] || colors.textMuted }]}>
-                        {statusLabel(item.status)}
-                      </Text>
+                {/* Content */}
+                <View style={styles.suggestionContent}>
+                  {(item.tag || item.status !== 'open') && (
+                    <View style={styles.suggestionTopRow}>
+                      {item.tag ? (
+                        <View style={styles.tagBadge}>
+                          <Text style={styles.tagText}>{item.tag}</Text>
+                        </View>
+                      ) : null}
+                      {item.status !== 'open' && (
+                        <View style={[styles.statusBadge, { backgroundColor: (STATUS_COLORS[item.status] || colors.textMuted) + '22' }]}>
+                          <Text style={[styles.statusText, { color: STATUS_COLORS[item.status] || colors.textMuted }]}>
+                            {statusLabel(item.status)}
+                          </Text>
+                        </View>
+                      )}
                     </View>
                   )}
-                </View>
-                <Text style={styles.suggestionTitle} numberOfLines={2}>{item.title}</Text>
-                <Text style={styles.suggestionBody} numberOfLines={2}>{item.content}</Text>
-                <View style={styles.suggestionFooter}>
-                  <Text style={styles.suggestionMeta}>{item.author.display_name} · {timeAgo(item.created_at)}</Text>
-                  <View style={styles.commentCountRow}>
-                    <Ionicons name="chatbubble-outline" size={13} color={colors.textMuted} />
-                    <Text style={styles.suggestionMeta}>{item.comment_count}</Text>
+                  <Text style={styles.suggestionTitle} numberOfLines={2}>{item.title}</Text>
+                  <Text style={styles.suggestionBody} numberOfLines={2}>{item.content}</Text>
+                  <View style={styles.suggestionFooter}>
+                    <Text style={styles.suggestionMeta}>
+                      {item.author.display_name} · {timeAgo(item.created_at)}
+                      {item.edited_at ? ` · ${t('community.edited')}` : ''}
+                    </Text>
+                    <View style={styles.commentCountRow}>
+                      <Ionicons name="chatbubble-outline" size={13} color={colors.textMuted} />
+                      <Text style={styles.suggestionMeta}>{item.comment_count}</Text>
+                    </View>
+                    {canModerate && (
+                      <Pressable
+                        onPress={() => handleDelete(item.id)}
+                        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                        style={({ pressed }) => pressed && { opacity: 0.6 }}
+                      >
+                        <Ionicons name="trash-outline" size={14} color={colors.textMuted} />
+                      </Pressable>
+                    )}
                   </View>
-                  {isOwn && (
-                    <TouchableOpacity onPress={() => handleDelete(item.id)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                      <Ionicons name="trash-outline" size={14} color={colors.textMuted} />
-                    </TouchableOpacity>
-                  )}
                 </View>
               </View>
-            </TouchableOpacity>
+            </Card>
           );
         }}
         ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Ionicons name="bulb-outline" size={48} color={colors.textMuted} />
-            <Text style={styles.emptyText}>{t('community.noSuggestions')}</Text>
-            <Text style={styles.emptyHint}>{t('community.noSuggestionsHint')}</Text>
-          </View>
+          <EmptyState
+            icon="bulb-outline"
+            title={t('community.noSuggestions')}
+            message={t('community.noSuggestionsHint')}
+            actionLabel={t('community.newSuggestion')}
+            onAction={() => router.push('/(tabs)/(community)/new-suggestion')}
+          />
         }
         refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={() => { setIsRefreshing(true); load(); }} tintColor={colors.primary} />}
         onEndReached={loadMore}
         onEndReachedThreshold={0.5}
         ListFooterComponent={loadingMore ? <ActivityIndicator color={colors.primary} style={{ padding: spacing.md }} /> : null}
-        contentContainerStyle={suggestions.length === 0 ? { flex: 1 } : { paddingBottom: spacing.lg }}
+        contentContainerStyle={suggestions.length === 0 ? styles.emptyListContent : styles.listContent}
       />
-      <TouchableOpacity style={styles.fab} onPress={() => router.push('/(tabs)/(community)/new-suggestion')} activeOpacity={0.8}>
+      <Pressable
+        style={({ pressed }) => [styles.fab, pressed && { opacity: 0.85, transform: [{ scale: 0.96 }] }]}
+        onPress={() => router.push('/(tabs)/(community)/new-suggestion')}
+      >
         <Ionicons name="add" size={28} color={colors.background} />
-      </TouchableOpacity>
+      </Pressable>
     </View>
   );
 }
@@ -521,6 +666,7 @@ function ForumTab({ userId }: { userId: number }) {
 export default function CommunityScreen() {
   const { language } = useLanguage();
   const { user } = useAuth();
+  const isStaff = (user as { is_staff?: boolean } | null)?.is_staff === true;
   const [activeTab, setActiveTab] = useState<'feed' | 'groups' | 'chats' | 'forum'>('feed');
 
   const tabs = [
@@ -534,107 +680,232 @@ export default function CommunityScreen() {
     <View style={styles.container}>
       <View style={styles.topTabBar}>
         {tabs.map(tab => (
-          <TouchableOpacity
+          <Pressable
             key={tab.key}
-            style={[styles.topTab, activeTab === tab.key && styles.topTabActive]}
+            style={({ pressed }) => [
+              styles.topTab,
+              activeTab === tab.key && styles.topTabActive,
+              pressed && activeTab !== tab.key && { opacity: 0.7 },
+            ]}
             onPress={() => setActiveTab(tab.key)}
           >
             <Text style={[styles.topTabText, activeTab === tab.key && styles.topTabTextActive]}>
               {tab.label}
             </Text>
-          </TouchableOpacity>
+          </Pressable>
         ))}
       </View>
 
-      {activeTab === 'feed' && <FeedTab userId={user?.id ?? 0} />}
+      {activeTab === 'feed' && <FeedTab userId={user?.id ?? 0} isStaff={isStaff} />}
       {activeTab === 'groups' && <GroupsTab />}
       {activeTab === 'chats' && <ChatsTab userId={user?.id ?? 0} />}
-      {activeTab === 'forum' && <ForumTab userId={user?.id ?? 0} />}
+      {activeTab === 'forum' && <ForumTab userId={user?.id ?? 0} isStaff={isStaff} />}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
-  // Top tabs
-  topTabBar: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: colors.tertiary + '30' },
-  topTab: { flex: 1, alignItems: 'center', paddingVertical: spacing.md, borderBottomWidth: 2, borderBottomColor: 'transparent' },
-  topTabActive: { borderBottomColor: colors.primary },
-  topTabText: { fontSize: 14, fontWeight: '600', color: colors.textMuted },
-  topTabTextActive: { color: colors.primary },
+  skeletonWrap: { padding: spacing.md },
+  listContent: { paddingBottom: spacing.xl * 2 },
+  emptyListContent: { flexGrow: 1, justifyContent: 'center' },
+  emptyListWithHeader: { flexGrow: 1, paddingTop: spacing.md, justifyContent: 'flex-start' },
+
+  // Top tabs — segmented control
+  topTabBar: {
+    flexDirection: 'row',
+    backgroundColor: colors.surfaceLow,
+    borderRadius: borderRadius.pill,
+    marginHorizontal: spacing.md,
+    marginTop: spacing.sm,
+    marginBottom: spacing.xs,
+    padding: 4,
+  },
+  topTab: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: borderRadius.pill,
+  },
+  topTabActive: { backgroundColor: colors.primary },
+  topTabText: {
+    fontFamily: fonts.heading,
+    fontSize: 12,
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    color: colors.textMuted,
+  },
+  topTabTextActive: { color: colors.background },
 
   // Post card
-  postCard: { backgroundColor: colors.surface, marginHorizontal: spacing.md, marginTop: spacing.md, borderRadius: borderRadius.md, padding: spacing.md },
+  postCard: { marginHorizontal: spacing.md, marginTop: spacing.md },
   postHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.sm },
   authorRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  avatarSm: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.tertiary + '30', justifyContent: 'center', alignItems: 'center' },
-  authorName: { color: colors.text, fontSize: 14, fontWeight: '600' },
-  postTime: { color: colors.textMuted, fontSize: 12 },
-  postTypeBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: spacing.xs },
-  postTypeText: { color: colors.primary, fontSize: 12, fontWeight: '600' },
-  postContent: { color: colors.text, fontSize: 15, lineHeight: 22, marginBottom: spacing.sm },
-  beerCard: { flexDirection: 'row', backgroundColor: colors.background, borderRadius: borderRadius.sm, overflow: 'hidden', marginBottom: spacing.sm },
+  avatarSm: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surfaceHigh, justifyContent: 'center', alignItems: 'center' },
+  authorName: { fontFamily: fonts.heading, fontSize: 15, letterSpacing: 0.4, color: colors.text },
+  postTime: { color: colors.textMuted, fontSize: 12, marginTop: 1 },
+  postTypeBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: spacing.xs },
+  postTypeText: {
+    fontFamily: fonts.heading,
+    fontSize: 11,
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
+    color: colors.primary,
+  },
+  postContent: { ...type.serifBody, marginBottom: spacing.md },
+  moderateRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  editWrap: { marginBottom: spacing.md },
+  editInput: {
+    backgroundColor: colors.surfaceLow,
+    borderRadius: borderRadius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    color: colors.text,
+    fontSize: 15,
+    lineHeight: 21,
+    minHeight: 72,
+    textAlignVertical: 'top',
+  },
+  editActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.sm, marginTop: spacing.sm },
+  beerCard: {
+    flexDirection: 'row',
+    backgroundColor: colors.surfaceLow,
+    borderRadius: borderRadius.md,
+    overflow: 'hidden',
+    marginBottom: spacing.md,
+  },
   beerImage: { width: 60, height: 60 },
   beerInfo: { flex: 1, padding: spacing.sm, justifyContent: 'center' },
-  beerTitle: { color: colors.text, fontSize: 13, fontWeight: '600' },
+  beerTitle: { fontFamily: fonts.heading, fontSize: 13, letterSpacing: 0.3, color: colors.text },
   beerVendor: { color: colors.textMuted, fontSize: 12, marginTop: 2 },
   beerMeta: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: 4 },
-  ratingBadge: { flexDirection: 'row', alignItems: 'center', gap: 2, backgroundColor: 'rgba(255, 215, 0, 0.2)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
-  ratingText: { fontSize: 11, fontWeight: '700', color: '#B8860B' },
+  ratingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: colors.warning + '20',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: borderRadius.sm,
+  },
+  ratingText: { fontFamily: fonts.headingBold, fontSize: 11, color: colors.warning },
   beerStyle: { color: colors.textMuted, fontSize: 11 },
-  postActions: { flexDirection: 'row', gap: spacing.lg, paddingTop: spacing.sm, borderTopWidth: 1, borderTopColor: colors.tertiary + '20' },
-  actionBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  actionText: { color: colors.textMuted, fontSize: 13 },
+  postActions: {
+    flexDirection: 'row',
+    gap: spacing.xl,
+    paddingTop: spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+  },
+  actionBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: spacing.xs, minHeight: 32 },
+  actionText: { fontFamily: fonts.heading, fontSize: 13, letterSpacing: 0.4, color: colors.textMuted },
 
   // Chat / group rows
-  chatRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, marginHorizontal: spacing.md, marginTop: spacing.sm, borderRadius: borderRadius.md, padding: spacing.md },
-  avatarDm: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.tertiary + '30', justifyContent: 'center', alignItems: 'center', marginRight: spacing.md },
-  avatarGroup: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.primary + '20', justifyContent: 'center', alignItems: 'center', marginRight: spacing.md },
+  chatRow: { marginHorizontal: spacing.md, marginTop: spacing.sm },
+  chatRowInner: { flexDirection: 'row', alignItems: 'center' },
+  avatarDm: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.surfaceHigh, justifyContent: 'center', alignItems: 'center', marginRight: spacing.md },
+  avatarGroup: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.primary + '18', justifyContent: 'center', alignItems: 'center', marginRight: spacing.md },
   chatInfo: { flex: 1 },
   chatHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  chatName: { color: colors.text, fontSize: 15, flex: 1 },
-  chatNameBold: { fontWeight: '700' },
+  chatName: { fontFamily: fonts.heading, fontSize: 15, letterSpacing: 0.3, color: colors.text, flex: 1 },
+  chatNameBold: { fontFamily: fonts.headingBold },
   chatTime: { color: colors.textMuted, fontSize: 12, marginLeft: spacing.sm },
-  chatPreview: { color: colors.textMuted, fontSize: 13, marginTop: 2 },
+  chatPreview: { color: colors.textMuted, fontSize: 13, marginTop: 3 },
   chatPreviewUnread: { color: colors.text },
-  chatMeta: { color: colors.textMuted, fontSize: 12, marginTop: 2 },
-  unreadBadge: { backgroundColor: colors.primary, borderRadius: 10, minWidth: 20, height: 20, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6, marginLeft: spacing.sm },
-  unreadText: { color: colors.background, fontSize: 11, fontWeight: '700' },
+  chatMeta: { color: colors.textMuted, fontSize: 12, marginTop: 3 },
 
   // Browse groups button
-  browseBtn: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, backgroundColor: colors.surface, marginHorizontal: spacing.md, marginTop: spacing.md, borderRadius: borderRadius.md, padding: spacing.md },
-  browseBtnText: { color: colors.primary, fontSize: 15, fontWeight: '600', flex: 1 },
+  browseBtn: { marginHorizontal: spacing.md, marginTop: spacing.md },
+  browseBtnInner: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  browseIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.primary + '14',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  browseBtnText: { fontFamily: fonts.heading, fontSize: 15, letterSpacing: 0.4, color: colors.text, flex: 1 },
 
   // Search
-  searchBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, marginHorizontal: spacing.md, marginTop: spacing.sm, borderRadius: borderRadius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, gap: spacing.sm },
-  searchInput: { flex: 1, color: colors.text, fontSize: 15 },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surfaceLow,
+    marginHorizontal: spacing.md,
+    marginTop: spacing.sm,
+    borderRadius: borderRadius.md,
+    paddingHorizontal: spacing.md,
+    gap: spacing.sm,
+    minHeight: 44,
+  },
+  searchInput: { flex: 1, color: colors.text, fontSize: 15, paddingVertical: spacing.sm },
 
   // Forum / Suggestions
   sortBar: { flexDirection: 'row', gap: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
-  sortBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: spacing.md, paddingVertical: spacing.xs, borderRadius: borderRadius.sm, backgroundColor: colors.surface },
+  sortBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 7,
+    borderRadius: borderRadius.pill,
+    backgroundColor: colors.surface,
+    minHeight: 34,
+  },
   sortBtnActive: { backgroundColor: colors.primary },
-  sortBtnText: { fontSize: 13, fontWeight: '600', color: colors.textMuted },
+  sortBtnText: {
+    fontFamily: fonts.heading,
+    fontSize: 12,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    color: colors.textMuted,
+  },
   sortBtnTextActive: { color: colors.background },
-  suggestionCard: { flexDirection: 'row', backgroundColor: colors.surface, marginHorizontal: spacing.md, marginTop: spacing.sm, borderRadius: borderRadius.md, padding: spacing.md },
-  voteCol: { alignItems: 'center', marginRight: spacing.md, minWidth: 36 },
-  voteCount: { color: colors.textMuted, fontSize: 14, fontWeight: '700', marginTop: 2 },
+  suggestionCard: { marginHorizontal: spacing.md, marginTop: spacing.sm },
+  suggestionInner: { flexDirection: 'row' },
+  voteCol: { alignItems: 'center', marginRight: spacing.md, minWidth: 40 },
+  voteCount: { fontFamily: fonts.headingBold, fontSize: 14, letterSpacing: 0.3, color: colors.textMuted, marginTop: 2 },
   suggestionContent: { flex: 1 },
-  suggestionTopRow: { flexDirection: 'row', gap: spacing.xs, marginBottom: spacing.xs, flexWrap: 'wrap' },
-  tagBadge: { backgroundColor: colors.primary + '20', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 },
-  tagText: { color: colors.primary, fontSize: 11, fontWeight: '600' },
-  statusBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 },
-  statusText: { fontSize: 11, fontWeight: '600' },
-  suggestionTitle: { color: colors.text, fontSize: 15, fontWeight: '600', marginBottom: 4 },
-  suggestionBody: { color: colors.textMuted, fontSize: 13, lineHeight: 18, marginBottom: spacing.sm },
+  suggestionTopRow: { flexDirection: 'row', gap: spacing.xs, marginBottom: spacing.sm, flexWrap: 'wrap' },
+  tagBadge: { backgroundColor: colors.primary + '18', paddingHorizontal: 8, paddingVertical: 3, borderRadius: borderRadius.pill },
+  tagText: {
+    fontFamily: fonts.heading,
+    fontSize: 10,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    color: colors.primary,
+  },
+  statusBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: borderRadius.pill },
+  statusText: {
+    fontFamily: fonts.heading,
+    fontSize: 10,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  suggestionTitle: { fontFamily: fonts.heading, fontSize: 16, letterSpacing: 0.3, color: colors.text, marginBottom: 4 },
+  suggestionBody: { color: colors.textMuted, fontSize: 13, lineHeight: 19, marginBottom: spacing.sm },
   suggestionFooter: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   suggestionMeta: { color: colors.textMuted, fontSize: 12 },
   commentCountRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
 
-  // Empty & FAB
-  emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: spacing.md },
-  emptyText: { color: colors.textMuted, fontSize: 15 },
-  emptyHint: { color: colors.textMuted, fontSize: 13 },
-  fab: { position: 'absolute', bottom: spacing.lg, right: spacing.lg, width: 56, height: 56, borderRadius: 28, backgroundColor: colors.primary, justifyContent: 'center', alignItems: 'center', elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4 },
+  // FAB
+  fab: {
+    position: 'absolute',
+    bottom: spacing.lg,
+    right: spacing.lg,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
+  },
 });

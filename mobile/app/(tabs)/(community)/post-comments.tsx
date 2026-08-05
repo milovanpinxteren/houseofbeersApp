@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity,
+  View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, Pressable,
   ActivityIndicator, KeyboardAvoidingView, Platform, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -8,12 +8,15 @@ import { useLocalSearchParams, router } from 'expo-router';
 import { useAuth } from '../../../src/context/AuthContext';
 import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
-import { colors, spacing, borderRadius } from '../../../src/theme/colors';
-import { getComments, addComment, deleteComment, Comment } from '../../../src/api/community';
+import { colors, spacing, borderRadius, fonts } from '../../../src/theme/colors';
+import { EmptyState, SkeletonCard, Button, useToast } from '../../../src/components/ui';
+import { getComments, addComment, deleteComment, editComment, Comment } from '../../../src/api/community';
 
 export default function PostCommentsScreen() {
   const { language } = useLanguage();
   const { user } = useAuth();
+  const { showToast } = useToast();
+  const isStaff = (user as { is_staff?: boolean } | null)?.is_staff === true;
   const { postId } = useLocalSearchParams<{ postId: string }>();
   const postIdNum = parseInt(postId || '0', 10);
 
@@ -22,6 +25,9 @@ export default function PostCommentsScreen() {
   const [text, setText] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [replyingTo, setReplyingTo] = useState<Comment | null>(null);
+  const [editing, setEditing] = useState<{ id: number; parentId: number | null } | null>(null);
+  const [editText, setEditText] = useState('');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
 
   const loadComments = useCallback(async () => {
     if (!postIdNum) return;
@@ -70,49 +76,128 @@ export default function PostCommentsScreen() {
           } else {
             setComments(prev => prev.filter(c => c.id !== commentId));
           }
-        } catch {}
+          showToast(t('community.deleted'), 'success');
+        } catch {
+          showToast(t('community.deleteError'), 'error');
+        }
       }},
     ]);
   };
 
+  const startEdit = (comment: Comment, parentId?: number | null) => {
+    setEditText(comment.content);
+    setEditing({ id: comment.id, parentId: parentId || null });
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editing || !editText.trim() || isSavingEdit) return;
+    setIsSavingEdit(true);
+    try {
+      const updated = await editComment(editing.id, editText.trim());
+      const { id, parentId } = editing;
+      const patch = { content: updated.content, edited_at: updated.edited_at };
+      if (parentId) {
+        setComments(prev => prev.map(c =>
+          c.id === parentId
+            ? { ...c, replies: (c.replies || []).map(r => (r.id === id ? { ...r, ...patch } : r)) }
+            : c
+        ));
+      } else {
+        setComments(prev => prev.map(c => (c.id === id ? { ...c, ...patch } : c)));
+      }
+      setEditing(null);
+      showToast(t('community.editSaved'), 'success');
+    } catch {
+      showToast(t('community.editError'), 'error');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
   const renderComment = (comment: Comment, isReply = false, parentId?: number) => {
     const isOwn = comment.author.user_id === user?.id;
+    const canModerate = isOwn || isStaff;
+    const isEditingThis = editing?.id === comment.id;
     return (
       <View key={comment.id} style={isReply ? styles.replyContainer : styles.commentCard}>
         {isReply && <View style={styles.replyLine} />}
         <View style={isReply ? styles.replyCard : styles.commentInner}>
           <View style={styles.commentHeader}>
-            <TouchableOpacity
-              style={styles.commentAuthorRow}
+            <Pressable
+              style={({ pressed }) => [styles.commentAuthorRow, pressed && { opacity: 0.7 }]}
               onPress={() => router.push(`/(tabs)/(community)/member-profile?userId=${comment.author.user_id}`)}
             >
               <View style={isReply ? styles.avatarXs : styles.avatarSm}>
-                <Ionicons name="person" size={isReply ? 10 : 14} color={colors.textMuted} />
+                <Ionicons name="person" size={isReply ? 11 : 14} color={colors.tertiary} />
               </View>
               <Text style={styles.commentAuthor}>{comment.author.display_name}</Text>
-            </TouchableOpacity>
+            </Pressable>
             <Text style={styles.commentTime}>
               {new Date(comment.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+              {comment.edited_at ? ` · ${t('community.edited')}` : ''}
             </Text>
           </View>
-          <Text style={styles.commentText}>{comment.content}</Text>
-          <View style={styles.commentActions}>
-            <TouchableOpacity onPress={() => setReplyingTo({ ...comment, id: parentId || comment.id })}>
-              <Text style={styles.replyBtn}>{t('community.reply')}</Text>
-            </TouchableOpacity>
-            {isOwn && (
-              <TouchableOpacity onPress={() => handleDelete(comment.id, isReply ? parentId : null)}>
-                <Ionicons name="trash-outline" size={14} color={colors.textMuted} />
-              </TouchableOpacity>
-            )}
-          </View>
+          {isEditingThis ? (
+            <View>
+              <TextInput
+                style={styles.editInput}
+                value={editText}
+                onChangeText={setEditText}
+                multiline
+                maxLength={500}
+                placeholderTextColor={colors.textMuted}
+                autoFocus
+              />
+              <View style={styles.editActions}>
+                <Button label={t('cancel')} variant="ghost" size="sm" onPress={() => setEditing(null)} />
+                <Button label={t('save')} size="sm" onPress={handleSaveEdit} loading={isSavingEdit} disabled={!editText.trim()} />
+              </View>
+            </View>
+          ) : (
+            <>
+              <Text style={styles.commentText}>{comment.content}</Text>
+              <View style={styles.commentActions}>
+                <Pressable
+                  onPress={() => setReplyingTo({ ...comment, id: parentId || comment.id })}
+                  hitSlop={{ top: 10, bottom: 10, left: 6, right: 12 }}
+                  style={({ pressed }) => pressed && { opacity: 0.6 }}
+                >
+                  <Text style={styles.replyBtn}>{t('community.reply')}</Text>
+                </Pressable>
+                {canModerate && (
+                  <View style={styles.moderateRow}>
+                    <Pressable
+                      onPress={() => startEdit(comment, isReply ? parentId : null)}
+                      hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
+                      style={({ pressed }) => pressed && { opacity: 0.6 }}
+                    >
+                      <Ionicons name="pencil-outline" size={14} color={colors.textMuted} />
+                    </Pressable>
+                    <Pressable
+                      onPress={() => handleDelete(comment.id, isReply ? parentId : null)}
+                      hitSlop={{ top: 10, bottom: 10, left: 8, right: 6 }}
+                      style={({ pressed }) => pressed && { opacity: 0.6 }}
+                    >
+                      <Ionicons name="trash-outline" size={14} color={colors.textMuted} />
+                    </Pressable>
+                  </View>
+                )}
+              </View>
+            </>
+          )}
         </View>
       </View>
     );
   };
 
   if (isLoading) {
-    return <View style={[styles.container, styles.center]}><ActivityIndicator size="large" color={colors.primary} /></View>;
+    return (
+      <View style={[styles.container, { padding: spacing.md }]}>
+        <SkeletonCard />
+        <SkeletonCard />
+        <SkeletonCard />
+      </View>
+    );
   }
 
   return (
@@ -127,18 +212,22 @@ export default function PostCommentsScreen() {
           </View>
         )}
         ListEmptyComponent={
-          <View style={[styles.center, { paddingTop: 40 }]}>
-            <Ionicons name="chatbubble-outline" size={36} color={colors.textMuted} />
-            <Text style={styles.emptyText}>{t('community.addComment')}</Text>
-          </View>
+          <EmptyState
+            icon="chatbubbles-outline"
+            title={t('community.noComments')}
+            message={t('community.noCommentsHint')}
+          />
         }
-        contentContainerStyle={{ padding: spacing.md, flexGrow: 1 }}
+        contentContainerStyle={comments.length === 0 ? styles.emptyListContent : styles.listContent}
       />
 
       {replyingTo && (
         <View style={styles.replyBanner}>
-          <Text style={styles.replyBannerText}>{t('community.replyTo')} {replyingTo.author.display_name}</Text>
-          <TouchableOpacity onPress={() => setReplyingTo(null)}>
+          <View style={styles.replyBannerLeft}>
+            <Ionicons name="return-down-forward" size={15} color={colors.primary} />
+            <Text style={styles.replyBannerText}>{t('community.replyTo')} {replyingTo.author.display_name}</Text>
+          </View>
+          <TouchableOpacity onPress={() => setReplyingTo(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
             <Ionicons name="close" size={18} color={colors.textMuted} />
           </TouchableOpacity>
         </View>
@@ -147,10 +236,17 @@ export default function PostCommentsScreen() {
       <View style={styles.inputBar}>
         <TextInput style={styles.textInput} placeholder={replyingTo ? t('community.reply') + '...' : t('community.addComment')}
           placeholderTextColor={colors.textMuted} value={text} onChangeText={setText} maxLength={500} multiline />
-        <TouchableOpacity style={[styles.sendBtn, (!text.trim() || isSending) && styles.sendBtnDisabled]}
-          onPress={handleSend} disabled={!text.trim() || isSending}>
-          {isSending ? <ActivityIndicator size="small" color={colors.background} /> : <Ionicons name="send" size={16} color={colors.background} />}
-        </TouchableOpacity>
+        <Pressable
+          style={({ pressed }) => [
+            styles.sendBtn,
+            (!text.trim() || isSending) && styles.sendBtnDisabled,
+            pressed && { opacity: 0.85, transform: [{ scale: 0.96 }] },
+          ]}
+          onPress={handleSend}
+          disabled={!text.trim() || isSending}
+        >
+          {isSending ? <ActivityIndicator size="small" color={colors.background} /> : <Ionicons name="send" size={17} color={colors.background} />}
+        </Pressable>
       </View>
     </KeyboardAvoidingView>
   );
@@ -158,32 +254,88 @@ export default function PostCommentsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  center: { justifyContent: 'center', alignItems: 'center' },
+  listContent: { padding: spacing.md, flexGrow: 1 },
+  emptyListContent: { padding: spacing.md, flexGrow: 1, justifyContent: 'center' },
+
   commentCard: { marginBottom: spacing.sm },
-  commentInner: { backgroundColor: colors.surface, borderRadius: borderRadius.sm, padding: spacing.md },
-  commentHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.xs },
+  commentInner: { backgroundColor: colors.surface, borderRadius: borderRadius.lg, padding: spacing.md },
+  commentHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm },
   commentAuthorRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  avatarSm: { width: 24, height: 24, borderRadius: 12, backgroundColor: colors.tertiary + '30', justifyContent: 'center', alignItems: 'center' },
-  avatarXs: { width: 20, height: 20, borderRadius: 10, backgroundColor: colors.tertiary + '30', justifyContent: 'center', alignItems: 'center' },
-  commentAuthor: { color: colors.text, fontSize: 13, fontWeight: '600' },
+  avatarSm: { width: 28, height: 28, borderRadius: 14, backgroundColor: colors.surfaceHigh, justifyContent: 'center', alignItems: 'center' },
+  avatarXs: { width: 22, height: 22, borderRadius: 11, backgroundColor: colors.surfaceHigh, justifyContent: 'center', alignItems: 'center' },
+  commentAuthor: { fontFamily: fonts.heading, fontSize: 14, letterSpacing: 0.3, color: colors.text },
   commentTime: { color: colors.textMuted, fontSize: 11 },
-  commentText: { color: colors.text, fontSize: 14, lineHeight: 20 },
-  commentActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.xs },
-  replyBtn: { color: colors.primary, fontSize: 12, fontWeight: '600' },
+  commentText: { fontFamily: fonts.serif, fontSize: 15, lineHeight: 21, color: colors.text },
+  commentActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.sm },
+  moderateRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  editInput: {
+    backgroundColor: colors.surfaceLow,
+    borderRadius: borderRadius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    color: colors.text,
+    fontSize: 15,
+    lineHeight: 21,
+    minHeight: 60,
+    textAlignVertical: 'top',
+  },
+  editActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.sm, marginTop: spacing.sm },
+  replyBtn: {
+    fontFamily: fonts.heading,
+    fontSize: 11,
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    color: colors.primary,
+  },
 
   // Nested replies
-  replyContainer: { flexDirection: 'row', marginLeft: 24, marginBottom: spacing.xs },
-  replyLine: { width: 2, backgroundColor: colors.tertiary + '40', marginRight: spacing.sm, borderRadius: 1 },
-  replyCard: { flex: 1, backgroundColor: colors.surface, borderRadius: borderRadius.sm, padding: spacing.sm },
+  replyContainer: { flexDirection: 'row', marginLeft: spacing.lg, marginBottom: spacing.sm },
+  replyLine: { width: 2, backgroundColor: colors.borderStrong, marginRight: spacing.sm, borderRadius: 1 },
+  replyCard: { flex: 1, backgroundColor: colors.surfaceLow, borderRadius: borderRadius.md, padding: spacing.sm + 4 },
 
   // Reply banner
-  replyBanner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, paddingVertical: spacing.sm, backgroundColor: colors.primary + '15', borderTopWidth: 1, borderTopColor: colors.tertiary + '20' },
-  replyBannerText: { color: colors.primary, fontSize: 13, fontWeight: '600' },
+  replyBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    backgroundColor: colors.primary + '14',
+  },
+  replyBannerLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flex: 1 },
+  replyBannerText: {
+    fontFamily: fonts.heading,
+    fontSize: 12,
+    letterSpacing: 0.5,
+    color: colors.primary,
+  },
 
   // Input
-  inputBar: { flexDirection: 'row', alignItems: 'flex-end', padding: spacing.sm, paddingHorizontal: spacing.md, borderTopWidth: 1, borderTopColor: colors.tertiary + '20', backgroundColor: colors.surface, gap: spacing.sm },
-  textInput: { flex: 1, backgroundColor: colors.background, borderRadius: borderRadius.lg, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, color: colors.text, fontSize: 15, maxHeight: 80 },
-  sendBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.primary, justifyContent: 'center', alignItems: 'center' },
+  inputBar: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    padding: spacing.sm,
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.surface,
+    gap: spacing.sm,
+  },
+  textInput: {
+    flex: 1,
+    backgroundColor: colors.surfaceLow,
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 12,
+    color: colors.text,
+    fontSize: 15,
+    maxHeight: 88,
+  },
+  sendBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   sendBtnDisabled: { opacity: 0.4 },
-  emptyText: { color: colors.textMuted, fontSize: 14, marginTop: spacing.sm },
 });

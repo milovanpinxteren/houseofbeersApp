@@ -2,11 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
-  ScrollView,
   StyleSheet,
-  ActivityIndicator,
-  RefreshControl,
-  Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLanguage } from '../../../src/context/LanguageContext';
@@ -17,9 +13,8 @@ import {
   TasteProfileResponse,
   UntappdProfile,
 } from '../../../src/api/recommendations';
-import { colors, spacing, borderRadius } from '../../../src/theme/colors';
-
-const { width: screenWidth } = Dimensions.get('window');
+import { colors, spacing, borderRadius, fonts, type } from '../../../src/theme/colors';
+import { Card, EmptyState, Screen, SectionHeader, Skeleton } from '../../../src/components/ui';
 
 export default function TasteProfileScreen() {
   const { language } = useLanguage();
@@ -56,12 +51,17 @@ export default function TasteProfileScreen() {
     loadData();
   }
 
+  function handleRetry() {
+    setIsLoading(true);
+    loadData();
+  }
+
   // Simple radar chart using View transforms
   function renderRadarChart() {
     if (!profile?.radar_chart?.axes || profile.radar_chart.axes.length < 3) {
       return (
         <View style={styles.noChartContainer}>
-          <Ionicons name="analytics-outline" size={48} color={colors.textMuted} />
+          <Ionicons name="analytics-outline" size={40} color={colors.textMuted} />
           <Text style={styles.noChartText}>
             {profile?.message || t('recommendations.notEnoughData')}
           </Text>
@@ -181,100 +181,122 @@ export default function TasteProfileScreen() {
 
   if (isLoading) {
     return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color={colors.primary} />
-        <Text style={styles.loadingText}>{t('loading')}</Text>
-      </View>
+      <Screen scroll={false}>
+        <View style={styles.skeletonHeader}>
+          <Skeleton width={42} height={42} radius={14} />
+          <View style={{ flex: 1 }}>
+            <Skeleton width="40%" height={11} />
+            <Skeleton width="60%" height={14} style={{ marginTop: spacing.sm }} />
+          </View>
+        </View>
+        <View style={styles.skeletonGrid}>
+          {[0, 1, 2, 3].map((i) => (
+            <View key={i} style={styles.skeletonTile}>
+              <Skeleton width={22} height={22} radius={11} />
+              <Skeleton width="55%" height={18} style={{ marginTop: spacing.sm }} />
+              <Skeleton width="70%" height={11} style={{ marginTop: spacing.xs }} />
+            </View>
+          ))}
+        </View>
+        <Skeleton width={130} height={13} style={{ marginTop: spacing.lg }} />
+        <Skeleton width="100%" height={260} radius={borderRadius.lg} style={{ marginTop: spacing.sm }} />
+      </Screen>
     );
   }
 
   if (error) {
     return (
-      <View style={styles.centerContainer}>
-        <Ionicons name="alert-circle-outline" size={48} color={colors.error} />
-        <Text style={styles.errorText}>{error}</Text>
-      </View>
+      <Screen scroll={false}>
+        <View style={styles.centerContainer}>
+          <EmptyState
+            icon="alert-circle-outline"
+            title={t('common.error')}
+            message={error}
+            actionLabel={t('common.retry')}
+            onAction={handleRetry}
+          />
+        </View>
+      </Screen>
     );
   }
 
   return (
-    <ScrollView
-      style={styles.container}
-      refreshControl={
-        <RefreshControl
-            refreshing={isRefreshing}
-            onRefresh={handleRefresh}
-            tintColor={colors.primary}
-          />
-        }
-      >
-        {/* Profile Source */}
-        <View style={styles.sourceCard}>
-          <Ionicons
-            name={profile?.profile_source === 'untappd' ? 'beer' : 'cart'}
-            size={24}
-            color={colors.primary}
-          />
+    <Screen refreshing={isRefreshing} onRefresh={handleRefresh}>
+      {/* Profile Source */}
+      <Card variant="elevated" style={styles.sourceCard}>
+        <View style={styles.sourceRow}>
+          <View style={styles.sourceIconWrap}>
+            <Ionicons
+              name={profile?.profile_source === 'untappd' ? 'beer' : 'cart'}
+              size={20}
+              color={colors.primary}
+            />
+          </View>
           <View style={styles.sourceInfo}>
             <Text style={styles.sourceLabel}>
               {profile?.profile_source === 'untappd'
                 ? t('recommendations.untappdProfile')
                 : t('recommendations.orderHistory')}
             </Text>
-            <Text style={styles.sourceValue}>
+            <Text style={styles.sourceValue} numberOfLines={1}>
               {profile?.profile_source === 'untappd'
                 ? untappdProfile?.username
                 : profile?.profile_identifier}
             </Text>
           </View>
         </View>
+      </Card>
 
-        {/* Stats Grid */}
-        <View style={styles.statsGrid}>
-          <View style={styles.statCard}>
-            <Ionicons name="checkmark-circle" size={24} color={colors.primary} />
-            <Text style={styles.statValue}>{profile?.total_checkins || 0}</Text>
-            <Text style={styles.statLabel}>
-              {profile?.profile_source === 'untappd'
-                ? t('recommendations.checkins')
-                : t('recommendations.purchased')}
+      {/* Stats Grid */}
+      <View style={styles.statsGrid}>
+        <Card variant="inset" style={styles.statCard}>
+          <Ionicons name="checkmark-circle" size={20} color={colors.primary} />
+          <Text style={styles.statValue}>{profile?.total_checkins || 0}</Text>
+          <Text style={styles.statLabel}>
+            {profile?.profile_source === 'untappd'
+              ? t('recommendations.checkins')
+              : t('recommendations.purchased')}
+          </Text>
+        </Card>
+        <Card variant="inset" style={styles.statCard}>
+          <Ionicons name="beer" size={20} color={colors.primary} />
+          <Text style={styles.statValue}>{profile?.unique_beers || 0}</Text>
+          <Text style={styles.statLabel}>{t('recommendations.uniqueBeers')}</Text>
+        </Card>
+        <Card variant="inset" style={styles.statCard}>
+          <Ionicons name="flask" size={20} color={colors.primary} />
+          <Text style={styles.statValue}>{profile?.abv_profile?.range_label || '-'}</Text>
+          <Text style={styles.statLabel}>{t('recommendations.abvRange')}</Text>
+        </Card>
+        {profile?.rating_profile && profile.profile_source === 'untappd' && (
+          <Card variant="inset" style={styles.statCard}>
+            <Ionicons name="star" size={20} color={colors.primary} />
+            <Text style={styles.statValue}>
+              {profile.rating_profile.average?.toFixed(1) || '-'}
             </Text>
-          </View>
-          <View style={styles.statCard}>
-            <Ionicons name="beer" size={24} color={colors.primary} />
-            <Text style={styles.statValue}>{profile?.unique_beers || 0}</Text>
-            <Text style={styles.statLabel}>{t('recommendations.uniqueBeers')}</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Ionicons name="flask" size={24} color={colors.primary} />
-            <Text style={styles.statValue}>{profile?.abv_profile?.range_label || '-'}</Text>
-            <Text style={styles.statLabel}>{t('recommendations.abvRange')}</Text>
-          </View>
-          {profile?.rating_profile && profile.profile_source === 'untappd' && (
-            <View style={styles.statCard}>
-              <Ionicons name="star" size={24} color={colors.primary} />
-              <Text style={styles.statValue}>
-                {profile.rating_profile.average?.toFixed(1) || '-'}
-              </Text>
-              <Text style={styles.statLabel}>{t('recommendations.avgRating')}</Text>
-            </View>
-          )}
-        </View>
+            <Text style={styles.statLabel}>{t('recommendations.avgRating')}</Text>
+          </Card>
+        )}
+      </View>
 
-        {/* Radar Chart */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{t('recommendations.tasteWheel')}</Text>
-          {renderRadarChart()}
-        </View>
+      {/* Radar Chart */}
+      <SectionHeader title={t('recommendations.tasteWheel')} />
+      <Card>
+        {renderRadarChart()}
+      </Card>
 
-        {/* Style Distribution */}
-        {profile?.style_distribution && profile.style_distribution.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>{t('recommendations.styleDistribution')}</Text>
+      {/* Style Distribution */}
+      {profile?.style_distribution && profile.style_distribution.length > 0 && (
+        <>
+          <SectionHeader title={t('recommendations.styleDistribution')} />
+          <Card>
             {profile.style_distribution.slice(0, 8).map((style, index) => (
-              <View key={`style-${index}`} style={styles.styleBar}>
+              <View
+                key={`style-${index}`}
+                style={[styles.styleBar, index > 0 && { marginTop: spacing.md }]}
+              >
                 <View style={styles.styleInfo}>
-                  <Text style={styles.styleName}>{style.style}</Text>
+                  <Text style={styles.styleName} numberOfLines={1}>{style.style}</Text>
                   <Text style={styles.styleCount}>{style.count}</Text>
                 </View>
                 <View style={styles.styleBarBg}>
@@ -287,103 +309,136 @@ export default function TasteProfileScreen() {
                 </View>
               </View>
             ))}
-          </View>
-        )}
+          </Card>
+        </>
+      )}
 
-        {/* ABV Category */}
-        {profile?.abv_profile?.category && (
-          <View style={styles.categoryCard}>
-            <Ionicons name="ribbon" size={32} color={colors.primary} />
-            <Text style={styles.categoryTitle}>{profile.abv_profile.category}</Text>
-            {profile.rating_profile?.category && (
-              <Text style={styles.categorySubtitle}>{profile.rating_profile.category}</Text>
-            )}
-          </View>
-        )}
+      {/* Top Breweries */}
+      {profile?.top_breweries && profile.top_breweries.length > 0 && (
+        <>
+          <SectionHeader title={t('recommendations.topBreweries')} />
+          <Card padded={false}>
+            {profile.top_breweries.slice(0, 5).map((brewery, index) => (
+              <View
+                key={`brewery-${index}`}
+                style={[styles.breweryRow, index > 0 && styles.breweryRowDivider]}
+              >
+                <Text style={styles.breweryRank}>{index + 1}</Text>
+                <Text style={styles.breweryName} numberOfLines={1}>
+                  {brewery.brewery}
+                </Text>
+                <Text style={styles.breweryCount}>
+                  {brewery.count} {t('recommendations.beers')}
+                </Text>
+              </View>
+            ))}
+          </Card>
+        </>
+      )}
 
-        <View style={styles.bottomPadding} />
-      </ScrollView>
+      {/* ABV Category */}
+      {profile?.abv_profile?.category && (
+        <Card variant="accent" style={styles.categoryCard}>
+          <View style={styles.categoryIconWrap}>
+            <Ionicons name="ribbon" size={26} color={colors.primary} />
+          </View>
+          <Text style={styles.categoryTitle}>{profile.abv_profile.category}</Text>
+          {profile.rating_profile?.category && (
+            <Text style={styles.categorySubtitle}>{profile.rating_profile.category}</Text>
+          )}
+        </Card>
+      )}
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
+  },
+
+  // Skeletons
+  skeletonHeader: {
+    flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.background,
-    padding: spacing.lg,
-  },
-  loadingText: {
+    gap: spacing.md,
+    backgroundColor: colors.surfaceHigh,
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
     marginTop: spacing.md,
-    color: colors.textMuted,
-    fontSize: 14,
   },
-  errorText: {
-    marginTop: spacing.md,
-    color: colors.error,
-    fontSize: 14,
-    textAlign: 'center',
+  skeletonGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  skeletonTile: {
+    width: '48%',
+    flexGrow: 1,
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
   },
 
   // Source Card
   sourceCard: {
+    marginTop: spacing.md,
+  },
+  sourceRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.surface,
-    margin: spacing.md,
-    padding: spacing.md,
-    borderRadius: borderRadius.md,
-    borderWidth: 1,
-    borderColor: colors.primary + '40',
+    gap: spacing.md,
+  },
+  sourceIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: colors.primary + '14',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   sourceInfo: {
-    marginLeft: spacing.md,
+    flex: 1,
   },
   sourceLabel: {
-    fontSize: 12,
-    color: colors.textMuted,
+    ...type.label,
+    fontSize: 11,
+    letterSpacing: 1.4,
   },
   sourceValue: {
+    fontFamily: fonts.heading,
     fontSize: 16,
-    fontWeight: '600',
+    letterSpacing: 0.4,
     color: colors.text,
+    marginTop: 1,
   },
 
   // Stats Grid
   statsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    marginHorizontal: spacing.sm,
+    gap: spacing.sm,
+    marginTop: spacing.sm,
   },
   statCard: {
-    width: '50%',
-    padding: spacing.sm,
+    width: '48%',
+    flexGrow: 1,
+    alignItems: 'flex-start',
   },
   statValue: {
-    fontSize: 24,
-    fontWeight: '700',
+    fontFamily: fonts.headingBold,
+    fontSize: 22,
+    letterSpacing: 0.4,
     color: colors.text,
-    marginTop: spacing.xs,
+    marginTop: spacing.sm,
   },
   statLabel: {
-    fontSize: 12,
+    fontSize: 11,
+    letterSpacing: 0.3,
     color: colors.textMuted,
-  },
-
-  // Sections
-  section: {
-    margin: spacing.md,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colors.text,
-    marginBottom: spacing.md,
+    marginTop: 2,
   },
 
   // Radar Chart
@@ -403,18 +458,18 @@ const styles = StyleSheet.create({
     left: 50,
     top: 50,
     borderRadius: 100,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceHigh,
   },
   gridCircle: {
     position: 'absolute',
     borderWidth: 1,
-    borderColor: colors.tertiary + '40',
+    borderColor: colors.borderStrong,
     backgroundColor: 'transparent',
   },
   axisLine: {
     position: 'absolute',
     width: 2,
-    backgroundColor: colors.tertiary + '30',
+    backgroundColor: colors.border,
   },
   axisLabel: {
     position: 'absolute',
@@ -422,10 +477,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   axisLabelText: {
-    fontSize: 11,
-    color: colors.text,
+    fontFamily: fonts.heading,
+    fontSize: 10,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    color: colors.textMuted,
     textAlign: 'center',
-    fontWeight: '500',
   },
   dataPoint: {
     position: 'absolute',
@@ -452,67 +509,108 @@ const styles = StyleSheet.create({
   },
   noChartContainer: {
     alignItems: 'center',
-    padding: spacing.xl,
+    padding: spacing.lg,
   },
   noChartText: {
+    fontFamily: fonts.serif,
+    fontSize: 15,
+    lineHeight: 21,
     marginTop: spacing.md,
     color: colors.textMuted,
-    fontSize: 14,
     textAlign: 'center',
   },
 
   // Style Distribution
-  styleBar: {
-    marginBottom: spacing.sm,
-  },
+  styleBar: {},
   styleInfo: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 4,
+    alignItems: 'baseline',
+    gap: spacing.md,
+    marginBottom: spacing.xs,
   },
   styleName: {
-    fontSize: 14,
+    fontFamily: fonts.serif,
+    fontSize: 15,
     color: colors.text,
+    flex: 1,
   },
   styleCount: {
-    fontSize: 14,
+    fontFamily: fonts.heading,
+    fontSize: 13,
+    letterSpacing: 0.4,
     color: colors.textMuted,
   },
   styleBarBg: {
-    height: 8,
-    backgroundColor: colors.surface,
-    borderRadius: 4,
+    height: 6,
+    backgroundColor: colors.surfaceLow,
+    borderRadius: 3,
     overflow: 'hidden',
   },
   styleBarFill: {
     height: '100%',
     backgroundColor: colors.primary,
-    borderRadius: 4,
+    borderRadius: 3,
+  },
+
+  // Top Breweries
+  breweryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: 14,
+    paddingHorizontal: spacing.md,
+  },
+  breweryRowDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+  },
+  breweryRank: {
+    fontFamily: fonts.headingBold,
+    fontSize: 15,
+    letterSpacing: 0.4,
+    color: colors.primary,
+    width: 20,
+    textAlign: 'center',
+  },
+  breweryName: {
+    fontFamily: fonts.serif,
+    fontSize: 16,
+    color: colors.text,
+    flex: 1,
+  },
+  breweryCount: {
+    fontSize: 12,
+    color: colors.textMuted,
   },
 
   // Category Card
   categoryCard: {
-    backgroundColor: colors.surface,
-    margin: spacing.md,
-    padding: spacing.lg,
-    borderRadius: borderRadius.lg,
+    marginTop: spacing.lg,
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.primary + '40',
+    paddingVertical: spacing.lg,
+  },
+  categoryIconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: colors.primary + '14',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   categoryTitle: {
-    fontSize: 20,
-    fontWeight: '700',
+    fontFamily: fonts.heading,
+    fontSize: 19,
+    letterSpacing: 0.5,
     color: colors.primary,
     marginTop: spacing.sm,
+    textAlign: 'center',
   },
   categorySubtitle: {
-    fontSize: 14,
+    fontFamily: fonts.serif,
+    fontSize: 15,
     color: colors.textMuted,
-    marginTop: 4,
-  },
-
-  bottomPadding: {
-    height: spacing.xl,
+    marginTop: 2,
+    textAlign: 'center',
   },
 });

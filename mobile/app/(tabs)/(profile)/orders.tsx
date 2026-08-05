@@ -4,9 +4,8 @@ import {
   Text,
   FlatList,
   TextInput,
-  TouchableOpacity,
+  Pressable,
   StyleSheet,
-  ActivityIndicator,
   RefreshControl,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,7 +13,8 @@ import { useAuth } from '../../../src/context/AuthContext';
 import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
 import { getOrders, Order } from '../../../src/api/orders';
-import { colors, spacing, borderRadius } from '../../../src/theme/colors';
+import { colors, spacing, borderRadius, fonts } from '../../../src/theme/colors';
+import { EmptyState, SkeletonCard } from '../../../src/components/ui';
 import { tokenize, highlightRanges } from '../../../src/utils/fuzzySearch';
 import {
   buildOrderSearchIndex,
@@ -91,6 +91,11 @@ export default function OrdersScreen() {
 
   function handleRefresh() {
     setIsRefreshing(true);
+    loadOrders();
+  }
+
+  function handleRetry() {
+    setIsLoading(true);
     loadOrders();
   }
 
@@ -223,17 +228,24 @@ export default function OrdersScreen() {
   if (!user?.shopify_customer_id) {
     return (
       <View style={styles.centerContainer}>
-        <Text style={styles.emptyTitle}>{t('orders.noShopifyTitle')}</Text>
-        <Text style={styles.emptyText}>{t('orders.noShopifyText')}</Text>
+        <EmptyState
+          icon="link-outline"
+          title={t('orders.noShopifyTitle')}
+          message={t('orders.noShopifyText')}
+        />
       </View>
     );
   }
 
   if (isLoading) {
     return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color={colors.primary} />
-        <Text style={styles.loadingText}>{t('orders.loading')}</Text>
+      <View style={styles.container}>
+        <View style={styles.skeletonList}>
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </View>
       </View>
     );
   }
@@ -241,10 +253,13 @@ export default function OrdersScreen() {
   if (error) {
     return (
       <View style={styles.centerContainer}>
-        <Text style={styles.errorText}>{error}</Text>
-        <TouchableOpacity style={styles.retryButton} onPress={loadOrders}>
-          <Text style={styles.retryButtonText}>{t('retry')}</Text>
-        </TouchableOpacity>
+        <EmptyState
+          icon="alert-circle-outline"
+          title={t('common.error')}
+          message={error}
+          actionLabel={t('common.retry')}
+          onAction={handleRetry}
+        />
       </View>
     );
   }
@@ -252,195 +267,197 @@ export default function OrdersScreen() {
   if (orders.length === 0) {
     return (
       <View style={styles.centerContainer}>
-        <Text style={styles.emptyTitle}>{t('orders.noOrdersTitle')}</Text>
-        <Text style={styles.emptyText}>{t('orders.noOrdersText')}</Text>
+        <EmptyState
+          icon="receipt-outline"
+          title={t('orders.noOrdersTitle')}
+          message={t('orders.noOrdersText')}
+        />
       </View>
     );
   }
 
   return (
     <View style={styles.container}>
-        <View style={styles.searchBar}>
-          <Ionicons name="search" size={18} color={colors.textMuted} />
-          <TextInput
-            style={styles.searchInput}
-            placeholder={t('orders.searchPlaceholder')}
-            placeholderTextColor={colors.textMuted}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            autoCorrect={false}
-            autoCapitalize="none"
-            returnKeyType="search"
-            clearButtonMode="never"
+      <View style={styles.searchBar}>
+        <Ionicons name="search" size={18} color={colors.textMuted} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder={t('orders.searchPlaceholder')}
+          placeholderTextColor={colors.textMuted}
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          autoCorrect={false}
+          autoCapitalize="none"
+          returnKeyType="search"
+          clearButtonMode="never"
+        />
+        {searchQuery ? (
+          <Pressable
+            onPress={() => setSearchQuery('')}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            style={({ pressed }) => pressed && styles.pressed}
+          >
+            <Ionicons name="close-circle" size={18} color={colors.textMuted} />
+          </Pressable>
+        ) : null}
+      </View>
+
+      {/* Zero matches are covered by the list's empty state below. */}
+      {isSearching && matches.length > 0 && (
+        <Text style={styles.resultSummary}>{getResultSummary()}</Text>
+      )}
+
+      <FlatList
+        data={matches}
+        keyExtractor={(m) => m.order.id.toString()}
+        keyboardShouldPersistTaps="handled"
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={handleRefresh}
+            tintColor={colors.primary}
           />
-          {searchQuery ? (
-            <TouchableOpacity
-              onPress={() => setSearchQuery('')}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <Ionicons name="close-circle" size={18} color={colors.textMuted} />
-            </TouchableOpacity>
-          ) : null}
-        </View>
-
-        {/* Zero matches are covered by the list's empty state below. */}
-        {isSearching && matches.length > 0 && (
-          <Text style={styles.resultSummary}>{getResultSummary()}</Text>
-        )}
-
-        <FlatList
-          data={matches}
-          keyExtractor={(m) => m.order.id.toString()}
-          keyboardShouldPersistTaps="handled"
-          refreshControl={
-            <RefreshControl
-              refreshing={isRefreshing}
-              onRefresh={handleRefresh}
-              tintColor={colors.primary}
+        }
+        ListEmptyComponent={
+          isSearching ? (
+            <EmptyState
+              icon="search"
+              title={t('orders.noResultsTitle')}
+              message={t('orders.noResultsText', { query: searchQuery })}
             />
-          }
-          ListEmptyComponent={
-            isSearching ? (
-              <View style={styles.noResults}>
-                <Ionicons name="search" size={40} color={colors.textMuted} />
-                <Text style={styles.emptyTitle}>{t('orders.noResultsTitle')}</Text>
-                <Text style={styles.emptyText}>
-                  {t('orders.noResultsText', { query: searchQuery })}
-                </Text>
-              </View>
-            ) : null
-          }
-          renderItem={({ item: match }) => {
-            const order = match.order;
-            const showingAll = showAllItemsFor.has(order.id);
-            // While searching the matches are always visible — hiding them
-            // behind a tap would defeat the point of the search.
-            const isExpanded = isSearching ? true : expandedOrderId === order.id;
-            const hiddenItemCount = order.line_items.length - match.matchedItems.length;
-            const visibleItems =
-              isSearching && !showingAll ? match.matchedItems : order.line_items;
+          ) : null
+        }
+        renderItem={({ item: match }) => {
+          const order = match.order;
+          const showingAll = showAllItemsFor.has(order.id);
+          // While searching the matches are always visible — hiding them
+          // behind a tap would defeat the point of the search.
+          const isExpanded = isSearching ? true : expandedOrderId === order.id;
+          const hiddenItemCount = order.line_items.length - match.matchedItems.length;
+          const visibleItems =
+            isSearching && !showingAll ? match.matchedItems : order.line_items;
 
-            return (
-              <TouchableOpacity
-                style={styles.orderCard}
-                onPress={() =>
-                  isSearching ? toggleShowAllItems(order.id) : toggleOrderExpanded(order.id)
-                }
-                activeOpacity={0.7}
-              >
-                <View style={styles.orderHeader}>
-                  <View style={styles.orderInfo}>
-                    <Highlighted
-                      text={order.name}
-                      tokens={queryTokens}
-                      style={styles.orderNumber}
-                    />
-                    <Text style={styles.orderDate}>{formatDate(order.created_at)}</Text>
-                  </View>
-                  <View style={styles.orderTotal}>
-                    <Text style={styles.totalPrice}>
-                      {formatPrice(order.total_price, order.currency)}
-                    </Text>
-                    <View
+          return (
+            <Pressable
+              style={({ pressed }) => [
+                styles.orderCard,
+                pressed && { opacity: 0.85 },
+              ]}
+              onPress={() =>
+                isSearching ? toggleShowAllItems(order.id) : toggleOrderExpanded(order.id)
+              }
+            >
+              <View style={styles.orderHeader}>
+                <View style={styles.orderInfo}>
+                  <Highlighted
+                    text={order.name}
+                    tokens={queryTokens}
+                    style={styles.orderNumber}
+                  />
+                  <Text style={styles.orderDate}>{formatDate(order.created_at)}</Text>
+                </View>
+                <View style={styles.orderTotal}>
+                  <Text style={styles.totalPrice}>
+                    {formatPrice(order.total_price, order.currency)}
+                  </Text>
+                  <View
+                    style={[
+                      styles.statusBadge,
+                      { backgroundColor: getStatusColor(order.financial_status) + '1f' },
+                    ]}
+                  >
+                    <Text
                       style={[
-                        styles.statusBadge,
-                        { backgroundColor: getStatusColor(order.financial_status) + '20' },
+                        styles.statusText,
+                        { color: getStatusColor(order.financial_status) },
                       ]}
                     >
-                      <Text
-                        style={[
-                          styles.statusText,
-                          { color: getStatusColor(order.financial_status) },
-                        ]}
-                      >
-                        {order.financial_status}
-                      </Text>
-                    </View>
+                      {order.financial_status}
+                    </Text>
                   </View>
                 </View>
+              </View>
 
-                <View style={styles.fulfillmentRow}>
-                  <Text style={styles.fulfillmentLabel}>
-                    {getFulfillmentLabel(order.fulfillment_status)}
-                  </Text>
-                  <Text style={styles.itemCount}>
-                    {getItemsLabel(order.line_items.length)}
-                  </Text>
-                </View>
+              <View style={styles.fulfillmentRow}>
+                <Text style={styles.fulfillmentLabel}>
+                  {getFulfillmentLabel(order.fulfillment_status)}
+                </Text>
+                <Text style={styles.itemCount}>
+                  {getItemsLabel(order.line_items.length)}
+                </Text>
+              </View>
 
-                {isExpanded && (
-                  <View style={styles.lineItemsContainer}>
-                    <View style={styles.divider} />
-                    {visibleItems.map((item) => (
-                      <View key={item.id} style={styles.lineItem}>
-                        <View style={styles.lineItemInfo}>
+              {isExpanded && (
+                <View style={styles.lineItemsContainer}>
+                  <View style={styles.divider} />
+                  {visibleItems.map((item, itemIndex) => (
+                    <View
+                      key={item.id}
+                      style={[styles.lineItem, itemIndex === 0 && styles.lineItemFirst]}
+                    >
+                      <View style={styles.lineItemInfo}>
+                        <Highlighted
+                          text={item.title}
+                          tokens={queryTokens}
+                          style={styles.lineItemTitle}
+                        />
+                        {item.variant_title && (
                           <Highlighted
-                            text={item.title}
+                            text={item.variant_title}
                             tokens={queryTokens}
-                            style={styles.lineItemTitle}
+                            style={styles.lineItemVariant}
                           />
-                          {item.variant_title && (
-                            <Highlighted
-                              text={item.variant_title}
-                              tokens={queryTokens}
-                              style={styles.lineItemVariant}
-                            />
-                          )}
+                        )}
+                        <View style={styles.itemFulfillmentBadge}>
                           <View
                             style={[
-                              styles.itemFulfillmentBadge,
-                              { backgroundColor: getItemFulfillmentColor(item.fulfillment_status) + '20' },
+                              styles.itemFulfillmentDot,
+                              { backgroundColor: getItemFulfillmentColor(item.fulfillment_status) },
+                            ]}
+                          />
+                          <Text
+                            style={[
+                              styles.itemFulfillmentText,
+                              { color: getItemFulfillmentColor(item.fulfillment_status) },
                             ]}
                           >
-                            <View
-                              style={[
-                                styles.itemFulfillmentDot,
-                                { backgroundColor: getItemFulfillmentColor(item.fulfillment_status) },
-                              ]}
-                            />
-                            <Text
-                              style={[
-                                styles.itemFulfillmentText,
-                                { color: getItemFulfillmentColor(item.fulfillment_status) },
-                              ]}
-                            >
-                              {getItemFulfillmentLabel(item.fulfillment_status)}
-                            </Text>
-                          </View>
-                          {item.estimated_delivery_date && (
-                            <Text style={styles.estimatedDelivery}>
-                              {t('orders.estimatedDelivery')}: {item.estimated_delivery_date}
-                            </Text>
-                          )}
-                        </View>
-                        <View style={styles.lineItemRight}>
-                          <Text style={styles.lineItemQty}>x{item.quantity}</Text>
-                          <Text style={styles.lineItemPrice}>
-                            {formatPrice(item.price, order.currency)}
+                            {getItemFulfillmentLabel(item.fulfillment_status)}
                           </Text>
                         </View>
+                        {item.estimated_delivery_date && (
+                          <Text style={styles.estimatedDelivery}>
+                            {t('orders.estimatedDelivery')}: {item.estimated_delivery_date}
+                          </Text>
+                        )}
                       </View>
-                    ))}
-                  </View>
-                )}
+                      <View style={styles.lineItemRight}>
+                        <Text style={styles.lineItemQty}>x{item.quantity}</Text>
+                        <Text style={styles.lineItemPrice}>
+                          {formatPrice(item.price, order.currency)}
+                        </Text>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              )}
 
-                <Text style={styles.expandHint}>
-                  {!isSearching
-                    ? isExpanded
-                      ? t('orders.tapToCollapse')
-                      : t('orders.tapToExpand')
-                    : showingAll
-                    ? t('orders.tapToShowMatchesOnly')
-                    : hiddenItemCount > 0
-                    ? t('orders.tapToShowAllItems', { count: hiddenItemCount })
-                    : ''}
-                </Text>
-              </TouchableOpacity>
-            );
-          }}
-          contentContainerStyle={styles.listContent}
-        />
-      </View>
+              <Text style={styles.expandHint}>
+                {!isSearching
+                  ? isExpanded
+                    ? t('orders.tapToCollapse')
+                    : t('orders.tapToExpand')
+                  : showingAll
+                  ? t('orders.tapToShowMatchesOnly')
+                  : hiddenItemCount > 0
+                  ? t('orders.tapToShowAllItems', { count: hiddenItemCount })
+                  : ''}
+              </Text>
+            </Pressable>
+          );
+        }}
+        contentContainerStyle={styles.listContent}
+      />
+    </View>
   );
 }
 
@@ -452,9 +469,14 @@ const styles = StyleSheet.create({
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
-    alignItems: 'center',
-    padding: spacing.xl,
+    padding: spacing.lg,
     backgroundColor: colors.background,
+  },
+  pressed: {
+    opacity: 0.7,
+  },
+  skeletonList: {
+    padding: spacing.md,
   },
   listContent: {
     padding: spacing.md,
@@ -463,21 +485,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceLow,
     marginHorizontal: spacing.md,
     marginTop: spacing.md,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
     borderRadius: borderRadius.md,
-    borderWidth: 1,
-    borderColor: colors.tertiary + '30',
+    minHeight: 46,
   },
   searchInput: {
     flex: 1,
     color: colors.text,
     fontSize: 15,
     // Keeps the row height stable across platforms while typing.
-    paddingVertical: 2,
+    paddingVertical: 10,
   },
   resultSummary: {
     color: colors.textMuted,
@@ -485,72 +505,35 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
     marginHorizontal: spacing.md,
   },
-  noResults: {
-    alignItems: 'center',
-    paddingTop: 60,
-    paddingHorizontal: spacing.xl,
-    gap: spacing.sm,
-  },
   highlight: {
     color: colors.primary,
-    fontWeight: '700',
+    backgroundColor: colors.primary + '1f',
   },
-  loadingText: {
-    marginTop: spacing.md,
-    color: colors.textMuted,
-    fontSize: 14,
-  },
-  emptyTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: colors.text,
-    marginBottom: spacing.sm,
-  },
-  emptyText: {
-    fontSize: 14,
-    color: colors.textMuted,
-    textAlign: 'center',
-  },
-  errorText: {
-    fontSize: 14,
-    color: colors.error,
-    textAlign: 'center',
-    marginBottom: spacing.md,
-  },
-  retryButton: {
-    backgroundColor: colors.primary,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-    borderRadius: borderRadius.md,
-  },
-  retryButtonText: {
-    color: colors.background,
-    fontSize: 14,
-    fontWeight: '600',
-  },
+
+  // Order card
   orderCard: {
     backgroundColor: colors.surface,
-    borderRadius: borderRadius.md,
+    borderRadius: borderRadius.lg,
     padding: spacing.md,
-    marginBottom: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.tertiary + '30',
+    marginBottom: spacing.sm,
   },
   orderHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
+    gap: spacing.md,
   },
   orderInfo: {
     flex: 1,
   },
   orderNumber: {
+    fontFamily: fonts.heading,
     fontSize: 18,
-    fontWeight: '700',
-    color: colors.primary,
+    letterSpacing: 0.5,
+    color: colors.text,
   },
   orderDate: {
-    fontSize: 13,
+    fontSize: 12,
     color: colors.textMuted,
     marginTop: 2,
   },
@@ -558,20 +541,22 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
   },
   totalPrice: {
+    fontFamily: fonts.heading,
     fontSize: 18,
-    fontWeight: '700',
-    color: colors.text,
+    letterSpacing: 0.4,
+    color: colors.primary,
   },
   statusBadge: {
     paddingHorizontal: spacing.sm,
     paddingVertical: 2,
-    borderRadius: borderRadius.sm,
-    marginTop: 4,
+    borderRadius: borderRadius.pill,
+    marginTop: spacing.xs,
   },
   statusText: {
-    fontSize: 11,
-    fontWeight: '600',
-    textTransform: 'capitalize',
+    fontFamily: fonts.heading,
+    fontSize: 10,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
   },
   fulfillmentRow: {
     flexDirection: 'row',
@@ -586,20 +571,24 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.textMuted,
   },
+
+  // Line items
   lineItemsContainer: {
     marginTop: spacing.sm,
   },
   divider: {
-    height: 1,
-    backgroundColor: colors.tertiary + '30',
-    marginBottom: spacing.sm,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.borderStrong,
   },
   lineItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.tertiary + '15',
+    paddingVertical: spacing.sm + spacing.xs,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+  },
+  lineItemFirst: {
+    borderTopWidth: 0,
   },
   lineItemInfo: {
     flex: 1,
@@ -607,6 +596,7 @@ const styles = StyleSheet.create({
   },
   lineItemTitle: {
     fontSize: 14,
+    lineHeight: 19,
     color: colors.text,
   },
   lineItemVariant: {
@@ -618,16 +608,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     alignSelf: 'flex-start',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: borderRadius.sm,
-    marginTop: 4,
+    marginTop: spacing.xs,
   },
   itemFulfillmentDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    marginRight: 4,
+    marginRight: 5,
   },
   itemFulfillmentText: {
     fontSize: 11,
@@ -642,18 +629,20 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
   },
   lineItemQty: {
-    fontSize: 13,
+    fontSize: 12,
     color: colors.textMuted,
   },
   lineItemPrice: {
+    fontFamily: fonts.heading,
     fontSize: 14,
-    fontWeight: '600',
+    letterSpacing: 0.3,
     color: colors.text,
+    marginTop: 2,
   },
   expandHint: {
     fontSize: 11,
     color: colors.textMuted,
     textAlign: 'center',
-    marginTop: spacing.sm,
+    marginTop: spacing.sm + spacing.xs,
   },
 });

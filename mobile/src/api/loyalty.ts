@@ -8,6 +8,13 @@ export interface LoyaltySummary {
   available_rewards_count: number;
 }
 
+export interface PointsBreakdownItem {
+  rule_id: number;
+  rule_name: string;
+  rule_type: string;
+  points: number;
+}
+
 export interface PointsTransaction {
   id: number;
   transaction_type: string;
@@ -15,8 +22,23 @@ export interface PointsTransaction {
   points: number;
   balance_after: number;
   description: string;
+  breakdown: PointsBreakdownItem[] | null;
+  reward_name: string | null;
   shopify_order_name: string;
   created_at: string;
+}
+
+export interface PointsRule {
+  id: number;
+  name: string;
+  description: string;
+  rule_type: string;
+  rule_type_display: string;
+  points: number;
+  condition_value: string;
+  multiplier: string;
+  only_after_registration: boolean;
+  is_active: boolean;
 }
 
 export interface Reward {
@@ -94,6 +116,11 @@ export async function getLoyaltySummary(): Promise<LoyaltySummary> {
 export async function getTransactions(): Promise<PointsTransaction[]> {
   const response = await apiFetch<{ transactions: PointsTransaction[] }>('/loyalty/transactions/');
   return response.transactions;
+}
+
+export async function getPointsRules(): Promise<PointsRule[]> {
+  const response = await apiFetch<{ rules: PointsRule[] }>('/loyalty/rules/');
+  return response.rules;
 }
 
 export async function getRewards(): Promise<RewardsResponse> {

@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, Alert,
-} from 'react-native';
+import { View, Text, StyleSheet, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, router } from 'expo-router';
 import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
-import { colors, spacing, borderRadius } from '../../../src/theme/colors';
+import { colors, spacing, fonts, type } from '../../../src/theme/colors';
+import {
+  Screen, Card, ListItem, SectionHeader, Button, EmptyState, Skeleton,
+} from '../../../src/components/ui';
 import { getGroupDetail, leaveGroup, GroupDetail } from '../../../src/api/community';
 
 export default function GroupInfoScreen() {
@@ -35,67 +35,112 @@ export default function GroupInfoScreen() {
     ]);
   };
 
-  if (isLoading) return <View style={[styles.container, styles.center]}><ActivityIndicator size="large" color={colors.primary} /></View>;
-  if (!group) return <View style={[styles.container, styles.center]}><Text style={styles.emptyText}>{t('community.groupNotFound')}</Text></View>;
+  if (isLoading) {
+    return (
+      <Screen scroll={false}>
+        <View style={styles.skeletonHero}>
+          <Skeleton width={72} height={72} radius={36} />
+          <Skeleton width={160} height={20} style={{ marginTop: spacing.md }} />
+          <Skeleton width={100} height={12} style={{ marginTop: spacing.sm }} />
+        </View>
+        <Skeleton height={180} radius={20} style={{ marginTop: spacing.lg }} />
+      </Screen>
+    );
+  }
+
+  if (!group) {
+    return (
+      <Screen scroll={false}>
+        <View style={styles.centerFill}>
+          <EmptyState icon="alert-circle-outline" title={t('community.groupNotFound')} />
+        </View>
+      </Screen>
+    );
+  }
 
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.header}>
+    <Screen>
+      {/* Hero */}
+      <View style={styles.hero}>
         <View style={styles.avatarLarge}>
-          <Ionicons name="people" size={36} color={colors.primary} />
+          <Ionicons name="people" size={32} color={colors.primary} />
         </View>
         <Text style={styles.groupName}>{group.name}</Text>
         {group.description ? <Text style={styles.groupDesc}>{group.description}</Text> : null}
-        <Text style={styles.memberCount}>{group.member_count} {t('community.groupMembers').toLowerCase()}</Text>
+        <Text style={styles.memberCount}>
+          {group.member_count} {t('community.groupMembers').toLowerCase()}
+        </Text>
       </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>{t('community.groupMembers')}</Text>
-        {group.members.map((member) => (
-          <TouchableOpacity
+      {/* Members */}
+      <SectionHeader title={t('community.groupMembers')} />
+      <Card padded={false}>
+        {group.members.map((member, index) => (
+          <ListItem
             key={member.user_id}
-            style={styles.memberRow}
-            onPress={() => router.push(`/(tabs)/(community)/member-profile?userId=${member.user_id}`)}
-          >
-            <View style={styles.avatarSm}>
-              <Ionicons name="person" size={16} color={colors.textMuted} />
-            </View>
-            <Text style={styles.memberName}>{member.display_name}</Text>
-            {member.role === 'admin' && (
+            icon="person"
+            label={member.display_name}
+            right={member.role === 'admin' ? (
               <View style={styles.adminBadge}>
                 <Text style={styles.adminBadgeText}>{t('community.admin')}</Text>
               </View>
-            )}
-          </TouchableOpacity>
+            ) : undefined}
+            onPress={() => router.push(`/(tabs)/(community)/member-profile?userId=${member.user_id}`)}
+            last={index === group.members.length - 1}
+          />
         ))}
-      </View>
+      </Card>
 
-      <TouchableOpacity style={styles.leaveBtn} onPress={handleLeave}>
-        <Ionicons name="exit-outline" size={20} color={colors.error} />
-        <Text style={styles.leaveBtnText}>{t('community.leaveGroup')}</Text>
-      </TouchableOpacity>
-
-      <View style={{ height: spacing.xl }} />
-    </ScrollView>
+      <Button
+        label={t('community.leaveGroup')}
+        onPress={handleLeave}
+        variant="danger"
+        icon="exit-outline"
+        style={styles.leaveBtn}
+      />
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  header: { alignItems: 'center', padding: spacing.lg, borderBottomWidth: 1, borderBottomColor: colors.tertiary + '20' },
-  avatarLarge: { width: 72, height: 72, borderRadius: 36, backgroundColor: colors.primary + '20', justifyContent: 'center', alignItems: 'center', marginBottom: spacing.md },
-  groupName: { color: colors.text, fontSize: 22, fontWeight: '700' },
-  groupDesc: { color: colors.textMuted, fontSize: 14, textAlign: 'center', marginTop: spacing.xs, paddingHorizontal: spacing.lg },
-  memberCount: { color: colors.textMuted, fontSize: 13, marginTop: spacing.sm },
-  section: { padding: spacing.md },
-  sectionTitle: { color: colors.primary, fontSize: 16, fontWeight: '700', marginBottom: spacing.md },
-  memberRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.sm, gap: spacing.sm },
-  avatarSm: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.tertiary + '30', justifyContent: 'center', alignItems: 'center' },
-  memberName: { color: colors.text, fontSize: 15, flex: 1 },
-  adminBadge: { backgroundColor: colors.primary + '30', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8 },
-  adminBadgeText: { color: colors.primary, fontSize: 11, fontWeight: '700' },
-  leaveBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, marginHorizontal: spacing.md, marginTop: spacing.lg, padding: spacing.md, borderRadius: borderRadius.md, borderWidth: 1, borderColor: colors.error },
-  leaveBtnText: { color: colors.error, fontSize: 15, fontWeight: '600' },
-  emptyText: { color: colors.textMuted, fontSize: 14 },
+  centerFill: { flex: 1, justifyContent: 'center' },
+  skeletonHero: { alignItems: 'center', paddingTop: spacing.xl },
+  hero: { alignItems: 'center', paddingTop: spacing.lg, paddingBottom: spacing.sm },
+  avatarLarge: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: colors.primary + '14',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: spacing.md,
+  },
+  groupName: {
+    ...type.title,
+    textAlign: 'center',
+  },
+  groupDesc: {
+    fontFamily: fonts.serif,
+    fontSize: 16,
+    lineHeight: 23,
+    color: colors.textMuted,
+    textAlign: 'center',
+    marginTop: spacing.xs,
+    paddingHorizontal: spacing.lg,
+  },
+  memberCount: { color: colors.textMuted, fontSize: 12, marginTop: spacing.sm },
+  adminBadge: {
+    backgroundColor: colors.primary + '1f',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+    borderRadius: 999,
+  },
+  adminBadgeText: {
+    fontFamily: fonts.heading,
+    fontSize: 10,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    color: colors.primary,
+  },
+  leaveBtn: { marginTop: spacing.lg },
 });

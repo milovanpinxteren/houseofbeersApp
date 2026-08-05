@@ -3,29 +3,23 @@ import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
-  RefreshControl,
   TouchableOpacity,
   Linking,
-  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../src/context/AuthContext';
 import { useLanguage } from '../../src/context/LanguageContext';
 import { t } from '../../src/i18n';
-import { colors, spacing, borderRadius } from '../../src/theme/colors';
+import { colors, spacing, borderRadius, fonts, type } from '../../src/theme/colors';
+import { Card, Screen, SectionHeader, SkeletonCard, Button } from '../../src/components/ui';
 import {
   Notification,
   getNotifications,
   dismissNotification,
 } from '../../src/api/notifications';
-import {
-  getUntappdProfile,
-  getFavorites,
-  UntappdProfile,
-} from '../../src/api/recommendations';
 import { getEvents, joinEvent, Event } from '../../src/api/events';
+import { getLoyaltySummary, LoyaltySummary } from '../../src/api/loyalty';
 import IOSInstallPrompt from '../../src/components/IOSInstallPrompt';
 
 const notificationIcons: Record<string, keyof typeof Ionicons.glyphMap> = {
@@ -35,24 +29,6 @@ const notificationIcons: Record<string, keyof typeof Ionicons.glyphMap> = {
   news: 'newspaper',
 };
 
-const notificationColors: Record<string, string> = {
-  announcement: colors.primary,
-  promotion: '#e74c3c',
-  event: '#9b59b6',
-  news: '#3498db',
-};
-
-type IconName = React.ComponentProps<typeof Ionicons>['name'];
-
-interface MenuItem {
-  id: string;
-  icon: IconName;
-  label: string;
-  subtitle?: string;
-  route: string;
-  badge?: number;
-}
-
 export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuth();
@@ -60,21 +36,18 @@ export default function HomeScreen() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [untappdProfile, setUntappdProfile] = useState<UntappdProfile | null>(null);
-  const [favoritesCount, setFavoritesCount] = useState(0);
   const [events, setEvents] = useState<Event[]>([]);
+  const [loyalty, setLoyalty] = useState<LoyaltySummary | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
-      const [notifData, untappdData, favoritesData, eventsData] = await Promise.all([
+      const [notifData, eventsData, loyaltyData] = await Promise.all([
         getNotifications(),
-        getUntappdProfile(),
-        getFavorites(),
         getEvents(),
+        getLoyaltySummary().catch(() => null),
       ]);
+      setLoyalty(loyaltyData);
       setNotifications(notifData.filter((n) => !n.is_read));
-      setUntappdProfile(untappdData.untappd);
-      setFavoritesCount(favoritesData.favorites.length);
       // Show live first, then scheduled, hide ended
       const sorted = eventsData.events
         .filter((e) => e.status !== 'ended')
@@ -100,42 +73,6 @@ export default function HomeScreen() {
     await fetchData();
     setRefreshing(false);
   }, [fetchData]);
-
-  const menuItems: MenuItem[] = [
-    {
-      id: 'recommendations',
-      icon: 'beer',
-      label: t('profile.recommendations'),
-      subtitle: untappdProfile
-        ? `@${untappdProfile.username}`
-        : t('profile.basedOnOrders'),
-      route: '/(profile)/recommendations',
-    },
-    {
-      id: 'taste-profile',
-      icon: 'analytics',
-      label: t('profile.tasteProfile'),
-      subtitle: t('profile.tasteProfileSubtitle'),
-      route: '/(profile)/taste-profile',
-    },
-    {
-      id: 'favorites',
-      icon: 'heart',
-      label: t('profile.favorites'),
-      subtitle: t('profile.favoritesSubtitle'),
-      route: '/(profile)/favorites',
-      badge: favoritesCount > 0 ? favoritesCount : undefined,
-    },
-    {
-      id: 'orders',
-      icon: 'receipt',
-      label: t('profile.orders'),
-      subtitle: user?.shopify_customer_id
-        ? t('profile.viewOrderHistory')
-        : t('profile.linkShopifyFirst'),
-      route: '/(profile)/orders',
-    },
-  ];
 
   const handleDismiss = async (notificationId: number) => {
     try {
@@ -178,20 +115,19 @@ export default function HomeScreen() {
 
   const renderNotification = (notification: Notification) => {
     const iconName = notificationIcons[notification.notification_type] || 'information-circle';
-    const iconColor = notificationColors[notification.notification_type] || colors.primary;
 
     return (
-      <View key={notification.id} style={styles.notificationCard}>
+      <Card key={notification.id} style={styles.notificationCard}>
         <View style={styles.notificationHeader}>
           <View style={styles.notificationTitleRow}>
-            <Ionicons name={iconName} size={20} color={iconColor} />
+            <Ionicons name={iconName} size={18} color={colors.primary} />
             <Text style={styles.notificationTitle}>{notification.title}</Text>
           </View>
           <TouchableOpacity
             onPress={() => handleDismiss(notification.id)}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
-            <Ionicons name="close" size={20} color={colors.textMuted} />
+            <Ionicons name="close" size={18} color={colors.textMuted} />
           </TouchableOpacity>
         </View>
         <Text style={styles.notificationMessage}>{notification.message}</Text>
@@ -203,54 +139,49 @@ export default function HomeScreen() {
             <Text style={styles.notificationLinkText}>
               {notification.link_text || t('home.learnMore')}
             </Text>
-            <Ionicons name="arrow-forward" size={14} color={colors.primary} />
+            <Ionicons name="arrow-forward" size={13} color={colors.primary} />
           </TouchableOpacity>
         ) : null}
-      </View>
+      </Card>
     );
   };
 
   return (
-    <ScrollView
-      style={styles.scrollView}
-      contentContainerStyle={styles.scrollContent}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={onRefresh}
-          tintColor={colors.primary}
-        />
-      }
-    >
+    <Screen refreshing={refreshing} onRefresh={onRefresh}>
+      {/* Editorial greeting */}
       <View style={styles.header}>
         <Text style={styles.greeting}>
-          {t('home.welcome')}{user?.first_name ? `, ${user.first_name}` : ''}!
+          {t('home.welcome')}{user?.first_name ? `, ${user.first_name}` : ''}
         </Text>
-        <Text style={styles.subtitle}>House of Beers</Text>
+        <Text style={styles.tagline}>{t('home.tagline')}</Text>
       </View>
 
       <IOSInstallPrompt />
 
       {loading ? (
-        <ActivityIndicator size="large" color={colors.primary} style={styles.loader} />
+        <View style={{ marginTop: spacing.lg }}>
+          <SkeletonCard />
+          <SkeletonCard />
+        </View>
       ) : (
         <>
           {notifications.length > 0 && (
-            <View style={styles.notificationsSection}>
-              <Text style={styles.sectionTitle}>{t('home.notifications')}</Text>
+            <>
+              <SectionHeader title={t('home.notifications')} />
               {notifications.map(renderNotification)}
-            </View>
+            </>
           )}
 
-          {/* Events Section */}
+          {/* Events */}
           {events.length > 0 && (
-            <View style={styles.eventsSection}>
-              <Text style={styles.sectionTitle}>{t('events.title')}</Text>
+            <>
+              <SectionHeader title={t('events.title')} />
               {events.map((evt) => (
-                <View key={evt.id} style={styles.eventCard}>
+                <Card key={evt.id} variant={evt.status === 'live' ? 'accent' : 'default'} style={styles.eventCard}>
                   <View style={styles.eventHeader}>
                     {evt.status === 'live' ? (
                       <View style={styles.liveBadge}>
+                        <View style={styles.liveDot} />
                         <Text style={styles.liveBadgeText}>{t('events.liveNow')}</Text>
                       </View>
                     ) : (
@@ -272,127 +203,104 @@ export default function HomeScreen() {
                     </Text>
                   ) : null}
                   {evt.status === 'live' ? (
-                    <TouchableOpacity
-                      style={styles.eventButton}
+                    <Button
+                      label={t('events.joinLive')}
+                      icon="play"
                       onPress={() =>
                         router.push({
                           pathname: '/(community)/livestream',
                           params: { eventId: evt.id },
                         } as any)
                       }
-                    >
-                      <Ionicons name="play" size={16} color={colors.background} />
-                      <Text style={styles.eventButtonText}>{t('events.joinLive')}</Text>
-                    </TouchableOpacity>
+                      style={styles.eventButton}
+                    />
                   ) : evt.is_joined ? (
-                    <TouchableOpacity
-                      style={[styles.eventButton, styles.eventButtonJoined]}
+                    <Button
+                      label={t('events.rsvped')}
+                      icon="checkmark"
+                      variant="secondary"
                       onPress={() =>
                         router.push({
                           pathname: '/(community)/livestream',
                           params: { eventId: evt.id },
                         } as any)
                       }
-                    >
-                      <Ionicons name="checkmark" size={16} color={colors.primary} />
-                      <Text style={[styles.eventButtonText, styles.eventButtonTextJoined]}>
-                        {t('events.rsvped')}
-                      </Text>
-                    </TouchableOpacity>
-                  ) : (
-                    <TouchableOpacity
                       style={styles.eventButton}
+                    />
+                  ) : (
+                    <Button
+                      label={t('events.rsvp')}
                       onPress={() => handleRSVP(evt.id)}
-                    >
-                      <Text style={styles.eventButtonText}>{t('events.rsvp')}</Text>
-                    </TouchableOpacity>
+                      style={styles.eventButton}
+                    />
                   )}
-                </View>
+                </Card>
               ))}
-            </View>
+            </>
           )}
 
-          {/* Beer Journey Section */}
-          <View style={styles.journeySection}>
-            <Text style={styles.sectionTitle}>{t('profile.yourBeerJourney')}</Text>
-            <View style={styles.menuCard}>
-              {menuItems.map((item) => (
-                <TouchableOpacity
-                  key={item.id}
-                  style={styles.menuItem}
-                  onPress={() => router.push(item.route as any)}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.menuIconContainer}>
-                    <Ionicons name={item.icon} size={22} color={colors.primary} />
-                  </View>
-                  <View style={styles.menuContent}>
-                    <Text style={styles.menuLabel}>{item.label}</Text>
-                    {item.subtitle && (
-                      <Text style={styles.menuSubtitle} numberOfLines={1}>
-                        {item.subtitle}
-                      </Text>
-                    )}
-                  </View>
-                  {item.badge && (
-                    <View style={styles.badge}>
-                      <Text style={styles.badgeText}>{item.badge}</Text>
-                    </View>
-                  )}
-                  <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
-                </TouchableOpacity>
-              ))}
+          {/* Always-visible navigation cards so the page never feels empty */}
+          <SectionHeader title={t('home.forYou')} />
+
+          <Card variant="accent" onPress={() => router.push('/(tabs)/loyalty' as any)} style={styles.navCard}>
+            <View style={styles.navIconWrap}>
+              <Ionicons name="star" size={24} color={colors.primary} />
             </View>
-          </View>
+            <View style={styles.navText}>
+              <Text style={styles.navTitle}>{t('home.yourPoints')}</Text>
+              <Text style={styles.navSubtitle}>{t('home.pointsHint')}</Text>
+            </View>
+            {loyalty ? (
+              <View style={styles.pointsPill}>
+                <Text style={styles.pointsPillText}>{loyalty.balance}</Text>
+              </View>
+            ) : null}
+            <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+          </Card>
+
+          <Card onPress={() => router.push('/(tabs)/ontdek' as any)} style={styles.navCard}>
+            <View style={styles.navIconWrap}>
+              <Ionicons name="compass" size={24} color={colors.primary} />
+            </View>
+            <View style={styles.navText}>
+              <Text style={styles.navTitle}>{t('tabs.discover')}</Text>
+              <Text style={styles.navSubtitle}>{t('discover.recommendationsSubtitle')}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+          </Card>
+
+          <Card onPress={() => router.push('/(tabs)/community' as any)} style={styles.navCard}>
+            <View style={styles.navIconWrap}>
+              <Ionicons name="people" size={24} color={colors.primary} />
+            </View>
+            <View style={styles.navText}>
+              <Text style={styles.navTitle}>{t('tabs.community')}</Text>
+              <Text style={styles.navSubtitle}>{t('home.communityHint')}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+          </Card>
         </>
       )}
-    </ScrollView>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  scrollView: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  scrollContent: {
-    flexGrow: 1,
-    padding: spacing.lg,
-  },
   header: {
-    alignItems: 'center',
-    paddingTop: spacing.xl,
-    paddingBottom: spacing.md,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.sm,
   },
   greeting: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: colors.text,
-    marginBottom: spacing.sm,
+    ...type.display,
   },
-  subtitle: {
-    fontSize: 20,
+  tagline: {
+    fontFamily: fonts.serifItalic,
+    fontSize: 17,
     color: colors.primary,
-  },
-  loader: {
-    marginTop: spacing.xl,
-  },
-  notificationsSection: {
-    marginTop: spacing.lg,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: colors.text,
-    marginBottom: spacing.md,
+    marginTop: spacing.xs,
   },
   notificationCard: {
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
     marginBottom: spacing.sm,
-    borderLeftWidth: 3,
-    borderLeftColor: colors.primary,
   },
   notificationHeader: {
     flexDirection: 'row',
@@ -404,40 +312,34 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     flex: 1,
+    gap: spacing.sm,
   },
   notificationTitle: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontFamily: fonts.heading,
+    fontSize: 15,
+    letterSpacing: 0.4,
     color: colors.text,
-    marginLeft: spacing.sm,
     flex: 1,
   },
   notificationMessage: {
-    fontSize: 14,
+    fontFamily: fonts.serif,
+    fontSize: 15,
     color: colors.textMuted,
-    lineHeight: 20,
+    lineHeight: 21,
   },
   notificationLink: {
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: spacing.sm,
+    gap: spacing.xs,
   },
   notificationLinkText: {
-    fontSize: 14,
+    fontSize: 13,
     color: colors.primary,
-    marginRight: spacing.xs,
-  },
-  // Events Section
-  eventsSection: {
-    marginTop: spacing.lg,
+    fontWeight: '600',
   },
   eventCard: {
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
     marginBottom: spacing.sm,
-    borderLeftWidth: 3,
-    borderLeftColor: colors.primary,
   },
   eventHeader: {
     flexDirection: 'row',
@@ -446,15 +348,25 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   liveBadge: {
-    backgroundColor: '#e74c3c',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: colors.live + '22',
     paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 4,
+    paddingVertical: 3,
+    borderRadius: borderRadius.pill,
+  },
+  liveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.live,
   },
   liveBadgeText: {
-    color: '#fff',
+    color: colors.live,
     fontSize: 11,
     fontWeight: '700',
+    letterSpacing: 0.5,
   },
   scheduledBadge: {
     flexDirection: 'row',
@@ -470,91 +382,60 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   eventTitle: {
+    fontFamily: fonts.heading,
+    fontSize: 17,
+    letterSpacing: 0.4,
     color: colors.text,
-    fontSize: 16,
-    fontWeight: '600',
     marginBottom: 4,
   },
   eventDescription: {
+    fontFamily: fonts.serif,
+    fontSize: 14,
     color: colors.textMuted,
-    fontSize: 13,
-    lineHeight: 18,
+    lineHeight: 20,
     marginBottom: spacing.sm,
   },
   eventButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.primary,
-    paddingVertical: 8,
-    borderRadius: borderRadius.sm,
-    gap: 6,
     marginTop: spacing.xs,
   },
-  eventButtonText: {
-    color: colors.background,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  eventButtonJoined: {
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: colors.primary,
-  },
-  eventButtonTextJoined: {
-    color: colors.primary,
-  },
-
-  // Beer Journey Section
-  journeySection: {
-    marginTop: spacing.lg,
-  },
-  menuCard: {
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.md,
-    borderWidth: 1,
-    borderColor: colors.tertiary + '30',
-    overflow: 'hidden',
-  },
-  menuItem: {
+  navCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.tertiary + '20',
+    gap: spacing.md,
+    marginBottom: spacing.sm,
   },
-  menuIconContainer: {
-    width: 36,
-    height: 36,
-    borderRadius: 8,
-    backgroundColor: colors.primary + '15',
+  navIconWrap: {
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: colors.primary + '14',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: spacing.md,
   },
-  menuContent: {
+  navText: {
     flex: 1,
   },
-  menuLabel: {
+  navTitle: {
+    fontFamily: fonts.heading,
     fontSize: 16,
-    fontWeight: '500',
+    letterSpacing: 0.4,
     color: colors.text,
   },
-  menuSubtitle: {
-    fontSize: 13,
+  navSubtitle: {
+    fontFamily: fonts.serif,
+    fontSize: 14,
     color: colors.textMuted,
-    marginTop: 2,
+    marginTop: 1,
   },
-  badge: {
+  pointsPill: {
     backgroundColor: colors.primary,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 10,
-    marginRight: spacing.sm,
+    borderRadius: borderRadius.pill,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
   },
-  badgeText: {
+  pointsPillText: {
+    fontFamily: fonts.headingBold,
+    fontSize: 16,
     color: colors.background,
-    fontSize: 12,
-    fontWeight: '600',
   },
 });

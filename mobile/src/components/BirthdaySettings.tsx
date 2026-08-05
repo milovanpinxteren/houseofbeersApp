@@ -3,8 +3,7 @@ import {
   View,
   Text,
   TextInput,
-  TouchableOpacity,
-  ActivityIndicator,
+  Pressable,
   StyleSheet,
   Platform,
 } from 'react-native';
@@ -12,9 +11,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { t } from '../i18n';
-import { colors, spacing, borderRadius } from '../theme/colors';
+import { colors, spacing, borderRadius, fonts } from '../theme/colors';
 import { updateBirthdate } from '../api/auth';
 import { usePushSubscription } from '../hooks/usePushSubscription';
+import { Button, useToast } from './ui';
 
 /** Matches the backend's anti-abuse window; the backend stays the authority. */
 const LEAD_TIME_DAYS = 30;
@@ -87,9 +87,9 @@ function DateField({ value, onChange, disabled }: DateFieldProps) {
       disabled,
       onChange: (event: { target: { value: string } }) => onChange(event.target.value),
       style: {
-        backgroundColor: colors.background,
+        backgroundColor: colors.surfaceLow,
         color: colors.text,
-        border: `1px solid ${colors.tertiary}50`,
+        border: 'none',
         borderRadius: borderRadius.md,
         padding: spacing.md,
         fontSize: 16,
@@ -116,19 +116,22 @@ function DateField({ value, onChange, disabled }: DateFieldProps) {
 }
 
 /**
- * Birthday section for the profile screen. Doubles as the best moment to ask
- * for notification permission: right after a save, when the value is obvious.
+ * Birthday row for the profile screen's preferences card. Collapsed it is a
+ * single ListItem-style row; expanding it reveals the editor. Doubles as the
+ * best moment to ask for notification permission: right after a save, when
+ * the value is obvious.
  */
 export default function BirthdaySettings() {
   useLanguage(); // re-render on language change
   const { user, refreshUser } = useAuth();
   const { permission, blocker, isBusy, feedback, enable } = usePushSubscription();
+  const { showToast } = useToast();
 
+  const [expanded, setExpanded] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [value, setValue] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [savedNotice, setSavedNotice] = useState<string | null>(null);
   const [leadTimeNotice, setLeadTimeNotice] = useState<string | null>(null);
   const [showPushPrompt, setShowPushPrompt] = useState(false);
 
@@ -136,10 +139,13 @@ export default function BirthdaySettings() {
   const isLocked = user?.birthdate_locked === true;
   const canAskForPush = permission === 'default' && blocker === 'none';
 
+  function toggleExpanded() {
+    setExpanded((current) => !current);
+  }
+
   function startEditing() {
     setValue(birthdate || '');
     setError(null);
-    setSavedNotice(null);
     setIsEditing(true);
   }
 
@@ -159,7 +165,7 @@ export default function BirthdaySettings() {
       setLeadTimeNotice(
         days !== null && days < LEAD_TIME_DAYS ? t('birthday.leadTimeNotice') : null
       );
-      setSavedNotice(t('birthday.saved'));
+      showToast(t('birthday.saved'), 'success');
       setIsEditing(false);
       setShowPushPrompt(canAskForPush);
 
@@ -184,159 +190,157 @@ export default function BirthdaySettings() {
   }
 
   return (
-    <View style={styles.section}>
-      <Text style={styles.sectionTitle}>{t('birthday.title')}</Text>
-      <View style={styles.card}>
-        <View style={styles.headerRow}>
-          <View style={styles.iconContainer}>
-            <Ionicons name="gift" size={22} color={colors.primary} />
-          </View>
-          <View style={styles.headerContent}>
-            <Text style={styles.headerLabel}>{t('birthday.label')}</Text>
-            <Text style={styles.headerValue}>
-              {birthdate ? formatDate(birthdate) : t('birthday.notSet')}
-            </Text>
-          </View>
-          {isLocked && <Ionicons name="lock-closed" size={18} color={colors.textMuted} />}
+    <View style={styles.wrap}>
+      {/* Collapsed row — matches the ListItem look of the surrounding card */}
+      <Pressable
+        onPress={toggleExpanded}
+        style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+      >
+        <View style={styles.iconWrap}>
+          <Ionicons name="gift-outline" size={20} color={colors.primary} />
         </View>
-
-        {!birthdate && !isEditing && <Text style={styles.bodyText}>{t('birthday.prompt')}</Text>}
-
-        {isLocked ? (
-          <View style={styles.lockedBlock}>
-            <Text style={styles.lockedTitle}>{t('birthday.lockedTitle')}</Text>
-            <Text style={styles.bodyText}>{t('birthday.lockedText')}</Text>
-          </View>
-        ) : isEditing ? (
-          <View style={styles.editBlock}>
-            <DateField value={value} onChange={setValue} disabled={isSaving} />
-            <Text style={styles.hintText}>{t('birthday.hint')}</Text>
-            <Text style={styles.hintText}>{t('birthday.lockWarning')}</Text>
-            {error && <Text style={styles.errorText}>{error}</Text>}
-            <View style={styles.buttonRow}>
-              <TouchableOpacity
-                style={styles.cancelButton}
-                onPress={() => setIsEditing(false)}
-                disabled={isSaving}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.cancelButtonText}>{t('common.cancel')}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.saveButton, isSaving && styles.buttonDisabled]}
-                onPress={handleSave}
-                disabled={isSaving}
-                activeOpacity={0.7}
-              >
-                {isSaving ? (
-                  <ActivityIndicator size="small" color={colors.background} />
-                ) : (
-                  <Text style={styles.saveButtonText}>{t('save')}</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        ) : (
-          <TouchableOpacity style={styles.actionButton} onPress={startEditing} activeOpacity={0.7}>
-            <Ionicons name="calendar-outline" size={18} color={colors.background} />
-            <Text style={styles.actionButtonText}>
-              {birthdate ? t('birthday.edit') : t('birthday.set')}
-            </Text>
-          </TouchableOpacity>
-        )}
-
-        {savedNotice && !isEditing && <Text style={styles.successText}>{savedNotice}</Text>}
-        {leadTimeNotice && !isEditing && <Text style={styles.hintText}>{leadTimeNotice}</Text>}
-
-        {/* The high-value moment to ask: a gift is now on its way. */}
-        {showPushPrompt && (
-          <View style={styles.pushPrompt}>
-            <Text style={styles.pushPromptTitle}>{t('birthday.pushPromptTitle')}</Text>
-            <Text style={styles.bodyText}>{t('birthday.pushPromptText')}</Text>
-            <View style={styles.buttonRow}>
-              <TouchableOpacity
-                style={styles.cancelButton}
-                onPress={() => setShowPushPrompt(false)}
-                disabled={isBusy}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.cancelButtonText}>{t('birthday.pushPromptLater')}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.saveButton, isBusy && styles.buttonDisabled]}
-                onPress={handleEnablePush}
-                disabled={isBusy}
-                activeOpacity={0.7}
-              >
-                {isBusy ? (
-                  <ActivityIndicator size="small" color={colors.background} />
-                ) : (
-                  <Text style={styles.saveButtonText}>{t('notifications.enable')}</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
-
-        {feedback && (
-          <Text style={feedback.type === 'error' ? styles.errorText : styles.hintText}>
-            {feedback.message}
+        <View style={styles.rowContent}>
+          <Text style={styles.rowLabel}>{t('birthday.title')}</Text>
+          <Text style={styles.rowSubtitle} numberOfLines={1}>
+            {birthdate ? formatDate(birthdate) : t('birthday.notSet')}
           </Text>
+        </View>
+        {isLocked && (
+          <Ionicons name="lock-closed" size={15} color={colors.textMuted} />
         )}
-      </View>
+        <Ionicons
+          name={expanded ? 'chevron-up' : 'chevron-down'}
+          size={18}
+          color={colors.textMuted}
+        />
+      </Pressable>
+
+      {expanded && (
+        <View style={styles.body}>
+          {isLocked ? (
+            <View style={styles.lockedBlock}>
+              <Text style={styles.lockedTitle}>{t('birthday.lockedTitle')}</Text>
+              <Text style={styles.bodyText}>{t('birthday.lockedText')}</Text>
+            </View>
+          ) : isEditing ? (
+            <View style={styles.editBlock}>
+              <DateField value={value} onChange={setValue} disabled={isSaving} />
+              <Text style={styles.hintText}>{t('birthday.hint')}</Text>
+              <Text style={styles.hintText}>{t('birthday.lockWarning')}</Text>
+              {error && <Text style={styles.errorText}>{error}</Text>}
+              <View style={styles.buttonRow}>
+                <Button
+                  label={t('common.cancel')}
+                  variant="ghost"
+                  onPress={() => setIsEditing(false)}
+                  disabled={isSaving}
+                  style={styles.flexButton}
+                />
+                <Button
+                  label={t('save')}
+                  onPress={handleSave}
+                  loading={isSaving}
+                  style={styles.flexButton}
+                />
+              </View>
+            </View>
+          ) : (
+            <View style={styles.idleBlock}>
+              {!birthdate && <Text style={styles.bodyText}>{t('birthday.prompt')}</Text>}
+              <Button
+                label={birthdate ? t('birthday.edit') : t('birthday.set')}
+                variant={birthdate ? 'secondary' : 'primary'}
+                size="sm"
+                icon="calendar-outline"
+                onPress={startEditing}
+                style={styles.startButton}
+              />
+            </View>
+          )}
+
+          {leadTimeNotice && !isEditing && (
+            <Text style={styles.hintText}>{leadTimeNotice}</Text>
+          )}
+
+          {/* The high-value moment to ask: a gift is now on its way. */}
+          {showPushPrompt && (
+            <View style={styles.pushPrompt}>
+              <Text style={styles.pushPromptTitle}>{t('birthday.pushPromptTitle')}</Text>
+              <Text style={styles.bodyText}>{t('birthday.pushPromptText')}</Text>
+              <View style={styles.buttonRow}>
+                <Button
+                  label={t('birthday.pushPromptLater')}
+                  variant="ghost"
+                  onPress={() => setShowPushPrompt(false)}
+                  disabled={isBusy}
+                  style={styles.flexButton}
+                />
+                <Button
+                  label={t('notifications.enable')}
+                  onPress={handleEnablePush}
+                  loading={isBusy}
+                  style={styles.flexButton}
+                />
+              </View>
+            </View>
+          )}
+
+          {feedback && (
+            <Text style={feedback.type === 'error' ? styles.errorText : styles.hintText}>
+              {feedback.message}
+            </Text>
+          )}
+        </View>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  section: {
-    marginBottom: spacing.md,
-  },
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.textMuted,
-    textTransform: 'uppercase',
-    marginHorizontal: spacing.md,
-    marginBottom: spacing.sm,
-  },
-  card: {
-    backgroundColor: colors.surface,
-    marginHorizontal: spacing.md,
-    borderRadius: borderRadius.md,
-    borderWidth: 1,
-    borderColor: colors.tertiary + '30',
-    padding: spacing.md,
-    gap: spacing.sm,
+  wrap: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
   },
 
-  headerRow: {
+  // Collapsed row — mirrors the kit ListItem metrics
+  row: {
     flexDirection: 'row',
     alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: spacing.md,
+    gap: spacing.md,
   },
-  iconContainer: {
-    width: 36,
-    height: 36,
-    borderRadius: 8,
-    backgroundColor: colors.primary + '15',
+  rowPressed: {
+    backgroundColor: colors.surfaceHigh,
+  },
+  iconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: colors.primary + '14',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: spacing.md,
   },
-  headerContent: {
+  rowContent: {
     flex: 1,
   },
-  headerLabel: {
-    fontSize: 13,
-    color: colors.textMuted,
-  },
-  headerValue: {
-    fontSize: 16,
-    fontWeight: '600',
+  rowLabel: {
+    fontSize: 15,
+    fontWeight: '500',
     color: colors.text,
+  },
+  rowSubtitle: {
+    fontSize: 12,
+    color: colors.textMuted,
     marginTop: 2,
   },
 
+  // Expanded body
+  body: {
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.md,
+    gap: spacing.sm,
+  },
   bodyText: {
     fontSize: 13,
     color: colors.textMuted,
@@ -352,70 +356,30 @@ const styles = StyleSheet.create({
     color: colors.error,
     lineHeight: 19,
   },
-  successText: {
-    fontSize: 13,
-    color: colors.success,
-    lineHeight: 19,
-  },
 
+  idleBlock: {
+    gap: spacing.sm,
+  },
+  startButton: {
+    alignSelf: 'flex-start',
+  },
   editBlock: {
     gap: spacing.sm,
   },
   textInput: {
-    backgroundColor: colors.background,
+    backgroundColor: colors.surfaceLow,
     borderRadius: borderRadius.md,
     padding: spacing.md,
     fontSize: 16,
     color: colors.text,
-    borderWidth: 1,
-    borderColor: colors.tertiary + '50',
   },
   buttonRow: {
     flexDirection: 'row',
     gap: spacing.sm,
     marginTop: spacing.xs,
   },
-  cancelButton: {
+  flexButton: {
     flex: 1,
-    padding: spacing.md,
-    borderRadius: borderRadius.md,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.textMuted,
-  },
-  cancelButtonText: {
-    color: colors.textMuted,
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  saveButton: {
-    flex: 1,
-    padding: spacing.md,
-    borderRadius: borderRadius.md,
-    alignItems: 'center',
-    backgroundColor: colors.primary,
-  },
-  saveButtonText: {
-    color: colors.background,
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  actionButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.xs,
-    backgroundColor: colors.primary,
-    padding: spacing.md,
-    borderRadius: borderRadius.md,
-  },
-  actionButtonText: {
-    color: colors.background,
-    fontSize: 15,
-    fontWeight: '600',
   },
 
   lockedBlock: {
@@ -425,21 +389,23 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   lockedTitle: {
+    fontFamily: fonts.heading,
     fontSize: 14,
-    fontWeight: '600',
+    letterSpacing: 0.4,
     color: colors.text,
   },
 
   pushPrompt: {
-    marginTop: spacing.sm,
+    marginTop: spacing.xs,
     paddingTop: spacing.md,
-    borderTopWidth: 1,
-    borderTopColor: colors.tertiary + '20',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
     gap: spacing.xs,
   },
   pushPromptTitle: {
+    fontFamily: fonts.heading,
     fontSize: 15,
-    fontWeight: '600',
+    letterSpacing: 0.4,
     color: colors.text,
   },
 });

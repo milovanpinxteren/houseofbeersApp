@@ -1,18 +1,19 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
   Switch,
-  TouchableOpacity,
-  ActivityIndicator,
+  Pressable,
   StyleSheet,
   Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLanguage } from '../context/LanguageContext';
 import { t } from '../i18n';
-import { colors, spacing, borderRadius } from '../theme/colors';
+import { colors, spacing, fonts } from '../theme/colors';
 import { usePushSubscription } from '../hooks/usePushSubscription';
+import { syncExistingSubscription } from '../utils/webPush';
+import { Button, useToast } from './ui';
 import {
   getNotificationPreferences,
   updateNotificationPreferences,
@@ -27,20 +28,34 @@ interface CategoryRow {
 }
 
 /**
- * Notification settings section for the profile screen.
+ * Notification row for the profile screen's preferences card. Collapsed it is
+ * a single ListItem-style row showing the current status; expanding it reveals
+ * the enable control and per-category toggles.
  *
  * The enable control reflects the real browser permission, and every dead end
  * (iOS not installed, permission permanently denied, unsupported browser) gets
  * an explanation instead of a button that cannot work.
+ *
+ * Notifications are ON by default (the server-side preference defaults to
+ * enabled). What is still needed per device is the browser permission, so:
+ * - if permission is already granted, the device is (re)subscribed silently;
+ * - if permission was never asked, the prompt fires on the user's first
+ *   interaction with this row — never on page load, browsers punish that.
  */
 export default function NotificationSettings() {
   useLanguage(); // re-render on language change
   const { permission, blocker, isBusy, feedback, enable, disable } = usePushSubscription();
+  const { showToast } = useToast();
 
+  const [expanded, setExpanded] = useState(false);
   const [preferences, setPreferences] = useState<NotificationPreferences | null>(null);
   const [preferencesUnavailable, setPreferencesUnavailable] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
   const [savingKey, setSavingKey] = useState<NotificationCategory | null>(null);
+
+  // One attempt each per mount: silent re-subscribe, and the first-interaction
+  // permission prompt.
+  const silentSyncDone = useRef(false);
+  const autoEnableAttempted = useRef(false);
 
   const loadPreferences = useCallback(async () => {
     try {
@@ -58,13 +73,44 @@ export default function NotificationSettings() {
     loadPreferences();
   }, [loadPreferences]);
 
+  // Preference on + permission already granted: make sure this device really
+  // has a subscription (it can be lost when the PWA is re-installed or the
+  // push service rotates it). Never prompts — permission is already granted.
+  useEffect(() => {
+    if (silentSyncDone.current) return;
+    if (permission !== 'granted') return;
+    if (!preferences) return; // wait until we know the user's choice
+    if (!preferences.push_enabled) return; // explicit opt-out
+    silentSyncDone.current = true;
+    void syncExistingSubscription();
+  }, [permission, preferences]);
+
+  // Tapping the row is the user's first interaction with notifications. If
+  // the preference is on (the default) and permission was never decided, this
+  // tap is the user gesture we use to run the permission + subscribe flow.
+  function handleRowPress() {
+    const willExpand = !expanded;
+    setExpanded(willExpand);
+
+    if (
+      willExpand &&
+      !autoEnableAttempted.current &&
+      !isBusy &&
+      permission === 'default' &&
+      blocker === 'none' &&
+      preferences?.push_enabled !== false // unset counts as the on-default
+    ) {
+      autoEnableAttempted.current = true;
+      void enable();
+    }
+  }
+
   async function handleToggle(key: NotificationCategory, value: boolean) {
     if (!preferences) return;
     const previous = preferences;
 
     setPreferences({ ...preferences, [key]: value } as NotificationPreferences);
     setSavingKey(key);
-    setSaveError(null);
 
     try {
       const updated = await updateNotificationPreferences(
@@ -74,7 +120,7 @@ export default function NotificationSettings() {
     } catch (error) {
       console.log('[Notifications] Save preference failed:', error);
       setPreferences(previous); // revert
-      setSaveError(t('notifications.saveError'));
+      showToast(t('notifications.saveError'), 'error');
     } finally {
       setSavingKey(null);
     }
@@ -98,13 +144,24 @@ export default function NotificationSettings() {
     },
   ];
 
+  function statusSubtitle(): string {
+    if (blocker === 'ios-not-installed') return t('notifications.iosInstallTitle');
+    if (permission === 'unsupported') return t('notifications.unsupportedTitle');
+    if (permission === 'denied') return t('notifications.deniedTitle');
+    if (permission === 'granted') return t('notifications.enabled');
+    // Permission not decided yet. The preference itself defaults to on, so
+    // read as "on, just activate this device" unless the user opted out.
+    if (preferences?.push_enabled === false) return t('notifications.statusOff');
+    return t('notifications.statusReady');
+  }
+
   function renderEnableControl() {
     // iOS Safari only exposes push once the PWA is on the Home Screen.
     if (blocker === 'ios-not-installed') {
       return (
         <View style={styles.infoBlock}>
           <View style={styles.infoHeader}>
-            <Ionicons name="phone-portrait-outline" size={20} color={colors.primary} />
+            <Ionicons name="phone-portrait-outline" size={18} color={colors.primary} />
             <Text style={styles.infoTitle}>{t('notifications.iosInstallTitle')}</Text>
           </View>
           <Text style={styles.infoText}>{t('notifications.iosInstallText')}</Text>
@@ -119,7 +176,7 @@ export default function NotificationSettings() {
       return (
         <View style={styles.infoBlock}>
           <View style={styles.infoHeader}>
-            <Ionicons name="information-circle-outline" size={20} color={colors.textMuted} />
+            <Ionicons name="information-circle-outline" size={18} color={colors.textMuted} />
             <Text style={styles.infoTitle}>{t('notifications.unsupportedTitle')}</Text>
           </View>
           <Text style={styles.infoText}>
@@ -136,7 +193,7 @@ export default function NotificationSettings() {
       return (
         <View style={[styles.infoBlock, styles.warningBlock]}>
           <View style={styles.infoHeader}>
-            <Ionicons name="notifications-off-outline" size={20} color={colors.warning} />
+            <Ionicons name="notifications-off-outline" size={18} color={colors.warning} />
             <Text style={styles.infoTitle}>{t('notifications.deniedTitle')}</Text>
           </View>
           <Text style={styles.infoText}>{t('notifications.deniedText')}</Text>
@@ -146,126 +203,170 @@ export default function NotificationSettings() {
 
     if (permission === 'granted') {
       return (
-        <View style={styles.grantedBlock}>
+        <View style={styles.infoBlock}>
           <View style={styles.infoHeader}>
-            <Ionicons name="checkmark-circle" size={20} color={colors.success} />
+            <Ionicons name="checkmark-circle" size={18} color={colors.success} />
             <Text style={styles.infoTitle}>{t('notifications.enabled')}</Text>
           </View>
           <Text style={styles.infoText}>{t('notifications.enabledHint')}</Text>
-          <TouchableOpacity
-            style={styles.linkButton}
+          <Button
+            label={t('notifications.turnOff')}
+            variant="ghost"
+            size="sm"
             onPress={disable}
             disabled={isBusy}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.linkButtonText}>{t('notifications.turnOff')}</Text>
-          </TouchableOpacity>
+            style={styles.turnOffButton}
+          />
         </View>
       );
     }
 
     // permission === 'default' — the one shot at the prompt, behind a tap.
+    // With the on-by-default preference the copy explains that notifications
+    // are already on for the account and only this device needs activating.
     return (
-      <View style={styles.enableBlock}>
-        <Text style={styles.infoText}>{t('notifications.enableHint')}</Text>
-        <TouchableOpacity
-          style={[styles.enableButton, isBusy && styles.buttonDisabled]}
+      <View style={styles.infoBlock}>
+        <Text style={styles.infoText}>
+          {preferences?.push_enabled === false
+            ? t('notifications.enableHint')
+            : t('notifications.defaultOnHint')}
+        </Text>
+        <Button
+          label={t('notifications.enable')}
+          icon="notifications-outline"
           onPress={enable}
-          disabled={isBusy}
-          activeOpacity={0.7}
-        >
-          {isBusy ? (
-            <ActivityIndicator size="small" color={colors.background} />
-          ) : (
-            <>
-              <Ionicons name="notifications" size={18} color={colors.background} />
-              <Text style={styles.enableButtonText}>{t('notifications.enable')}</Text>
-            </>
-          )}
-        </TouchableOpacity>
+          loading={isBusy}
+        />
       </View>
     );
   }
 
   return (
-    <View style={styles.section}>
-      <Text style={styles.sectionTitle}>{t('notifications.title')}</Text>
-      <View style={styles.card}>
-        {renderEnableControl()}
-
-        {feedback && (
-          <Text
-            style={[
-              styles.feedbackText,
-              feedback.type === 'error' && styles.feedbackError,
-              feedback.type === 'success' && styles.feedbackSuccess,
-            ]}
-          >
-            {feedback.message}
+    <View style={styles.wrap}>
+      {/* Collapsed row — matches the ListItem look of the surrounding card */}
+      <Pressable
+        onPress={handleRowPress}
+        style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+      >
+        <View style={styles.iconWrap}>
+          <Ionicons name="notifications-outline" size={20} color={colors.primary} />
+        </View>
+        <View style={styles.rowContent}>
+          <Text style={styles.rowLabel}>{t('notifications.title')}</Text>
+          <Text style={styles.rowSubtitle} numberOfLines={1}>
+            {statusSubtitle()}
           </Text>
+        </View>
+        {permission === 'granted' && (
+          <View style={styles.statusDot} />
         )}
+        <Ionicons
+          name={expanded ? 'chevron-up' : 'chevron-down'}
+          size={18}
+          color={colors.textMuted}
+        />
+      </Pressable>
 
-        {preferencesUnavailable && (
-          <Text style={styles.mutedNote}>{t('notifications.prefsUnavailable')}</Text>
-        )}
+      {expanded && (
+        <View style={styles.body}>
+          {renderEnableControl()}
 
-        {preferences && (
-          <View style={styles.categories}>
-            <Text style={styles.categoriesTitle}>{t('notifications.categories')}</Text>
-            {categories.map((category) => (
-              <View key={category.key} style={styles.categoryRow}>
-                <View style={styles.categoryContent}>
-                  <Text style={styles.categoryLabel}>{category.label}</Text>
-                  <Text style={styles.categoryHint}>{category.hint}</Text>
+          {feedback && (
+            <Text
+              style={[
+                styles.feedbackText,
+                feedback.type === 'error' && styles.feedbackError,
+                feedback.type === 'success' && styles.feedbackSuccess,
+              ]}
+            >
+              {feedback.message}
+            </Text>
+          )}
+
+          {preferencesUnavailable && (
+            <Text style={styles.mutedNote}>{t('notifications.prefsUnavailable')}</Text>
+          )}
+
+          {preferences && (
+            <View style={styles.categories}>
+              <Text style={styles.categoriesTitle}>{t('notifications.categories')}</Text>
+              {categories.map((category) => (
+                <View key={category.key} style={styles.categoryRow}>
+                  <View style={styles.categoryContent}>
+                    <Text style={styles.categoryLabel}>{category.label}</Text>
+                    <Text style={styles.categoryHint}>{category.hint}</Text>
+                  </View>
+                  <Switch
+                    value={preferences[category.key]}
+                    onValueChange={(value) => handleToggle(category.key, value)}
+                    disabled={savingKey !== null}
+                    trackColor={{ false: colors.surfaceLow, true: colors.primary + '80' }}
+                    thumbColor={preferences[category.key] ? colors.primary : colors.textMuted}
+                  />
                 </View>
-                <Switch
-                  value={preferences[category.key]}
-                  onValueChange={(value) => handleToggle(category.key, value)}
-                  disabled={savingKey !== null}
-                  trackColor={{ false: colors.tertiary + '40', true: colors.primary + '80' }}
-                  thumbColor={preferences[category.key] ? colors.primary : colors.textMuted}
-                />
-              </View>
-            ))}
-            {saveError && <Text style={styles.feedbackError}>{saveError}</Text>}
-            <Text style={styles.mutedNote}>{t('notifications.emailFallbackNote')}</Text>
-          </View>
-        )}
-      </View>
+              ))}
+              <Text style={styles.mutedNote}>{t('notifications.pushOnlyNote')}</Text>
+            </View>
+          )}
+        </View>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  section: {
-    marginBottom: spacing.md,
-  },
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.textMuted,
-    textTransform: 'uppercase',
-    marginHorizontal: spacing.md,
-    marginBottom: spacing.sm,
-  },
-  card: {
-    backgroundColor: colors.surface,
-    marginHorizontal: spacing.md,
-    borderRadius: borderRadius.md,
-    borderWidth: 1,
-    borderColor: colors.tertiary + '30',
-    padding: spacing.md,
+  wrap: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
   },
 
-  // Enable control
-  enableBlock: {
+  // Collapsed row — mirrors the kit ListItem metrics
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: spacing.md,
+    gap: spacing.md,
+  },
+  rowPressed: {
+    backgroundColor: colors.surfaceHigh,
+  },
+  iconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: colors.primary + '14',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  rowContent: {
+    flex: 1,
+  },
+  rowLabel: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: colors.text,
+  },
+  rowSubtitle: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.success,
+  },
+
+  // Expanded body
+  body: {
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.md,
     gap: spacing.sm,
   },
-  grantedBlock: {
-    gap: spacing.xs,
-  },
   infoBlock: {
-    gap: spacing.xs,
+    gap: spacing.sm,
   },
   warningBlock: {
     borderLeftWidth: 2,
@@ -278,8 +379,9 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   infoTitle: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontFamily: fonts.heading,
+    fontSize: 15,
+    letterSpacing: 0.4,
     color: colors.text,
     flex: 1,
   },
@@ -291,47 +393,20 @@ const styles = StyleSheet.create({
   stepText: {
     fontSize: 13,
     color: colors.text,
-    marginTop: 2,
+    lineHeight: 18,
   },
-  enableButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.xs,
-    backgroundColor: colors.primary,
-    padding: spacing.md,
-    borderRadius: borderRadius.md,
-  },
-  enableButtonText: {
-    color: colors.background,
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  linkButton: {
+  turnOffButton: {
     alignSelf: 'flex-start',
-    paddingVertical: spacing.xs,
-  },
-  linkButtonText: {
-    color: colors.primary,
-    fontSize: 14,
-    fontWeight: '500',
   },
 
   // Feedback
   feedbackText: {
     fontSize: 13,
     color: colors.textMuted,
-    marginTop: spacing.sm,
     lineHeight: 19,
   },
   feedbackError: {
-    fontSize: 13,
     color: colors.error,
-    marginTop: spacing.sm,
-    lineHeight: 19,
   },
   feedbackSuccess: {
     color: colors.success,
@@ -339,21 +414,23 @@ const styles = StyleSheet.create({
   mutedNote: {
     fontSize: 12,
     color: colors.textMuted,
-    marginTop: spacing.sm,
     lineHeight: 17,
+    marginTop: spacing.xs,
   },
 
   // Categories
   categories: {
-    marginTop: spacing.md,
-    borderTopWidth: 1,
-    borderTopColor: colors.tertiary + '20',
+    marginTop: spacing.xs,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
     paddingTop: spacing.md,
   },
   categoriesTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.text,
+    fontFamily: fonts.heading,
+    fontSize: 13,
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    color: colors.textMuted,
     marginBottom: spacing.sm,
   },
   categoryRow: {
@@ -361,12 +438,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: spacing.sm,
     gap: spacing.md,
+    minHeight: 44,
   },
   categoryContent: {
     flex: 1,
   },
   categoryLabel: {
-    fontSize: 15,
+    fontSize: 14,
     color: colors.text,
   },
   categoryHint: {

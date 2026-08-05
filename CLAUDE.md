@@ -177,15 +177,22 @@ eas submit --platform android --profile production
 | Name | Hex | Usage |
 |------|-----|-------|
 | Beige/Tan | `#d5c8ad` | Primary accent, buttons, badges |
-| Dark Brown | `#954e3b` | Secondary accent, logout button |
-| Warm Brown | `#bea488` | Tertiary accent, borders |
-| Black | `#000000` | Backgrounds |
-| White | `#ffffff` | Text on dark backgrounds |
+| Dark Brown | `#954e3b` | Secondary accent |
+| Warm Brown | `#bea488` | Tertiary accent |
+| Warm near-black | `#0c0a08` | Backgrounds (not pure black) |
+| Surfaces | `#171310` / `#221c16` / `#100e0b` | Elevation via contrast steps, not borders |
+| Warm off-white | `#f5efe4` | Text |
+
+### Typography (matches houseofbeers.nl)
+- **Headings / numbers / buttons / tab titles**: Oswald (`@expo-google-fonts/oswald`) — condensed, uppercase with letter-spacing for labels
+- **Editorial text** (greetings, descriptions, notification bodies): Crimson Text (`@expo-google-fonts/crimson-text`), 15px+ only
+- **Small functional UI text**: system sans
+- Fonts loaded in `mobile/app/_layout.tsx`; families + type scale exported from `mobile/src/theme/colors.ts` (`fonts`, `type`)
 
 ### Design Principles
-- Dark, premium aesthetic with elegant beige accents
-- High contrast for readability
-- Rounded corners (borderRadius.md = 12px)
+- Dark, premium aesthetic with elegant beige accents; elevation through surface contrast, borders only for accent cards
+- Shared UI kit in `mobile/src/components/ui/` (Screen, Card, Button, ListItem, SectionHeader, Badge, EmptyState, Skeleton, Toast) — build new screens with these, not ad-hoc styles
+- Feedback via toasts (`useToast`), loading via skeletons, press feedback on all touchables
 - Theme defined in `mobile/src/theme/colors.ts`
 
 ---
@@ -289,17 +296,14 @@ eas submit --platform android --profile production
 - `loyalty/` - Points rules, rewards, balances, transactions, redemptions, notifications, Celery sync tasks
 - `recommendations/` - Beer recommendations, Untappd integration, favorites, taste profiles
 
-### Mobile Tabs
-- **Home** - Welcome message, notifications, "Your Beer Journey" menu
-- **Favorites** - Beer wishlist with cart integration (badge shows count)
-- **Loyalty** - Points balance, rewards, transactions, redemption codes
-- **Profile** - User hub with navigation to:
-  - Recommendations - Personalized beer picks
-  - Taste Profile - Taste wheel, style distribution, top breweries
-  - Favorites - Manage favorite beers
-  - Orders - Shopify order history
-  - Connect Untappd - Link/unlink Untappd account
-  - Settings - Shopify sync, language picker, logout
+### Mobile Tabs (redesigned Aug 2026)
+- **Home** - Editorial greeting, notifications, events, quick links to Ontdek/Loyalty
+- **Ontdek (Discover)** - Hub for recommendations, taste profile, favorites, Untappd link — future discovery features (random beer generator, subscriptions) slot in here
+- **Community** - Feed, groups, chats, suggestions, livestreams (12-screen stack)
+- **Loyalty** - Membership-card points hero, rewards, history, redemption codes, "how to earn" explainer
+- **Profiel** - Pure account/settings: edit profile, orders, birthday, notifications, Shopify sync, language, logout
+
+Sub-screens live in `(profile)` and `(community)` stacks (bottom bar stays visible); all have real header titles (no more logo-only header). Old `/favorites` tab route redirects to `(profile)/favorites`.
 
 ---
 
@@ -355,7 +359,8 @@ function MyComponent() {
 |--------|----------|-------------|
 | GET | `/api/loyalty/summary/` | Points summary |
 | GET | `/api/loyalty/balance/` | Detailed balance |
-| GET | `/api/loyalty/transactions/` | Transaction history |
+| GET | `/api/loyalty/transactions/` | Transaction history (with per-rule `breakdown` and `reward_name`) |
+| GET | `/api/loyalty/rules/` | Active points rules (used by the app's "How do I earn points?" section) |
 | GET | `/api/loyalty/rewards/` | Available rewards |
 | POST | `/api/loyalty/redeem/` | Redeem a reward |
 | GET | `/api/loyalty/redemptions/` | User's redemptions |
@@ -507,6 +512,8 @@ npx expo start
 - `only_after_registration` flag on rules: skips orders placed before user's `date_joined`
 - Admin-awarded points (adjusted transactions) are preserved across all sync types
 - `balance_after` on all transactions is recalculated chronologically after full sync
+- Earned transactions store a per-rule `breakdown` (JSON) so the app can explain where points came from
+- The app renders transaction labels client-side from structured fields (localized); `description` is a fallback only
 - Service: `backend/loyalty/services/points.py`
 
 ### Discount Code Creation
@@ -537,7 +544,11 @@ Three-tier sync system for keeping loyalty points in sync with Shopify orders. A
 
 **Intermediate**: Calls `get_all_customer_orders()` (paginated, 250/page) to fetch ALL orders. Same processing — skips already-processed orders. Catches anything the partial sync missed (backdated orders, pagination gaps).
 
-**Full (check-and-correct)**: Fetches ALL orders, then for each already-processed order, recalculates what it SHOULD award with current rules and compares to what WAS awarded. If different, creates an `adjusted` transaction for the difference (e.g., "Points correction for order #1234 (50 → 75)"). Unprocessed orders are awarded normally. No deletions — preserves all history, discount codes, and redemptions.
+**Full (check-and-correct)**: Fetches ALL orders, then for each already-processed order, recalculates what it SHOULD award with current rules and compares to what WAS awarded. If different, the original `earned` transaction for that order is **updated in place** (points, description, breakdown) so users always see one clean row per order — no visible correction rows. If the new amount is 0 the earned row is deleted; `balance_after` is rewritten chronologically afterwards. Unprocessed orders are awarded normally. Discount codes and redemptions are never touched.
+
+**Lifetime counter semantics**: `lifetime_spent` counts ONLY reward redemptions (cancel-and-refund decrements it). Corrections and manual admin adjustments are applied signed to `lifetime_earned`, never to `lifetime_spent`. The invariant `balance == lifetime_earned - lifetime_spent` holds for every user.
+
+**One-off repair** (`python manage.py repair_loyalty_history`): folds legacy "Points correction" adjusted rows into their original earned rows, deletes them, recomputes both lifetime counters from source data (redemptions / earned transactions / manual adjustments), rewrites `balance_after`, and verifies the invariant. Dry-run by default; pass `--apply` to write, `--email user@example.com` for one user. This fixed the "5289 punten uitgegeven" complaints caused by rule-change corrections being counted as spent.
 
 ### Key Models
 

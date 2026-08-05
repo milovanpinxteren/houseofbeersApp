@@ -1,16 +1,18 @@
 import React, { useState } from 'react';
 import {
-  View, Text, StyleSheet, TextInput, TouchableOpacity,
-  ActivityIndicator, Alert, KeyboardAvoidingView, Platform, ScrollView,
+  View, Text, StyleSheet, TextInput,
+  KeyboardAvoidingView, Platform, ScrollView,
 } from 'react-native';
 import { router } from 'expo-router';
 import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
-import { colors, spacing, borderRadius } from '../../../src/theme/colors';
+import { colors, spacing, borderRadius, type } from '../../../src/theme/colors';
+import { Button, useToast } from '../../../src/components/ui';
 import { createSuggestion } from '../../../src/api/community';
 
 export default function NewSuggestionScreen() {
   const { language } = useLanguage();
+  const { showToast } = useToast();
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [tag, setTag] = useState('');
@@ -27,7 +29,7 @@ export default function NewSuggestionScreen() {
       });
       router.back();
     } catch {
-      Alert.alert(t('error'), t('community.suggestionError'));
+      showToast(t('community.suggestionError'), 'error');
     } finally {
       setIsPosting(false);
     }
@@ -80,61 +82,51 @@ export default function NewSuggestionScreen() {
 
       {/* Submit button */}
       <View style={styles.footer}>
-        <TouchableOpacity
-          style={[styles.submitBtn, !canSubmit && styles.submitBtnDisabled]}
+        <Button
+          label={t('community.submitSuggestion')}
           onPress={handleSubmit}
           disabled={!canSubmit}
-        >
-          {isPosting ? (
-            <ActivityIndicator size="small" color={colors.background} />
-          ) : (
-            <Text style={styles.submitBtnText}>{t('community.submitSuggestion')}</Text>
-          )}
-        </TouchableOpacity>
+          loading={isPosting}
+        />
       </View>
     </KeyboardAvoidingView>
   );
 }
 
+const inputBase = {
+  backgroundColor: colors.surfaceLow,
+  borderRadius: borderRadius.md,
+  padding: spacing.md,
+  color: colors.text,
+};
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  scrollContent: { padding: spacing.md },
-  label: { color: colors.text, fontSize: 14, fontWeight: '600', marginBottom: spacing.xs, marginTop: spacing.md },
+  scrollContent: { padding: spacing.md, paddingBottom: spacing.lg },
+  label: {
+    ...type.label,
+    marginBottom: spacing.sm,
+    marginTop: spacing.lg,
+  },
   titleInput: {
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
-    color: colors.text,
+    ...inputBase,
     fontSize: 16,
   },
   contentInput: {
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
-    color: colors.text,
+    ...inputBase,
     fontSize: 15,
-    minHeight: 120,
-    textAlignVertical: 'top',
+    lineHeight: 21,
+    minHeight: 140,
+    textAlignVertical: 'top' as const,
   },
-  charCount: { color: colors.textMuted, fontSize: 12, textAlign: 'right', marginTop: 4 },
+  charCount: { color: colors.textMuted, fontSize: 11, textAlign: 'right', marginTop: spacing.xs },
   tagInput: {
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
-    color: colors.text,
+    ...inputBase,
     fontSize: 15,
   },
   footer: {
     padding: spacing.md,
-    borderTopWidth: 1,
-    borderTopColor: colors.tertiary + '20',
+    paddingBottom: spacing.lg,
+    backgroundColor: colors.background,
   },
-  submitBtn: {
-    backgroundColor: colors.primary,
-    borderRadius: borderRadius.md,
-    paddingVertical: spacing.md,
-    alignItems: 'center',
-  },
-  submitBtnDisabled: { opacity: 0.5 },
-  submitBtnText: { color: colors.background, fontSize: 16, fontWeight: '700' },
 });

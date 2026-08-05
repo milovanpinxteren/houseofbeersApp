@@ -8,7 +8,8 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { t } from '../i18n';
-import { colors, spacing, borderRadius } from '../theme/colors';
+import { colors, spacing, borderRadius, fonts } from '../theme/colors';
+import { EmptyState, useToast } from './ui';
 import { PaginatedResponse } from '../api/community';
 
 export interface ChatMessage {
@@ -36,6 +37,8 @@ export default function ChatScreen({
 }: ChatScreenProps) {
   const { language } = useLanguage();
   const { user } = useAuth();
+  const { showToast } = useToast();
+  const isStaff = (user as { is_staff?: boolean } | null)?.is_staff === true;
 
   // Messages are kept newest-first (matches API order + inverted FlatList).
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -124,14 +127,18 @@ export default function ChatScreen({
   };
 
   const handleLongPress = (message: ChatMessage) => {
-    if (message.sender_id !== user?.id) return;
+    // Own messages, or any message when the user is staff (moderation)
+    if (message.sender_id !== user?.id && !isStaff) return;
     Alert.alert(t('community.deleteMessage'), t('community.deleteMessageConfirm'), [
       { text: t('cancel'), style: 'cancel' },
       { text: t('community.deleteMessage'), style: 'destructive', onPress: async () => {
         try {
           await onDeleteMessage(message.id);
           setMessages(prev => prev.filter(m => m.id !== message.id));
-        } catch {}
+          showToast(t('community.deleted'), 'success');
+        } catch {
+          showToast(t('community.deleteError'), 'error');
+        }
       }},
     ]);
   };
@@ -156,7 +163,7 @@ export default function ChatScreen({
           const isOwn = item.sender_id === user?.id;
           return (
             <TouchableOpacity
-              activeOpacity={isOwn ? 0.7 : 1}
+              activeOpacity={isOwn || isStaff ? 0.7 : 1}
               onLongPress={() => handleLongPress(item)}
               delayLongPress={400}
               style={[styles.messageBubble, isOwn ? styles.ownBubble : styles.otherBubble]}
@@ -180,8 +187,7 @@ export default function ChatScreen({
         ListEmptyComponent={
           // Inverted lists render children flipped — flip the empty state back.
           <View style={[styles.center, styles.emptyFlip, { paddingTop: 40 }]}>
-            <Ionicons name="chatbubble-outline" size={36} color={colors.textMuted} />
-            <Text style={styles.emptyText}>{t('community.noMessages')}</Text>
+            <EmptyState icon="chatbubble-outline" title={t('community.noMessages')} />
           </View>
         }
         onEndReached={loadOlder}
@@ -219,22 +225,82 @@ export default function ChatScreen({
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   center: { justifyContent: 'center', alignItems: 'center' },
-  chatHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.tertiary + '20' },
-  chatTitle: { color: colors.text, fontSize: 16, fontWeight: '700', flex: 1 },
-  messageBubble: { maxWidth: '80%', borderRadius: borderRadius.md, padding: spacing.sm, paddingHorizontal: spacing.md, marginBottom: spacing.sm },
+  chatHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    minHeight: 48,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  chatTitle: {
+    fontFamily: fonts.heading,
+    fontSize: 17,
+    letterSpacing: 0.4,
+    color: colors.text,
+    flex: 1,
+  },
+  messageBubble: {
+    maxWidth: '80%',
+    borderRadius: 16,
+    paddingVertical: spacing.sm + 2,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+  },
   ownBubble: { backgroundColor: colors.primary, alignSelf: 'flex-end', borderBottomRightRadius: 4 },
-  otherBubble: { backgroundColor: colors.surface, alignSelf: 'flex-start', borderBottomLeftRadius: 4 },
-  senderName: { color: colors.primary, fontSize: 12, fontWeight: '700', marginBottom: 2 },
-  messageText: { color: colors.text, fontSize: 15, lineHeight: 20 },
+  otherBubble: { backgroundColor: colors.surfaceHigh, alignSelf: 'flex-start', borderBottomLeftRadius: 4 },
+  senderName: {
+    fontFamily: fonts.heading,
+    fontSize: 12,
+    letterSpacing: 0.6,
+    color: colors.primary,
+    marginBottom: 2,
+  },
+  messageText: { color: colors.text, fontSize: 15, lineHeight: 21 },
   ownMessageText: { color: colors.background },
   messageTime: { color: colors.textMuted, fontSize: 10, marginTop: 4, alignSelf: 'flex-end' },
-  ownMessageTime: { color: colors.background + 'aa' },
-  beerInMsg: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 4, backgroundColor: 'rgba(0,0,0,0.15)', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
+  ownMessageTime: { color: colors.background + '99' },
+  beerInMsg: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 4,
+    backgroundColor: 'rgba(0,0,0,0.18)',
+    borderRadius: borderRadius.sm,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
   beerInMsgText: { fontSize: 12, color: colors.primary, fontWeight: '600', flex: 1 },
-  inputBar: { flexDirection: 'row', alignItems: 'flex-end', padding: spacing.sm, paddingHorizontal: spacing.md, borderTopWidth: 1, borderTopColor: colors.tertiary + '20', backgroundColor: colors.surface, gap: spacing.sm },
-  textInput: { flex: 1, backgroundColor: colors.background, borderRadius: borderRadius.lg, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, color: colors.text, fontSize: 15, maxHeight: 100 },
-  sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.primary, justifyContent: 'center', alignItems: 'center' },
+  inputBar: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    padding: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+    backgroundColor: colors.background,
+    gap: spacing.sm,
+  },
+  textInput: {
+    flex: 1,
+    backgroundColor: colors.surfaceLow,
+    borderRadius: borderRadius.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 4,
+    color: colors.text,
+    fontSize: 15,
+    maxHeight: 100,
+  },
+  sendBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   sendBtnDisabled: { opacity: 0.4 },
   emptyFlip: { transform: [{ scaleY: -1 }] },
-  emptyText: { color: colors.textMuted, fontSize: 14, marginTop: spacing.sm },
 });

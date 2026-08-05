@@ -28,6 +28,7 @@ interface User {
   date_joined: string;
   birthdate?: string | null;
   birthdate_locked?: boolean;
+  is_staff?: boolean;
 }
 
 export async function register(data: RegisterData): Promise<void> {
