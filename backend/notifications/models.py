@@ -62,8 +62,11 @@ class NotificationPreference(models.Model):
         on_delete=models.CASCADE,
         related_name='notification_preference',
     )
+    # Push is on by default; email is opt-in. Nobody gets emailed unless they
+    # (or an operator, on their behalf) explicitly turned email on - see
+    # migration 0006 for how existing rows were moved to these defaults.
     push_enabled = models.BooleanField(default=True)
-    email_enabled = models.BooleanField(default=True)
+    email_enabled = models.BooleanField(default=False)
 
     # Per-category opt-outs
     birthday = models.BooleanField(default=True)

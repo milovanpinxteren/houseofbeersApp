@@ -27,6 +27,11 @@ from .serializers import (
 logger = logging.getLogger(__name__)
 
 
+def _may_moderate(user, author_id):
+    """Author of the content, or staff (staff can moderate ALL community content)."""
+    return user.is_staff or author_id == user.id
+
+
 class FeedCursorPagination(CursorPagination):
     page_size = 20
     ordering = ('-created_at', '-id')
@@ -172,15 +177,42 @@ class PostCreateView(APIView):
 
 
 class PostDeleteView(APIView):
+    """Delete (author or staff) or edit (author or staff) a post."""
     permission_classes = [IsAuthenticated]
 
     def delete(self, request, post_id):
         try:
-            post = Post.objects.get(id=post_id, author=request.user)
+            post = Post.objects.get(id=post_id)
         except Post.DoesNotExist:
             return Response({'error': 'Post not found'}, status=status.HTTP_404_NOT_FOUND)
+        if not _may_moderate(request.user, post.author_id):
+            return Response({'error': 'You can only delete your own posts'},
+                            status=status.HTTP_403_FORBIDDEN)
         post.delete()
         return Response({'success': True})
+
+    def patch(self, request, post_id):
+        try:
+            post = Post.objects.get(id=post_id)
+        except Post.DoesNotExist:
+            return Response({'error': 'Post not found'}, status=status.HTTP_404_NOT_FOUND)
+        if not _may_moderate(request.user, post.author_id):
+            return Response({'error': 'You can only edit your own posts'},
+                            status=status.HTTP_403_FORBIDDEN)
+
+        content = (request.data.get('content') or '').strip()
+        if not content:
+            return Response({'error': 'Content is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if len(content) > 1000:
+            return Response({'error': 'Content is too long (max 1000 characters)'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        post.content = content
+        post.edited_at = timezone.now()
+        post.save(update_fields=['content', 'edited_at', 'updated_at'])
+
+        annotated = _annotate_posts(Post.objects.filter(id=post.id), request.user).first()
+        return Response(PostSerializer(annotated).data)
 
 
 class PostLikeView(APIView):
@@ -260,15 +292,40 @@ class PostCommentsView(APIView):
 
 
 class CommentDeleteView(APIView):
+    """Delete or edit a post comment. Author or staff."""
     permission_classes = [IsAuthenticated]
 
     def delete(self, request, comment_id):
         try:
-            comment = PostComment.objects.get(id=comment_id, author=request.user)
+            comment = PostComment.objects.get(id=comment_id)
         except PostComment.DoesNotExist:
             return Response({'error': 'Comment not found'}, status=status.HTTP_404_NOT_FOUND)
+        if not _may_moderate(request.user, comment.author_id):
+            return Response({'error': 'You can only delete your own comments'},
+                            status=status.HTTP_403_FORBIDDEN)
         comment.delete()
         return Response({'success': True})
+
+    def patch(self, request, comment_id):
+        try:
+            comment = PostComment.objects.get(id=comment_id)
+        except PostComment.DoesNotExist:
+            return Response({'error': 'Comment not found'}, status=status.HTTP_404_NOT_FOUND)
+        if not _may_moderate(request.user, comment.author_id):
+            return Response({'error': 'You can only edit your own comments'},
+                            status=status.HTTP_403_FORBIDDEN)
+
+        content = (request.data.get('content') or '').strip()
+        if not content:
+            return Response({'error': 'Content is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Same cap as the create endpoint
+        comment.content = content[:500]
+        comment.edited_at = timezone.now()
+        comment.save(update_fields=['content', 'edited_at'])
+
+        serializer = CommentReplySerializer(comment) if comment.parent_id else CommentSerializer(comment)
+        return Response(serializer.data)
 
 
 # --- Messaging ---
@@ -381,15 +438,17 @@ class SendMessageView(APIView):
 
 
 class MessageDeleteView(APIView):
+    """Delete a DM message. Sender, or staff (moderation — staff need not be a participant)."""
     permission_classes = [IsAuthenticated]
 
     def delete(self, request, conversation_id, message_id):
-        try:
-            conversation = Conversation.objects.get(
-                Q(participant_1=request.user) | Q(participant_2=request.user),
-                id=conversation_id,
+        conversations = Conversation.objects.filter(id=conversation_id)
+        if not request.user.is_staff:
+            conversations = conversations.filter(
+                Q(participant_1=request.user) | Q(participant_2=request.user)
             )
-        except Conversation.DoesNotExist:
+        conversation = conversations.first()
+        if conversation is None:
             return Response({'error': 'Conversation not found'}, status=status.HTTP_404_NOT_FOUND)
 
         try:
@@ -397,7 +456,7 @@ class MessageDeleteView(APIView):
         except Message.DoesNotExist:
             return Response({'error': 'Message not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        if message.sender_id != request.user.id:
+        if not _may_moderate(request.user, message.sender_id):
             return Response({'error': 'You can only delete your own messages'},
                             status=status.HTTP_403_FORBIDDEN)
 
@@ -567,10 +626,12 @@ class GroupSendMessageView(APIView):
 
 
 class GroupMessageDeleteView(APIView):
+    """Delete a group message. Sender, or staff (moderation — staff need not be a member)."""
     permission_classes = [IsAuthenticated]
 
     def delete(self, request, group_id, message_id):
-        if not GroupMembership.objects.filter(group_id=group_id, user=request.user).exists():
+        is_member = GroupMembership.objects.filter(group_id=group_id, user=request.user).exists()
+        if not is_member and not request.user.is_staff:
             return Response({'error': 'Not a member'}, status=status.HTTP_403_FORBIDDEN)
 
         try:
@@ -578,7 +639,7 @@ class GroupMessageDeleteView(APIView):
         except GroupMessage.DoesNotExist:
             return Response({'error': 'Message not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        if message.sender_id != request.user.id:
+        if not _may_moderate(request.user, message.sender_id):
             return Response({'error': 'You can only delete your own messages'},
                             status=status.HTTP_403_FORBIDDEN)
 
@@ -777,15 +838,59 @@ class SuggestionDetailView(APIView):
 
 
 class SuggestionDeleteView(APIView):
+    """Delete or edit (title/content) a suggestion. Author or staff."""
     permission_classes = [IsAuthenticated]
 
     def delete(self, request, suggestion_id):
         try:
-            suggestion = Suggestion.objects.get(id=suggestion_id, author=request.user)
+            suggestion = Suggestion.objects.get(id=suggestion_id)
         except Suggestion.DoesNotExist:
             return Response({'error': 'Suggestion not found'}, status=status.HTTP_404_NOT_FOUND)
+        if not _may_moderate(request.user, suggestion.author_id):
+            return Response({'error': 'You can only delete your own suggestions'},
+                            status=status.HTTP_403_FORBIDDEN)
         suggestion.delete()
         return Response({'success': True})
+
+    def patch(self, request, suggestion_id):
+        try:
+            suggestion = Suggestion.objects.get(id=suggestion_id)
+        except Suggestion.DoesNotExist:
+            return Response({'error': 'Suggestion not found'}, status=status.HTTP_404_NOT_FOUND)
+        if not _may_moderate(request.user, suggestion.author_id):
+            return Response({'error': 'You can only edit your own suggestions'},
+                            status=status.HTTP_403_FORBIDDEN)
+
+        update_fields = []
+        if 'title' in request.data:
+            title = (request.data.get('title') or '').strip()
+            if not title:
+                return Response({'error': 'Title is required'}, status=status.HTTP_400_BAD_REQUEST)
+            if len(title) > 200:
+                return Response({'error': 'Title is too long (max 200 characters)'},
+                                status=status.HTTP_400_BAD_REQUEST)
+            suggestion.title = title
+            update_fields.append('title')
+        if 'content' in request.data:
+            content = (request.data.get('content') or '').strip()
+            if not content:
+                return Response({'error': 'Content is required'}, status=status.HTTP_400_BAD_REQUEST)
+            if len(content) > 1000:
+                return Response({'error': 'Content is too long (max 1000 characters)'},
+                                status=status.HTTP_400_BAD_REQUEST)
+            suggestion.content = content
+            update_fields.append('content')
+
+        if not update_fields:
+            return Response({'error': 'Nothing to update'}, status=status.HTTP_400_BAD_REQUEST)
+
+        suggestion.edited_at = timezone.now()
+        suggestion.save(update_fields=update_fields + ['edited_at', 'updated_at'])
+
+        annotated = _annotate_suggestions(
+            Suggestion.objects.filter(id=suggestion.id), request.user,
+        ).first()
+        return Response(SuggestionSerializer(annotated).data)
 
 
 class SuggestionVoteView(APIView):
@@ -881,15 +986,42 @@ class SuggestionCommentVoteView(APIView):
 
 
 class SuggestionCommentDeleteView(APIView):
+    """Delete or edit a suggestion comment. Author or staff."""
     permission_classes = [IsAuthenticated]
 
     def delete(self, request, comment_id):
         try:
-            comment = SuggestionComment.objects.get(id=comment_id, author=request.user)
+            comment = SuggestionComment.objects.get(id=comment_id)
         except SuggestionComment.DoesNotExist:
             return Response({'error': 'Comment not found'}, status=status.HTTP_404_NOT_FOUND)
+        if not _may_moderate(request.user, comment.author_id):
+            return Response({'error': 'You can only delete your own comments'},
+                            status=status.HTTP_403_FORBIDDEN)
         comment.delete()
         return Response({'success': True})
+
+    def patch(self, request, comment_id):
+        try:
+            comment = SuggestionComment.objects.get(id=comment_id)
+        except SuggestionComment.DoesNotExist:
+            return Response({'error': 'Comment not found'}, status=status.HTTP_404_NOT_FOUND)
+        if not _may_moderate(request.user, comment.author_id):
+            return Response({'error': 'You can only edit your own comments'},
+                            status=status.HTTP_403_FORBIDDEN)
+
+        content = (request.data.get('content') or '').strip()
+        if not content:
+            return Response({'error': 'Content is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Same cap as the create endpoint
+        comment.content = content[:500]
+        comment.edited_at = timezone.now()
+        comment.save(update_fields=['content', 'edited_at'])
+
+        annotated = _annotate_suggestion_comments(
+            SuggestionComment.objects.filter(id=comment.id), request.user,
+        ).first()
+        return Response(SuggestionCommentSerializer(annotated).data)
 
 
 # --- Helpers ---

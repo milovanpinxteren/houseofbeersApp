@@ -1,10 +1,11 @@
-const CACHE_NAME = 'hob-cache-v1';
+const CACHE_NAME = 'hob-cache-v2';
 const STATIC_ASSETS = [
   '/',
   '/manifest.json',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
-  '/icons/apple-touch-icon.png'
+  '/icons/apple-touch-icon.png',
+  '/icons/badge-96.png'
 ];
 
 // Install event - cache static assets
@@ -95,20 +96,39 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-// Handle push notifications (for future use)
+// Handle push notifications.
+// The payload contract lives in backend/notifications/services.py
+// (_deliver_push): { title, body, url, tag }. Keep the two in sync.
 self.addEventListener('push', (event) => {
   if (!event.data) return;
 
-  const data = event.data.json();
+  let data = {};
+  try {
+    data = event.data.json();
+  } catch (e) {
+    // Not JSON (e.g. a test push from DevTools) - show it as plain text.
+    data = { body: event.data.text() };
+  }
+
   const options = {
     body: data.body || '',
+    // Colored app icon shown inside the notification.
     icon: '/icons/icon-192.png',
-    badge: '/icons/badge-72.png',
+    // Status bar / badge icon. Android requires a white-on-transparent
+    // (alpha-only) PNG here - anything colored renders as a white square.
+    badge: '/icons/badge-96.png',
     vibrate: [100, 50, 100],
     data: {
       url: data.url || '/'
     }
   };
+
+  // Same tag = the new notification replaces the old one (dedupes retried
+  // sends). Only set when the backend provides one so distinct untagged
+  // messages still stack.
+  if (data.tag) {
+    options.tag = data.tag;
+  }
 
   event.waitUntil(
     self.registration.showNotification(data.title || 'House of Beers', options)

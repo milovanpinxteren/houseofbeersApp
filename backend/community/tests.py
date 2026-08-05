@@ -8,7 +8,7 @@ from rest_framework.test import APIClient, APITestCase
 
 from .models import (
     CachedBeerCheckin, Conversation, Group, GroupMembership, GroupMessage,
-    Message, Post, Suggestion, SuggestionComment, SuggestionVote,
+    Message, Post, PostComment, Suggestion, SuggestionComment, SuggestionVote,
 )
 
 User = get_user_model()
@@ -34,6 +34,13 @@ def auth_client(user):
     client = APIClient()
     client.force_authenticate(user=user)
     return client
+
+
+def make_staff(tag):
+    user = make_user(tag)
+    user.is_staff = True
+    user.save(update_fields=['is_staff'])
+    return user
 
 
 class MessageOrderingTests(APITestCase):
@@ -385,6 +392,261 @@ class CommentsNotFoundTests(APITestCase):
         resp = self.client.get(f'/api/community/posts/{post.id}/comments/')
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data['comments'], [])
+
+
+class StaffModerationTests(APITestCase):
+    """Staff (is_staff) may delete ALL community content; regular users only their own."""
+
+    def setUp(self):
+        self.author = make_user('alice')
+        self.other = make_user('bob')
+        self.staff = make_staff('moderator')
+        self.post = Post.objects.create(author=self.author, content='my post')
+        self.comment = PostComment.objects.create(
+            post=self.post, author=self.author, content='my comment',
+        )
+        self.suggestion = Suggestion.objects.create(
+            author=self.author, title='More stouts', content='Please',
+        )
+        self.sugg_comment = SuggestionComment.objects.create(
+            suggestion=self.suggestion, author=self.author, content='agree',
+        )
+        self.conv, _ = Conversation.objects.get_or_create_between(self.author, self.other)
+        self.dm = Message.objects.create(conversation=self.conv, sender=self.author, content='hi')
+        self.group = Group.objects.create(name='Tripel Trouble')
+        GroupMembership.objects.create(group=self.group, user=self.author)
+        self.gmsg = GroupMessage.objects.create(group=self.group, sender=self.author, content='hi')
+
+    # --- Staff can delete others' content ---
+
+    def test_staff_can_delete_others_post(self):
+        resp = auth_client(self.staff).delete(f'/api/community/posts/{self.post.id}/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(Post.objects.filter(id=self.post.id).exists())
+
+    def test_staff_can_delete_others_comment(self):
+        resp = auth_client(self.staff).delete(f'/api/community/comments/{self.comment.id}/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(PostComment.objects.filter(id=self.comment.id).exists())
+
+    def test_staff_can_delete_dm_message_without_being_participant(self):
+        resp = auth_client(self.staff).delete(
+            f'/api/community/conversations/{self.conv.id}/messages/{self.dm.id}/'
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(Message.objects.filter(id=self.dm.id).exists())
+
+    def test_staff_can_delete_group_message_without_being_member(self):
+        resp = auth_client(self.staff).delete(
+            f'/api/community/groups/{self.group.id}/messages/{self.gmsg.id}/'
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(GroupMessage.objects.filter(id=self.gmsg.id).exists())
+
+    def test_staff_can_delete_others_suggestion(self):
+        resp = auth_client(self.staff).delete(f'/api/community/suggestions/{self.suggestion.id}/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(Suggestion.objects.filter(id=self.suggestion.id).exists())
+
+    def test_staff_can_delete_others_suggestion_comment(self):
+        resp = auth_client(self.staff).delete(
+            f'/api/community/suggestions/comments/{self.sugg_comment.id}/'
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(SuggestionComment.objects.filter(id=self.sugg_comment.id).exists())
+
+    # --- Regular users cannot delete others' content (403, object survives) ---
+
+    def test_non_staff_cannot_delete_others_post(self):
+        resp = auth_client(self.other).delete(f'/api/community/posts/{self.post.id}/')
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(Post.objects.filter(id=self.post.id).exists())
+
+    def test_non_staff_cannot_delete_others_comment(self):
+        resp = auth_client(self.other).delete(f'/api/community/comments/{self.comment.id}/')
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(PostComment.objects.filter(id=self.comment.id).exists())
+
+    def test_non_staff_cannot_delete_others_dm_message(self):
+        resp = auth_client(self.other).delete(
+            f'/api/community/conversations/{self.conv.id}/messages/{self.dm.id}/'
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(Message.objects.filter(id=self.dm.id).exists())
+
+    def test_non_staff_cannot_delete_others_suggestion(self):
+        resp = auth_client(self.other).delete(f'/api/community/suggestions/{self.suggestion.id}/')
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(Suggestion.objects.filter(id=self.suggestion.id).exists())
+
+    def test_delete_nonexistent_post_is_404(self):
+        resp = auth_client(self.staff).delete('/api/community/posts/999999/')
+        self.assertEqual(resp.status_code, 404)
+
+    def test_me_endpoint_exposes_is_staff(self):
+        resp = auth_client(self.staff).get('/api/users/me/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data['is_staff'])
+
+        resp = auth_client(self.other).get('/api/users/me/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.data['is_staff'])
+
+
+class EditEndpointTests(APITestCase):
+    """PATCH edit endpoints: author or staff, edited_at gets set, others get 403."""
+
+    def setUp(self):
+        self.author = make_user('alice')
+        self.other = make_user('bob')
+        self.staff = make_staff('moderator')
+        self.post = Post.objects.create(author=self.author, content='original')
+        self.comment = PostComment.objects.create(
+            post=self.post, author=self.author, content='original comment',
+        )
+        self.suggestion = Suggestion.objects.create(
+            author=self.author, title='Old title', content='Old content',
+        )
+        self.sugg_comment = SuggestionComment.objects.create(
+            suggestion=self.suggestion, author=self.author, content='original',
+        )
+
+    def test_author_can_edit_own_post(self):
+        resp = auth_client(self.author).patch(
+            f'/api/community/posts/{self.post.id}/', {'content': 'updated'},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['content'], 'updated')
+        self.assertIsNotNone(resp.data['edited_at'])
+        self.post.refresh_from_db()
+        self.assertEqual(self.post.content, 'updated')
+        self.assertIsNotNone(self.post.edited_at)
+
+    def test_staff_can_edit_others_post(self):
+        resp = auth_client(self.staff).patch(
+            f'/api/community/posts/{self.post.id}/', {'content': 'moderated'},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.post.refresh_from_db()
+        self.assertEqual(self.post.content, 'moderated')
+
+    def test_non_author_non_staff_cannot_edit_post(self):
+        resp = auth_client(self.other).patch(
+            f'/api/community/posts/{self.post.id}/', {'content': 'hacked'},
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.post.refresh_from_db()
+        self.assertEqual(self.post.content, 'original')
+        self.assertIsNone(self.post.edited_at)
+
+    def test_edit_post_empty_content_is_400(self):
+        resp = auth_client(self.author).patch(
+            f'/api/community/posts/{self.post.id}/', {'content': '   '},
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_edit_post_too_long_is_400(self):
+        resp = auth_client(self.author).patch(
+            f'/api/community/posts/{self.post.id}/', {'content': 'x' * 1001},
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_edit_nonexistent_post_is_404(self):
+        resp = auth_client(self.author).patch(
+            '/api/community/posts/999999/', {'content': 'x'},
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_author_can_edit_own_comment_sets_edited_at(self):
+        resp = auth_client(self.author).patch(
+            f'/api/community/comments/{self.comment.id}/', {'content': 'edited comment'},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['content'], 'edited comment')
+        self.assertIsNotNone(resp.data['edited_at'])
+
+    def test_non_author_cannot_edit_comment(self):
+        resp = auth_client(self.other).patch(
+            f'/api/community/comments/{self.comment.id}/', {'content': 'nope'},
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_edit_comment_truncates_at_500(self):
+        resp = auth_client(self.author).patch(
+            f'/api/community/comments/{self.comment.id}/', {'content': 'y' * 600},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.comment.refresh_from_db()
+        self.assertEqual(len(self.comment.content), 500)
+
+    def test_author_can_edit_suggestion_title_and_content(self):
+        resp = auth_client(self.author).patch(
+            f'/api/community/suggestions/{self.suggestion.id}/',
+            {'title': 'New title', 'content': 'New content'},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['title'], 'New title')
+        self.assertEqual(resp.data['content'], 'New content')
+        self.assertIsNotNone(resp.data['edited_at'])
+
+    def test_edit_suggestion_title_only(self):
+        resp = auth_client(self.author).patch(
+            f'/api/community/suggestions/{self.suggestion.id}/', {'title': 'Only title'},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.suggestion.refresh_from_db()
+        self.assertEqual(self.suggestion.title, 'Only title')
+        self.assertEqual(self.suggestion.content, 'Old content')
+
+    def test_edit_suggestion_without_fields_is_400(self):
+        resp = auth_client(self.author).patch(
+            f'/api/community/suggestions/{self.suggestion.id}/', {},
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_staff_can_edit_others_suggestion(self):
+        resp = auth_client(self.staff).patch(
+            f'/api/community/suggestions/{self.suggestion.id}/', {'content': 'moderated'},
+        )
+        self.assertEqual(resp.status_code, 200)
+
+    def test_non_author_cannot_edit_suggestion(self):
+        resp = auth_client(self.other).patch(
+            f'/api/community/suggestions/{self.suggestion.id}/', {'content': 'nope'},
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_author_can_edit_suggestion_comment(self):
+        resp = auth_client(self.author).patch(
+            f'/api/community/suggestions/comments/{self.sugg_comment.id}/',
+            {'content': 'edited'},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['content'], 'edited')
+        self.assertIsNotNone(resp.data['edited_at'])
+
+    def test_non_author_cannot_edit_suggestion_comment(self):
+        resp = auth_client(self.other).patch(
+            f'/api/community/suggestions/comments/{self.sugg_comment.id}/',
+            {'content': 'nope'},
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_chat_messages_have_no_edit_endpoint(self):
+        conv, _ = Conversation.objects.get_or_create_between(self.author, self.other)
+        msg = Message.objects.create(conversation=conv, sender=self.author, content='hi')
+        resp = auth_client(self.author).patch(
+            f'/api/community/conversations/{conv.id}/messages/{msg.id}/', {'content': 'x'},
+        )
+        self.assertEqual(resp.status_code, 405)
+
+        group = Group.objects.create(name='No Edit Club')
+        GroupMembership.objects.create(group=group, user=self.author)
+        gmsg = GroupMessage.objects.create(group=group, sender=self.author, content='hi')
+        resp = auth_client(self.author).patch(
+            f'/api/community/groups/{group.id}/messages/{gmsg.id}/', {'content': 'x'},
+        )
+        self.assertEqual(resp.status_code, 405)
 
 
 class QueryCountRegressionTests(APITestCase):

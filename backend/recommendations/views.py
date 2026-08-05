@@ -1,16 +1,22 @@
 import logging
+import random
+from decimal import Decimal, InvalidOperation
+
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
+from django.core.cache import cache
 from django.utils import timezone
 
+from users.services.shopify import ShopifyService
 from .models import UntappdProfile, Favorite
 from .services import RecommendationService, RecommendationAPIError
 from .serializers import (
     UntappdProfileSerializer, LinkUntappdSerializer,
     FavoriteSerializer, AddFavoriteSerializer,
-    RecommendationFilterSerializer, SelectedFavoritesSerializer
+    RecommendationFilterSerializer, RandomBeerFilterSerializer,
+    SelectedFavoritesSerializer
 )
 
 logger = logging.getLogger(__name__)
@@ -397,6 +403,105 @@ class UntappdProfileView(APIView):
                 {'error': 'No Untappd account linked'},
                 status=status.HTTP_404_NOT_FOUND
             )
+
+
+# Random beer picker — product list cache so repeated spins don't hammer
+# the Shopify Admin API. Shared across gunicorn workers via Redis in prod.
+PRODUCT_CACHE_KEY = 'recommendations:shopify_active_products'
+PRODUCT_CACHE_TTL = 60 * 15  # 15 minutes
+
+SHOP_BASE_URL = 'https://houseofbeers.nl'
+
+
+def _get_shop_products() -> list:
+    """Active, in-stock shop products (cached for PRODUCT_CACHE_TTL)."""
+    products = cache.get(PRODUCT_CACHE_KEY)
+    if products is None:
+        products = ShopifyService().get_active_products()
+        if products:
+            # Don't cache an empty list — it usually means the Shopify call
+            # failed, and we'd pin the failure for 15 minutes.
+            cache.set(PRODUCT_CACHE_KEY, products, PRODUCT_CACHE_TTL)
+    return products
+
+
+def _product_price(product) -> Decimal:
+    try:
+        return Decimal(str(product.get('price')))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+
+class RandomBeerView(APIView):
+    """
+    Pick a uniformly random beer from the shop's active, in-stock products.
+
+    Optional query params:
+      - style: case-insensitive exact match on product_type or any tag
+      - max_price: only products with first-variant price <= max_price
+      - styles_only: truthy value returns just {styles: [...]} without
+        picking a beer (used by the client to prefetch filter chips)
+
+    Response always includes `styles`: the distinct non-empty product_type
+    values across ALL in-stock products (sorted), so the client can render
+    filter chips without a separate request.
+
+    When no product matches the filters (or the product list is empty),
+    responds 200 with {found: false, styles: [...]} so the client can show
+    a friendly "loosen your filters" state.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        filter_serializer = RandomBeerFilterSerializer(data=request.query_params)
+        filter_serializer.is_valid(raise_exception=True)
+        style = (filter_serializer.validated_data.get('style') or '').strip()
+        max_price = filter_serializer.validated_data.get('max_price')
+
+        try:
+            products = _get_shop_products()
+        except Exception as e:
+            logger.error(f"Random beer: failed to fetch products: {e}")
+            return Response(
+                {'error': 'Failed to fetch products'},
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+
+        styles = sorted(
+            {p['product_type'] for p in products if p.get('product_type')},
+            key=str.lower
+        )
+
+        if request.query_params.get('styles_only'):
+            return Response({'styles': styles})
+
+        filtered = products
+        if style:
+            needle = style.lower()
+            filtered = [
+                p for p in filtered
+                if (p.get('product_type') or '').lower() == needle
+                or needle in [tag.lower() for tag in p.get('tags') or []]
+            ]
+        if max_price is not None:
+            filtered = [
+                p for p in filtered
+                if (price := _product_price(p)) is not None and price <= max_price
+            ]
+
+        if not filtered:
+            return Response({'found': False, 'styles': styles})
+
+        product = random.choice(filtered)
+        beer = {
+            **product,
+            'shop_url': f"{SHOP_BASE_URL}/products/{product.get('handle', '')}",
+        }
+
+        from analytics.tracker import track
+        track('random_beer', user=request.user, style=style or None)
+
+        return Response({'found': True, 'beer': beer, 'styles': styles})
 
 
 class StylesListView(APIView):

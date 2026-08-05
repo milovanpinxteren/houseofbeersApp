@@ -84,10 +84,10 @@ class PostSerializer(serializers.ModelSerializer):
             'beer_id', 'beer_title', 'beer_vendor', 'beer_image_url',
             'beer_style', 'beer_rating',
             'like_count', 'comment_count', 'is_liked',
-            'created_at',
+            'created_at', 'edited_at',
         ]
         read_only_fields = ['id', 'author', 'like_count', 'comment_count',
-                            'is_liked', 'created_at']
+                            'is_liked', 'created_at', 'edited_at']
 
 
 class CreatePostSerializer(serializers.ModelSerializer):
@@ -113,8 +113,8 @@ class CommentReplySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = PostComment
-        fields = ['id', 'author', 'content', 'parent_id', 'created_at']
-        read_only_fields = ['id', 'author', 'created_at']
+        fields = ['id', 'author', 'content', 'parent_id', 'created_at', 'edited_at']
+        read_only_fields = ['id', 'author', 'created_at', 'edited_at']
 
 
 class CommentSerializer(serializers.ModelSerializer):
@@ -124,8 +124,8 @@ class CommentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = PostComment
-        fields = ['id', 'author', 'content', 'parent_id', 'replies', 'created_at']
-        read_only_fields = ['id', 'author', 'replies', 'created_at']
+        fields = ['id', 'author', 'content', 'parent_id', 'replies', 'created_at', 'edited_at']
+        read_only_fields = ['id', 'author', 'replies', 'created_at', 'edited_at']
 
 
 # --- Conversations ---
@@ -275,10 +275,10 @@ class SuggestionSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'author', 'title', 'content', 'tag', 'status',
             'vote_count', 'comment_count', 'is_voted',
-            'created_at',
+            'created_at', 'edited_at',
         ]
         read_only_fields = ['id', 'author', 'status', 'vote_count',
-                            'comment_count', 'is_voted', 'created_at']
+                            'comment_count', 'is_voted', 'created_at', 'edited_at']
 
 
 class CreateSuggestionSerializer(serializers.ModelSerializer):
@@ -294,5 +294,5 @@ class SuggestionCommentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SuggestionComment
-        fields = ['id', 'author', 'content', 'vote_count', 'is_voted', 'created_at']
-        read_only_fields = ['id', 'author', 'vote_count', 'is_voted', 'created_at']
+        fields = ['id', 'author', 'content', 'vote_count', 'is_voted', 'created_at', 'edited_at']
+        read_only_fields = ['id', 'author', 'vote_count', 'is_voted', 'created_at', 'edited_at']

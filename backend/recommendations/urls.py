@@ -7,6 +7,7 @@ urlpatterns = [
     path('status/<str:task_id>/', views.RecommendationStatusView.as_view(), name='recommendation-status'),
     path('profile/', views.TasteProfileView.as_view(), name='taste-profile'),
     path('styles/', views.StylesListView.as_view(), name='styles'),
+    path('random-beer/', views.RandomBeerView.as_view(), name='random-beer'),
 
     # Untappd linking
     path('untappd/', views.UntappdProfileView.as_view(), name='untappd-profile'),

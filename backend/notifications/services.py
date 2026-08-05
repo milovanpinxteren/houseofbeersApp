@@ -163,7 +163,7 @@ def send_notification(user, *, kind, title, body, data=None, dedupe_key,
     preference = NotificationPreference.for_user(user)
 
     push_status, push_error = _deliver_push(
-        user, kind, title, body, data, preference,
+        user, kind, title, body, data, preference, dedupe_key,
     )
     # An explicit argument wins, so an operator retrying a stuck row can
     # override it; otherwise the policy recorded on the row is authoritative.
@@ -195,7 +195,7 @@ def send_notification(user, *, kind, title, body, data=None, dedupe_key,
 
 # --- Channel: push ---
 
-def _deliver_push(user, kind, title, body, data, preference):
+def _deliver_push(user, kind, title, body, data, preference, dedupe_key):
     """Push to every active subscription. Returns (status, error)."""
     if not push_enabled_for_kind(kind):
         return 'skipped', 'Push is switched off for this kind in the admin'
@@ -220,12 +220,16 @@ def _deliver_push(user, kind, title, body, data, preference):
     if not subscriptions:
         return 'skipped', 'No active push subscriptions'
 
-    # These three keys are exactly what mobile/public/service-worker.js reads
-    # in its `push` handler. Do not add or rename without changing it too.
+    # These keys are exactly what mobile/public/service-worker.js reads in its
+    # `push` handler. Do not add or rename without changing it too. `tag`
+    # makes the browser replace an earlier notification with the same tag, so
+    # a retried send never stacks a duplicate on the user's screen; the
+    # dedupe key is unique per message, so distinct messages still stack.
     payload = json.dumps({
         'title': title,
         'body': body,
         'url': data.get('url') or '/',
+        'tag': data.get('tag') or dedupe_key,
     })
 
     accepted = 0

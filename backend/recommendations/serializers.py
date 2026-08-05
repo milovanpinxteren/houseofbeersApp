@@ -62,6 +62,14 @@ class RecommendationFilterSerializer(serializers.Serializer):
     style_filter = serializers.CharField(max_length=100, required=False, allow_blank=True)
 
 
+class RandomBeerFilterSerializer(serializers.Serializer):
+    """Optional filters for the random beer picker."""
+    style = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    max_price = serializers.DecimalField(
+        max_digits=10, decimal_places=2, required=False, allow_null=True, min_value=0
+    )
+
+
 class SelectedFavoritesSerializer(serializers.Serializer):
     """Serializer for generating a cart link from selected favorites."""
     favorite_ids = serializers.ListField(

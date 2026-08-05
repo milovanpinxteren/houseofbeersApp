@@ -380,9 +380,10 @@ class AdminActionTests(APITestCase):
         from notifications.models import NotificationDelivery
         delivery = NotificationDelivery.objects.get(user=self.user)
         self.assertEqual(delivery.kind, 'transactional')
-        # No push subscription exists, so push is skipped and email carries it.
+        # No push subscription exists so push is skipped, and email is off by
+        # default (users only get email after explicitly opting in).
         self.assertEqual(delivery.push_status, 'skipped')
-        self.assertEqual(delivery.email_status, 'sent')
+        self.assertEqual(delivery.email_status, 'skipped')
         self.assertIn('push=skipped', self.messages[0])
 
     def test_test_notification_can_be_sent_repeatedly(self):

@@ -19,7 +19,8 @@
  * - apple-touch-icon-180.png (180x180) - iPhone
  * - favicon-16.png (16x16) - Browser tab icon
  * - favicon-32.png (32x32) - Browser tab icon
- * - badge-72.png (72x72) - Notification badge
+ * - badge-72.png (72x72) - Notification badge (monochrome white-on-transparent!)
+ * - badge-96.png (96x96) - Notification badge (monochrome white-on-transparent!)
  *
  * iOS Splash Screens (optional but recommended):
  * - splash-1170x2532.png - iPhone 12/13/14
@@ -55,6 +56,7 @@ try {
 }
 
 const sourceIcon = path.join(__dirname, '..', 'assets', 'icon.png');
+const sourceLogo = path.join(__dirname, '..', 'assets', 'logo.png');
 const outputDir = path.join(__dirname, '..', 'public', 'icons');
 
 // Ensure output directory exists
@@ -78,11 +80,25 @@ const icons = [
 
   // Favicons
   { name: 'favicon-16.png', size: 16 },
-  { name: 'favicon-32.png', size: 32 },
+  { name: 'favicon-32.png', size: 32 }
 
-  // Badge for notifications
-  { name: 'badge-72.png', size: 72 }
+  // NOTE: badge-72/badge-96 are NOT in this list on purpose. Android
+  // notification badges must be monochrome white-on-transparent (alpha only);
+  // a colored/flattened icon renders as a solid white square in the status
+  // bar. They are generated separately in generateBadges() below.
 ];
+
+// Notification badge icons (Android status bar). White-on-transparent only.
+const badges = [
+  { name: 'badge-72.png', size: 72 },
+  { name: 'badge-96.png', size: 96 }
+];
+
+// The wordmark in logo.png is unreadable at badge size, so the badge uses
+// only the emblem (hop cone + house + barley sprigs) from the top of the
+// logo. Bounding box measured on assets/logo.png (1022x606); re-measure if
+// the logo file is ever replaced.
+const EMBLEM_CROP = { left: 241, top: 15, width: 537, height: 297 };
 
 // Splash screen sizes for iOS
 const splashScreens = [
@@ -91,7 +107,68 @@ const splashScreens = [
   { name: 'splash-1179x2556.png', width: 1179, height: 2556 }, // iPhone 14 Pro
 ];
 
+/**
+ * Notification badge icons.
+ *
+ * Android draws the badge as a silhouette: it only looks at the alpha channel
+ * and paints every opaque pixel in the status bar color. The logo in
+ * assets/logo.png is already white-on-transparent, so its alpha channel IS the
+ * silhouette - we crop the emblem, take the alpha channel, and rebuild a pure
+ * white image carrying that alpha.
+ */
+async function generateBadges() {
+  console.log('Generating notification badges (white-on-transparent)...\n');
+
+  for (const badge of badges) {
+    const outputPath = path.join(outputDir, badge.name);
+
+    try {
+      // Small margin so the silhouette is not clipped by rounded masks.
+      const margin = Math.round(badge.size * 0.05);
+      const inner = badge.size - margin * 2;
+      const transparent = { r: 0, g: 0, b: 0, alpha: 0 };
+
+      const alpha = await sharp(sourceLogo)
+        .extract(EMBLEM_CROP)
+        .resize(inner, inner, { fit: 'contain', background: transparent })
+        .extend({
+          top: margin,
+          bottom: margin,
+          left: margin,
+          right: margin,
+          background: transparent
+        })
+        .ensureAlpha()
+        .extractChannel('alpha')
+        .toBuffer();
+
+      // Solid white, with the emblem silhouette as the alpha channel.
+      await sharp({
+        create: {
+          width: badge.size,
+          height: badge.size,
+          channels: 3,
+          background: { r: 255, g: 255, b: 255 }
+        }
+      })
+        .joinChannel(alpha)
+        .png()
+        .toFile(outputPath);
+
+      console.log(`✓ Generated: ${badge.name}`);
+    } catch (err) {
+      console.error(`✗ Failed to generate ${badge.name}:`, err.message);
+    }
+  }
+}
+
 async function generateIcons() {
+  if (process.argv.includes('--badges-only')) {
+    await generateBadges();
+    console.log('\nDone! Badges saved to public/icons/');
+    return;
+  }
+
   console.log('Generating PWA icons...\n');
 
   for (const icon of icons) {
@@ -164,6 +241,9 @@ async function generateIcons() {
       console.error(`✗ Failed to generate ${splash.name}:`, err.message);
     }
   }
+
+  console.log('');
+  await generateBadges();
 
   console.log('\nDone! Icons saved to public/icons/');
 }

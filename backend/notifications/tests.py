@@ -14,6 +14,10 @@ Covers:
 - partial push success still counting as sent
 - the exact payload shape mobile/public/service-worker.js reads
 - subscribe / unsubscribe / preferences endpoints
+- the defaults: push on, email off (opt-in), and the 0006 data migration
+
+Email is opt-in since migration 0006, so tests exercising the email channel
+call `enable_email(user)` to model a user who explicitly turned it on.
 """
 import json
 from unittest.mock import patch
@@ -76,11 +80,25 @@ def make_subscription(user, n=1, **kwargs):
     return PushSubscription.objects.create(user=user, **defaults)
 
 
+def enable_email(user):
+    """Opt a user into the email channel.
+
+    Email is opt-in (email_enabled defaults to False), so tests that exercise
+    email delivery or the email fallback policies must model a user who
+    explicitly enabled it.
+    """
+    preference = NotificationPreference.for_user(user)
+    preference.email_enabled = True
+    preference.save(update_fields=['email_enabled'])
+    return preference
+
+
 @override_settings(**VAPID_SETTINGS)
 class DedupeTests(TestCase):
     def setUp(self):
         self.user = make_user()
         make_subscription(self.user)
+        enable_email(self.user)
         mail.outbox = []
 
     @patch('notifications.services.webpush')
@@ -130,6 +148,7 @@ class DedupeTests(TestCase):
 class PushDeliveryTests(TestCase):
     def setUp(self):
         self.user = make_user()
+        enable_email(self.user)
         mail.outbox = []
 
     @patch('notifications.services.webpush')
@@ -144,11 +163,36 @@ class PushDeliveryTests(TestCase):
         )
 
         payload = json.loads(mock_webpush.call_args.kwargs['data'])
-        # service-worker.js reads data.title, data.body and data.url - exactly.
-        self.assertEqual(set(payload.keys()), {'title', 'body', 'url'})
+        # service-worker.js reads data.title, data.body, data.url and
+        # data.tag - exactly.
+        self.assertEqual(set(payload.keys()), {'title', 'body', 'url', 'tag'})
         self.assertEqual(payload['title'], 'New release')
         self.assertEqual(payload['body'], 'Tripel is back in stock')
         self.assertEqual(payload['url'], '/shop/tripel')
+        self.assertEqual(payload['tag'], 'announce:sw')
+
+    @patch('notifications.services.webpush')
+    def test_payload_tag_defaults_to_dedupe_key(self, mock_webpush):
+        """A retried send reuses the tag, so the browser replaces the earlier
+        notification instead of stacking a duplicate."""
+        make_subscription(self.user)
+
+        send_notification(self.user, kind='announcement', title='T', body='B',
+                          dedupe_key='announce:tagged')
+
+        payload = json.loads(mock_webpush.call_args.kwargs['data'])
+        self.assertEqual(payload['tag'], 'announce:tagged')
+
+    @patch('notifications.services.webpush')
+    def test_payload_tag_can_be_overridden_via_data(self, mock_webpush):
+        make_subscription(self.user)
+
+        send_notification(self.user, kind='announcement', title='T', body='B',
+                          data={'tag': 'custom-tag'},
+                          dedupe_key='announce:customtag')
+
+        payload = json.loads(mock_webpush.call_args.kwargs['data'])
+        self.assertEqual(payload['tag'], 'custom-tag')
 
     @patch('notifications.services.webpush')
     def test_payload_url_defaults_to_root(self, mock_webpush):
@@ -299,6 +343,7 @@ class EmailPolicyTests(TestCase):
 
     def setUp(self):
         self.user = make_user()
+        enable_email(self.user)
         mail.outbox = []
 
     @patch('notifications.services.webpush')
@@ -426,6 +471,7 @@ class PerMessageEmailPolicyTests(TestCase):
 
     def setUp(self):
         self.user = make_user()
+        enable_email(self.user)
         mail.outbox = []
 
     @patch('notifications.services.webpush')
@@ -535,6 +581,7 @@ class PerMessageEmailPolicyTests(TestCase):
 class PreferenceTests(TestCase):
     def setUp(self):
         self.user = make_user()
+        enable_email(self.user)
         mail.outbox = []
 
     @patch('notifications.services.webpush')
@@ -607,6 +654,134 @@ class PreferenceTests(TestCase):
         second = NotificationPreference.for_user(self.user)
         self.assertEqual(first.pk, second.pk)
         self.assertEqual(NotificationPreference.objects.count(), 1)
+
+
+@override_settings(**VAPID_SETTINGS)
+class DefaultPreferenceTests(TestCase):
+    """The owner's defaults: push on, email off, unless the user chose otherwise."""
+
+    def setUp(self):
+        self.user = make_user()
+        mail.outbox = []
+
+    def test_new_preference_row_defaults(self):
+        preference = NotificationPreference.for_user(self.user)
+
+        self.assertTrue(preference.push_enabled, 'push must be on by default')
+        self.assertFalse(preference.email_enabled, 'email must be off by default')
+        # Category opt-outs stay on by default - they gate what, not how.
+        self.assertTrue(preference.birthday)
+        self.assertTrue(preference.announcements)
+        self.assertTrue(preference.recommendations)
+
+    @patch('notifications.services.webpush')
+    def test_default_user_gets_push(self, mock_webpush):
+        make_subscription(self.user)
+
+        delivery = send_notification(
+            self.user, kind='announcement', title='T', body='B',
+            dedupe_key='defaults:push',
+        )
+
+        self.assertEqual(delivery.push_status, 'sent')
+        self.assertEqual(mock_webpush.call_count, 1)
+
+    @patch('notifications.services.webpush')
+    def test_default_user_is_never_emailed_even_for_always_kinds(self, mock_webpush):
+        """Nothing emails by default - not even an EMAIL_ALWAYS kind."""
+        make_subscription(self.user)
+
+        delivery = send_notification(
+            self.user, kind='birthday_gift', title='Happy birthday',
+            body='Here is your gift', dedupe_key='defaults:noemail',
+        )
+
+        self.assertEqual(delivery.push_status, 'sent')
+        self.assertEqual(delivery.email_status, 'skipped')
+        self.assertEqual(len(mail.outbox), 0)
+
+    @patch('notifications.services.webpush')
+    def test_default_user_gets_no_email_fallback_when_push_cannot_land(self, mock_webpush):
+        # No subscription: push is skipped, and the announcement fallback
+        # must NOT email a user who never opted into email.
+        delivery = send_notification(
+            self.user, kind='announcement', title='T', body='B',
+            dedupe_key='defaults:nofallback',
+        )
+
+        self.assertEqual(delivery.push_status, 'skipped')
+        self.assertEqual(delivery.email_status, 'skipped')
+        self.assertEqual(len(mail.outbox), 0)
+
+    @patch('notifications.services.webpush')
+    def test_explicit_email_opt_in_still_gets_email(self, mock_webpush):
+        make_subscription(self.user)
+        enable_email(self.user)
+
+        delivery = send_notification(
+            self.user, kind='birthday_gift', title='T', body='B',
+            dedupe_key='defaults:optin',
+        )
+
+        self.assertEqual(delivery.email_status, 'sent')
+        self.assertEqual(len(mail.outbox), 1)
+
+
+class DefaultsMigrationTests(TestCase):
+    """The data half of migration 0006: old-default rows move to the new
+    defaults; rows that differ from the old defaults are an explicit choice
+    and stay untouched."""
+
+    @staticmethod
+    def _flip():
+        from importlib import import_module
+
+        from django.apps import apps
+        migration = import_module(
+            'notifications.migrations.0006_alter_notificationpreference_email_enabled'
+        )
+        migration.flip_old_default_rows(apps, None)
+
+    def test_old_default_rows_are_flipped_to_email_off(self):
+        user = make_user(1)
+        NotificationPreference.objects.create(
+            user=user, push_enabled=True, email_enabled=True,
+        )
+
+        self._flip()
+
+        preference = NotificationPreference.objects.get(user=user)
+        self.assertTrue(preference.push_enabled)
+        self.assertFalse(preference.email_enabled)
+
+    def test_push_opted_out_rows_keep_their_email_channel(self):
+        """push off + email on differs from the old defaults: the user turned
+        push off, and email is the only channel they have left."""
+        user = make_user(2)
+        NotificationPreference.objects.create(
+            user=user, push_enabled=False, email_enabled=True,
+        )
+
+        self._flip()
+
+        preference = NotificationPreference.objects.get(user=user)
+        self.assertFalse(preference.push_enabled)
+        self.assertTrue(preference.email_enabled)
+
+    def test_category_choices_do_not_shield_a_row_from_the_flip(self):
+        """Category toggles are independent of the channel defaults; the row
+        still moves to email-off and the category choice is preserved."""
+        user = make_user(3)
+        NotificationPreference.objects.create(
+            user=user, push_enabled=True, email_enabled=True,
+            recommendations=False,
+        )
+
+        self._flip()
+
+        preference = NotificationPreference.objects.get(user=user)
+        self.assertFalse(preference.email_enabled)
+        self.assertFalse(preference.recommendations)
 
 
 class PruneTaskTests(TestCase):
@@ -804,6 +979,8 @@ class PreferencesEndpointTests(APITestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.data['push_enabled'])
+        self.assertFalse(response.data['email_enabled'],
+                         'email must be opt-in, not on by default')
         self.assertTrue(response.data['birthday'])
         self.assertEqual(NotificationPreference.objects.filter(user=self.user).count(), 1)
 
@@ -845,6 +1022,7 @@ class KindSettingTests(TestCase):
         cache.clear()
         self.user = User.objects.create_user(
             username='ks', email='ks@example.com', password='pw12345!')
+        enable_email(self.user)
 
     def tearDown(self):
         from django.core.cache import cache
@@ -961,6 +1139,10 @@ class BroadcastTests(TestCase):
         self.inactive = User.objects.create_user(
             username='bc', email='bc@example.com', password='pw12345!',
             is_active=False)
+        # Email is opt-in; these tests model users who enabled it, so the
+        # push-only audience assertions actually prove the override works.
+        enable_email(self.a)
+        enable_email(self.b)
         mail.outbox = []
 
     def _broadcast(self, **kwargs):

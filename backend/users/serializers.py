@@ -58,11 +58,11 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['id', 'email', 'first_name', 'last_name', 'shopify_customer_id', 'shopify_linked_at',
-                  'date_joined', 'birthdate', 'birthdate_locked']
+                  'date_joined', 'birthdate', 'birthdate_locked', 'is_staff']
         # birthdate is read-only here on purpose: it may only be written
         # through PATCH /api/users/me/birthdate/, which enforces the lock.
         read_only_fields = ['id', 'shopify_customer_id', 'shopify_linked_at', 'date_joined',
-                            'birthdate', 'birthdate_locked']
+                            'birthdate', 'birthdate_locked', 'is_staff']
 
 
 class BirthdateSerializer(serializers.Serializer):

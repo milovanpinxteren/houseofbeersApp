@@ -125,6 +125,60 @@ class ShopifyService:
             f'customers/{customer_id}/orders.json?limit=250&status=any'
         )
 
+    @staticmethod
+    def _variant_available(variant: dict) -> bool:
+        """
+        A variant is purchasable when Shopify doesn't track its inventory,
+        when it keeps selling while out of stock, or when stock is positive.
+        """
+        if not variant.get('inventory_management'):
+            return True
+        if variant.get('inventory_policy') == 'continue':
+            return True
+        return (variant.get('inventory_quantity') or 0) > 0
+
+    def get_active_products(self) -> list:
+        """
+        Fetch all active, in-stock products from the store.
+
+        Paginates through products.json (250/page) and returns a compact
+        dict per product: id, title, product_type, tags (list), price
+        (first variant), image_url and handle. Out-of-stock products
+        (no purchasable variant) are excluded.
+        """
+        raw_products = self._paginated_request(
+            'products.json?limit=250&status=active',
+            data_key='products',
+        )
+
+        products = []
+        for product in raw_products:
+            variants = product.get('variants') or []
+            if not any(self._variant_available(v) for v in variants):
+                continue
+
+            first_variant = variants[0] if variants else {}
+            image = product.get('image') or {}
+            # REST API returns tags as a comma-separated string
+            tags = [
+                tag.strip()
+                for tag in (product.get('tags') or '').split(',')
+                if tag.strip()
+            ]
+
+            products.append({
+                'id': product.get('id'),
+                'title': product.get('title') or '',
+                'product_type': (product.get('product_type') or '').strip(),
+                'tags': tags,
+                'price': first_variant.get('price'),
+                'image_url': image.get('src') or '',
+                'handle': product.get('handle') or '',
+            })
+
+        logger.info(f"Fetched {len(products)} active in-stock products from Shopify")
+        return products
+
     def get_customer_orders_since(self, customer_id: str, since_date) -> list:
         """
         Get orders for a Shopify customer created after since_date.
