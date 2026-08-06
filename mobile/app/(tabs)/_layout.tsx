@@ -53,12 +53,17 @@ export default function TabsLayout() {
           borderTopColor: colors.border,
           // Grow by the device's bottom inset so the bar sits above the
           // system gesture/navigation area instead of underneath it.
-          height: 58 + insets.bottom,
+          height: 60 + insets.bottom,
           paddingTop: 4,
           paddingBottom: 6 + insets.bottom,
         },
+        // The bar is fixed-height, so labels must not follow the system font
+        // scale: on phones with enlarged text the scaled label overflowed the
+        // bar and its descenders (g, j, y) were clipped.
+        tabBarAllowFontScaling: false,
         tabBarLabelStyle: {
           fontSize: 10,
+          lineHeight: 13,
           fontWeight: '600',
         },
         headerStyle: { backgroundColor: colors.background },

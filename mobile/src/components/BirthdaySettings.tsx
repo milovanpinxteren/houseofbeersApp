@@ -75,28 +75,66 @@ interface DateFieldProps {
 }
 
 /**
+ * iOS Safari renders an empty `<input type="date">` as a bare dark box: no
+ * placeholder, no affordance — users reported "a black field". The fix needs
+ * pseudo-elements (an ::before hint on empty inputs, WebKit value alignment),
+ * which inline styles cannot express, so the web field is styled through an
+ * injected stylesheet. Chromium ignores the ::before (it draws its own
+ * dd-mm-yyyy hint), so the hint never doubles up.
+ */
+const WEB_DATE_CSS = `
+.hob-date-input {
+  background-color: ${colors.surface};
+  color: ${colors.text};
+  border: 1px solid ${colors.borderStrong};
+  border-radius: ${borderRadius.md}px;
+  padding: 12px 14px;
+  font-size: 16px;
+  width: 100%;
+  min-height: 48px;
+  box-sizing: border-box;
+  color-scheme: dark;
+  -webkit-appearance: none;
+  appearance: none;
+  text-align: left;
+}
+.hob-date-input:focus {
+  outline: none;
+  border-color: ${colors.primary};
+}
+.hob-date-input::-webkit-date-and-time-value {
+  text-align: left;
+}
+.hob-date-input.is-empty::before {
+  content: attr(data-placeholder);
+  color: ${colors.textMuted};
+}
+`;
+
+let webDateCssInjected = false;
+function injectWebDateCss() {
+  if (webDateCssInjected || typeof document === 'undefined') return;
+  const style = document.createElement('style');
+  style.textContent = WEB_DATE_CSS;
+  document.head.appendChild(style);
+  webDateCssInjected = true;
+}
+
+/**
  * `<input type="date">` on the web (this is a PWA — a native-only picker would
  * leave everyone without an input), a typed YYYY-MM-DD field elsewhere.
  */
 function DateField({ value, onChange, disabled }: DateFieldProps) {
   if (Platform.OS === 'web') {
+    injectWebDateCss();
     return React.createElement('input', {
       type: 'date',
+      className: value ? 'hob-date-input' : 'hob-date-input is-empty',
+      'data-placeholder': t('birthday.placeholder'),
       value,
       max: new Date().toISOString().slice(0, 10),
       disabled,
       onChange: (event: { target: { value: string } }) => onChange(event.target.value),
-      style: {
-        backgroundColor: colors.surfaceLow,
-        color: colors.text,
-        border: 'none',
-        borderRadius: borderRadius.md,
-        padding: spacing.md,
-        fontSize: 16,
-        width: '100%',
-        boxSizing: 'border-box',
-        colorScheme: 'dark',
-      },
     });
   }
 
@@ -224,6 +262,7 @@ export default function BirthdaySettings() {
             </View>
           ) : isEditing ? (
             <View style={styles.editBlock}>
+              <Text style={styles.fieldLabel}>{t('birthday.label')}</Text>
               <DateField value={value} onChange={setValue} disabled={isSaving} />
               <Text style={styles.hintText}>{t('birthday.hint')}</Text>
               <Text style={styles.hintText}>{t('birthday.lockWarning')}</Text>
@@ -366,8 +405,16 @@ const styles = StyleSheet.create({
   editBlock: {
     gap: spacing.sm,
   },
+  fieldLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 0.3,
+    color: colors.textMuted,
+  },
   textInput: {
-    backgroundColor: colors.surfaceLow,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
     borderRadius: borderRadius.md,
     padding: spacing.md,
     fontSize: 16,
