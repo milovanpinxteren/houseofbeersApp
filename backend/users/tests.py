@@ -418,6 +418,9 @@ class AdminActionTests(APITestCase):
             self.request, User.objects.filter(pk=self.user.pk)
         )
         mock_issue.assert_called_once()
+        # The real function enforces the lead time itself, so the action must
+        # explicitly opt out — a plain call would silently skip the user.
+        self.assertFalse(mock_issue.call_args.kwargs['enforce_lead_time'])
         self.assertIn('Issued 1', self.messages[0])
 
     @patch('loyalty.tasks._issue_birthday_gift', return_value=True)

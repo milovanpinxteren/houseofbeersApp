@@ -93,7 +93,7 @@ class UserAdmin(BaseUserAdmin):
                 skipped.append(f"{user.email}: already received one in {year}")
                 continue
             try:
-                if _issue_birthday_gift(user, year, config):
+                if _issue_birthday_gift(user, year, config, enforce_lead_time=False):
                     issued += 1
                 else:
                     skipped.append(f"{user.email}: not issued")

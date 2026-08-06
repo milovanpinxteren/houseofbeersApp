@@ -147,10 +147,13 @@ def _offer_label(config) -> str:
     return f"€{text} off"
 
 
-def _issue_birthday_gift(user, year: int, config) -> bool:
+def _issue_birthday_gift(user, year: int, config, enforce_lead_time: bool = True) -> bool:
     """
     Issue one birthday gift. Returns True if a gift was issued.
     Raises on Shopify failure so the caller can log it per-user.
+
+    enforce_lead_time=False lets the admin "issue now" action bypass the
+    anti-abuse rule; the scheduled scan always enforces it.
     """
     from loyalty.models import BirthdayReward
     from users.services import ShopifyService
@@ -163,7 +166,7 @@ def _issue_birthday_gift(user, year: int, config) -> bool:
 
     # Anti-abuse lead time: setting your birthday to next week must not
     # produce a gift next week.
-    if user.birthdate_set_at:
+    if enforce_lead_time and user.birthdate_set_at:
         set_on = timezone.localtime(user.birthdate_set_at, BIRTHDAY_TZ).date()
         cutoff = celebration - timedelta(days=config.lead_time_days)
         if set_on > cutoff:
