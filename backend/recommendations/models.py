@@ -50,3 +50,37 @@ class Favorite(models.Model):
 
     def __str__(self):
         return f"{self.user.email} - {self.title}"
+
+
+class SixpackCheckout(models.Model):
+    """
+    A minted sixpack checkout: the selected beers, the charm price and the
+    single-use Shopify discount code. Re-checkouts of the identical pack
+    reuse the stored code instead of minting a new one.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='sixpack_checkouts'
+    )
+    pack_hash = models.CharField(max_length=64, db_index=True)  # sha256 of sorted variant ids
+    items = models.JSONField()  # [{shopify_id, variant_id, title, price}]
+    pack_value = models.DecimalField(max_digits=10, decimal_places=2)
+    charm_price = models.DecimalField(max_digits=10, decimal_places=2)
+    discount_amount = models.DecimalField(max_digits=10, decimal_places=2)
+    discount_code = models.CharField(max_length=32, blank=True)
+    shopify_discount_id = models.CharField(max_length=255, blank=True)
+    cart_url = models.TextField()
+    expires_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'recommendations_sixpack_checkout'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'pack_hash', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.email} - {self.discount_code or 'no code'} ({self.charm_price})"

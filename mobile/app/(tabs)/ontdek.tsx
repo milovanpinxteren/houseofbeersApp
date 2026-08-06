@@ -1,28 +1,84 @@
 import { useCallback, useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Image, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { useLanguage } from '../../src/context/LanguageContext';
 import { t } from '../../src/i18n';
-import { colors, spacing, fonts, type } from '../../src/theme/colors';
-import { Card, Screen, SectionHeader, Badge } from '../../src/components/ui';
-import { getFavorites } from '../../src/api/recommendations';
+import { colors, spacing, borderRadius, fonts, type } from '../../src/theme/colors';
+import { Card, Screen, SectionHeader, Badge, useToast } from '../../src/components/ui';
+import { useOriginPush } from '../../src/navigation/origin';
+import {
+  addFavorite,
+  Favorite,
+  getFavorites,
+  getNewArrivals,
+  NewArrival,
+  removeFavorite,
+} from '../../src/api/recommendations';
 
 export default function OntdekScreen() {
   const router = useRouter();
+  const pushFrom = useOriginPush();
   const { language } = useLanguage();
-  const [favoritesCount, setFavoritesCount] = useState(0);
+  const { showToast } = useToast();
+  const [favorites, setFavorites] = useState<Favorite[]>([]);
+  const [newArrivals, setNewArrivals] = useState<NewArrival[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [togglingIds, setTogglingIds] = useState<Set<string>>(new Set());
+
+  const favoritesCount = favorites.length;
+  const favoriteByBeerId = new Map(favorites.map((fav) => [fav.beer_id, fav]));
 
   const loadData = useCallback(async () => {
-    try {
-      const favoritesData = await getFavorites();
-      setFavoritesCount(favoritesData.favorites.length);
-    } catch (err) {
-      console.log('[Ontdek] Load error:', err);
+    const [favoritesResult, arrivalsResult] = await Promise.allSettled([
+      getFavorites(),
+      getNewArrivals(10),
+    ]);
+    if (favoritesResult.status === 'fulfilled') {
+      setFavorites(favoritesResult.value.favorites);
+    } else {
+      console.log('[Ontdek] Favorites load error:', favoritesResult.reason);
+    }
+    if (arrivalsResult.status === 'fulfilled') {
+      setNewArrivals(arrivalsResult.value.products);
+    } else {
+      console.log('[Ontdek] New arrivals load error:', arrivalsResult.reason);
     }
   }, []);
+
+  async function toggleFavorite(product: NewArrival) {
+    const beerId = String(product.id);
+    if (togglingIds.has(beerId)) return;
+    setTogglingIds((ids) => new Set(ids).add(beerId));
+    try {
+      const existing = favoriteByBeerId.get(beerId);
+      if (existing) {
+        await removeFavorite(existing.id);
+        setFavorites((favs) => favs.filter((fav) => fav.id !== existing.id));
+      } else {
+        const result = await addFavorite({
+          beer_id: beerId,
+          variant_id: product.variant_id || undefined,
+          title: product.title,
+          price: product.price ? Number(product.price) : null,
+          image_url: product.image_url,
+          product_url: product.shop_url,
+          style: product.product_type,
+        });
+        setFavorites((favs) => [...favs, result.favorite]);
+      }
+    } catch (err: any) {
+      console.log('[Ontdek] Favorite toggle error:', err);
+      showToast(err?.message || 'Error', 'error');
+    } finally {
+      setTogglingIds((ids) => {
+        const next = new Set(ids);
+        next.delete(beerId);
+        return next;
+      });
+    }
+  }
 
   useFocusEffect(
     useCallback(() => {
@@ -45,7 +101,7 @@ export default function OntdekScreen() {
       {/* Hero: recommendations */}
       <Card
         variant="accent"
-        onPress={() => router.push('/(profile)/recommendations' as any)}
+        onPress={() => pushFrom('/(profile)/recommendations')}
         style={styles.heroCard}
       >
         <View style={styles.heroIconWrap}>
@@ -61,7 +117,7 @@ export default function OntdekScreen() {
       {/* Taste profile + favorites side by side */}
       <View style={styles.tileRow}>
         <Card
-          onPress={() => router.push('/(profile)/taste-profile' as any)}
+          onPress={() => pushFrom('/(profile)/taste-profile')}
           style={styles.tile}
         >
           <Ionicons name="analytics" size={24} color={colors.primary} />
@@ -71,7 +127,7 @@ export default function OntdekScreen() {
           </Text>
         </Card>
         <Card
-          onPress={() => router.push('/(profile)/favorites' as any)}
+          onPress={() => pushFrom('/(profile)/favorites')}
           style={styles.tile}
         >
           <View style={styles.tileHeader}>
@@ -88,7 +144,7 @@ export default function OntdekScreen() {
       {/* Random beer roulette */}
       <Card
         variant="elevated"
-        onPress={() => router.push('/(profile)/random-beer' as any)}
+        onPress={() => pushFrom('/(profile)/random-beer')}
         style={styles.rouletteCard}
       >
         <View style={styles.rouletteIconWrap}>
@@ -106,6 +162,92 @@ export default function OntdekScreen() {
         </View>
         <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
       </Card>
+
+      {/* Personalized sixpack slot machine */}
+      <Card
+        variant="elevated"
+        onPress={() => pushFrom('/(profile)/sixpack')}
+        style={styles.rouletteCard}
+      >
+        <View style={styles.rouletteIconWrap}>
+          <Ionicons name="gift" size={28} color={colors.primary} />
+          <Ionicons
+            name="sparkles"
+            size={14}
+            color={colors.primary}
+            style={styles.rouletteSparkle}
+          />
+        </View>
+        <View style={styles.heroText}>
+          <Text style={styles.heroTitle}>{t('sixpack.cardTitle')}</Text>
+          <Text style={styles.heroSubtitle}>{t('sixpack.cardSubtitle')}</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+      </Card>
+
+      {/* New arrivals rail */}
+      {newArrivals.length > 0 && (
+        <>
+          <SectionHeader title={t('discover.newArrivalsTitle')} />
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.railContent}
+            style={styles.rail}
+          >
+            {newArrivals.map((product) => {
+              const favorited = favoriteByBeerId.has(String(product.id));
+              return (
+                <Pressable
+                  key={product.id}
+                  onPress={() =>
+                    Linking.openURL(product.shop_url).catch((err) =>
+                      console.log('[Ontdek] Open product error:', err)
+                    )
+                  }
+                  style={({ pressed }) => [styles.railCard, pressed && { opacity: 0.85 }]}
+                >
+                  {product.image_url ? (
+                    <Image
+                      source={{ uri: product.image_url }}
+                      style={styles.railImage}
+                      resizeMode="cover"
+                    />
+                  ) : (
+                    <View style={styles.railImagePlaceholder}>
+                      <Ionicons name="beer-outline" size={32} color={colors.textMuted} />
+                    </View>
+                  )}
+                  <Pressable
+                    onPress={() => toggleFavorite(product)}
+                    hitSlop={8}
+                    style={({ pressed }) => [
+                      styles.railHeart,
+                      pressed && { opacity: 0.7 },
+                    ]}
+                  >
+                    <Ionicons
+                      name={favorited ? 'heart' : 'heart-outline'}
+                      size={17}
+                      color={favorited ? colors.secondary : colors.text}
+                    />
+                  </Pressable>
+                  <View style={styles.railBody}>
+                    <Text style={styles.railTitle} numberOfLines={2}>
+                      {product.title}
+                    </Text>
+                    {!!product.price && (
+                      <Text style={styles.railPrice}>
+                        €{Number(product.price).toFixed(2)}
+                      </Text>
+                    )}
+                  </View>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </>
+      )}
 
     </Screen>
   );
@@ -191,5 +333,59 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
     color: colors.textMuted,
+  },
+  rail: {
+    marginHorizontal: -spacing.md,
+    marginBottom: spacing.sm,
+  },
+  railContent: {
+    paddingHorizontal: spacing.md,
+    gap: spacing.sm,
+  },
+  railCard: {
+    width: 140,
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.lg,
+    overflow: 'hidden',
+  },
+  railImage: {
+    width: '100%',
+    aspectRatio: 1,
+    backgroundColor: colors.surfaceLow,
+  },
+  railImagePlaceholder: {
+    width: '100%',
+    aspectRatio: 1,
+    backgroundColor: colors.surfaceLow,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  railHeart: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: colors.background + 'B3',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  railBody: {
+    padding: spacing.sm,
+  },
+  railTitle: {
+    fontFamily: fonts.heading,
+    fontSize: 13,
+    lineHeight: 17,
+    letterSpacing: 0.3,
+    color: colors.text,
+    minHeight: 34,
+  },
+  railPrice: {
+    fontFamily: fonts.heading,
+    fontSize: 14,
+    color: colors.primary,
+    marginTop: 4,
   },
 });

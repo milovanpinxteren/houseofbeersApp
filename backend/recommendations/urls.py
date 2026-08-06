@@ -8,6 +8,11 @@ urlpatterns = [
     path('profile/', views.TasteProfileView.as_view(), name='taste-profile'),
     path('styles/', views.StylesListView.as_view(), name='styles'),
     path('random-beer/', views.RandomBeerView.as_view(), name='random-beer'),
+    path('new-arrivals/', views.NewArrivalsView.as_view(), name='new-arrivals'),
+
+    # Personalized sixpack
+    path('sixpack/', views.SixpackView.as_view(), name='sixpack'),
+    path('sixpack/checkout/', views.SixpackCheckoutView.as_view(), name='sixpack-checkout'),
 
     # Untappd linking
     path('untappd/', views.UntappdProfileView.as_view(), name='untappd-profile'),

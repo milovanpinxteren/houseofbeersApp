@@ -174,8 +174,10 @@ class GetActiveProductsTests(APITestCase):
             'product_type': 'IPA',
             'tags': 'hoppy, new ',
             'handle': 'raw-ipa',
+            'created_at': '2026-08-01T12:00:00+02:00',
             'image': {'src': 'https://cdn.shopify.com/raw.jpg'},
             'variants': [{
+                'id': 501,
                 'price': '5.25',
                 'inventory_management': 'shopify',
                 'inventory_policy': 'deny',
@@ -201,8 +203,10 @@ class GetActiveProductsTests(APITestCase):
             'product_type': 'IPA',
             'tags': ['hoppy', 'new'],
             'price': '5.25',
+            'variant_id': '501',
             'image_url': 'https://cdn.shopify.com/raw.jpg',
             'handle': 'raw-ipa',
+            'created_at': '2026-08-01T12:00:00+02:00',
         })
 
     @patch.object(ShopifyService, '_paginated_request')

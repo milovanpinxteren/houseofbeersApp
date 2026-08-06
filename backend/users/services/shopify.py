@@ -143,8 +143,8 @@ class ShopifyService:
 
         Paginates through products.json (250/page) and returns a compact
         dict per product: id, title, product_type, tags (list), price
-        (first variant), image_url and handle. Out-of-stock products
-        (no purchasable variant) are excluded.
+        (first variant), variant_id, image_url, handle and created_at.
+        Out-of-stock products (no purchasable variant) are excluded.
         """
         raw_products = self._paginated_request(
             'products.json?limit=250&status=active',
@@ -172,8 +172,10 @@ class ShopifyService:
                 'product_type': (product.get('product_type') or '').strip(),
                 'tags': tags,
                 'price': first_variant.get('price'),
+                'variant_id': str(first_variant.get('id') or ''),
                 'image_url': image.get('src') or '',
                 'handle': product.get('handle') or '',
+                'created_at': product.get('created_at') or '',
             })
 
         logger.info(f"Fetched {len(products)} active in-stock products from Shopify")
@@ -364,6 +366,7 @@ class ShopifyService:
         product_ids: list = None,
         applies_once_per_customer: bool = True,
         ends_at=None,
+        minimum_subtotal: float = None,
     ) -> Optional[dict]:
         """
         Create a basic discount code (fixed amount or percentage off).
@@ -377,6 +380,7 @@ class ShopifyService:
             product_ids: List of product GIDs to apply to (None = all products)
             applies_once_per_customer: Limit to one use per customer
             ends_at: datetime the code expires (optional, None = never expires)
+            minimum_subtotal: Minimum cart subtotal required for the code
         """
         # Build the discount value
         if discount_type == "percentage":
@@ -443,6 +447,14 @@ class ShopifyService:
         # Optional expiry
         if ends_at:
             variables["basicCodeDiscount"]["endsAt"] = ends_at.isoformat()
+
+        # Optional minimum cart subtotal
+        if minimum_subtotal is not None:
+            variables["basicCodeDiscount"]["minimumRequirement"] = {
+                "subtotal": {
+                    "greaterThanOrEqualToSubtotal": str(minimum_subtotal)
+                }
+            }
 
         data = self._graphql_request(query, variables)
         if not data:

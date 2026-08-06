@@ -151,6 +151,93 @@ export interface RandomBeerResponse {
   styles: string[];
 }
 
+export interface NewArrival {
+  id: number;
+  title: string;
+  product_type: string;
+  tags: string[];
+  price: string | null;
+  variant_id: string;
+  image_url: string;
+  handle: string;
+  created_at: string;
+  shop_url: string;
+}
+
+// Sixpack
+
+export interface SixpackBeer {
+  id: number;
+  shopify_id: string;
+  variant_id: string;
+  title: string;
+  vendor: string;
+  price: string | null;
+  product_url: string;
+  image_url: string;
+  abv: number | null;
+  style: string;
+  style_category: string;
+  untappd_style: string;
+  untappd_rating: number | null;
+  rijpingsmethode: string;
+  inhoud: string;
+  year: number | null;
+}
+
+export interface SixpackReason {
+  code: string;
+  params: Record<string, string | number | null>;
+}
+
+export type SixpackRole = 'safe' | 'adjacent' | 'wildcard';
+
+export interface SixpackSlot {
+  position: number;
+  role: SixpackRole;
+  locked: boolean;
+  beer: SixpackBeer;
+  reasons: SixpackReason[];
+}
+
+export interface SixpackPricing {
+  value: string;
+  price: string;
+  discount: string;
+}
+
+export interface SixpackResponse {
+  profile_type: string;
+  profile_source: 'untappd' | 'shopify';
+  slots: SixpackSlot[];
+  pack_value: string;
+  budget: string;
+  within_budget: boolean;
+  pricing: SixpackPricing;
+}
+
+export interface SixpackPendingResponse {
+  status: 'pending';
+  task_id: string;
+  profile_source: 'untappd' | 'shopify';
+  profile_identifier: string;
+}
+
+export type SixpackResult = SixpackResponse | SixpackPendingResponse;
+
+export function isPendingSixpack(result: SixpackResult): result is SixpackPendingResponse {
+  return 'status' in result && result.status === 'pending';
+}
+
+export interface SixpackCheckoutResponse {
+  cart_url: string;
+  code: string;
+  value: string;
+  price: string;
+  discount: string;
+  expires_at: string | null;
+}
+
 export interface CartLinkResponse {
   cart_url: string;
   item_count: number;
@@ -219,9 +306,40 @@ export async function getRandomBeer(params?: {
   );
 }
 
+export async function getNewArrivals(limit = 10): Promise<{ products: NewArrival[] }> {
+  return apiFetch<{ products: NewArrival[] }>(
+    `/recommendations/new-arrivals/?limit=${limit}`
+  );
+}
+
 // Lightweight prefetch of the style filter chips — no beer is picked.
 export async function getRandomBeerStyles(): Promise<{ styles: string[] }> {
   return apiFetch<{ styles: string[] }>('/recommendations/random-beer/?styles_only=1');
+}
+
+// Sixpack
+
+export async function getSixpack(params: {
+  budget: number;
+  exclude_style_categories: string[];
+  include_alcohol_free: boolean;
+  adventurousness: string;
+  locked?: { shopify_id: string; role: SixpackRole }[];
+  exclude?: string[];
+}): Promise<SixpackResult> {
+  return apiFetch<SixpackResult>('/recommendations/sixpack/', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export async function checkoutSixpack(
+  items: { shopify_id: string; variant_id: string }[]
+): Promise<SixpackCheckoutResponse> {
+  return apiFetch<SixpackCheckoutResponse>('/recommendations/sixpack/checkout/', {
+    method: 'POST',
+    body: JSON.stringify({ items }),
+  });
 }
 
 // Untappd Profile

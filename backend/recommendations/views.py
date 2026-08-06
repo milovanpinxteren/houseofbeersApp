@@ -9,14 +9,18 @@ from rest_framework.views import APIView
 from django.core.cache import cache
 from django.utils import timezone
 
+from rest_framework.throttling import UserRateThrottle
+
 from users.services.shopify import ShopifyService
-from .models import UntappdProfile, Favorite
+from .models import UntappdProfile, Favorite, SixpackCheckout
+from .pricing import charm_price
 from .services import RecommendationService, RecommendationAPIError
 from .serializers import (
     UntappdProfileSerializer, LinkUntappdSerializer,
     FavoriteSerializer, AddFavoriteSerializer,
     RecommendationFilterSerializer, RandomBeerFilterSerializer,
-    SelectedFavoritesSerializer
+    SelectedFavoritesSerializer,
+    SixpackGenerateSerializer, SixpackCheckoutSerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -407,7 +411,9 @@ class UntappdProfileView(APIView):
 
 # Random beer picker — product list cache so repeated spins don't hammer
 # the Shopify Admin API. Shared across gunicorn workers via Redis in prod.
-PRODUCT_CACHE_KEY = 'recommendations:shopify_active_products'
+# v2: cached dicts gained variant_id/created_at — the key bump drops stale
+# entries that lack them.
+PRODUCT_CACHE_KEY = 'recommendations:shopify_active_products:v2'
 PRODUCT_CACHE_TTL = 60 * 15  # 15 minutes
 
 SHOP_BASE_URL = 'https://houseofbeers.nl'
@@ -612,6 +618,303 @@ class FavoritesCartLinkView(APIView):
                 for fav in favorites
             ]
         })
+
+
+class NewArrivalsView(APIView):
+    """
+    Newest products in the shop, from the cached active-product list.
+
+    GET /api/recommendations/new-arrivals/?limit=10
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            limit = min(max(int(request.query_params.get('limit', 10)), 1), 20)
+        except (TypeError, ValueError):
+            limit = 10
+
+        try:
+            products = _get_shop_products()
+        except Exception as e:
+            logger.error(f"New arrivals fetch failed: {e}")
+            return Response(
+                {'error': 'Could not load shop products'},
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+
+        newest = sorted(
+            products,
+            key=lambda p: p.get('created_at') or '',
+            reverse=True,
+        )[:limit]
+
+        return Response({
+            'products': [
+                {
+                    **product,
+                    'shop_url': f"{SHOP_BASE_URL}/products/{product.get('handle', '')}",
+                }
+                for product in newest
+            ]
+        })
+
+
+class SixpackRateThrottle(UserRateThrottle):
+    scope = 'sixpack'
+    rate = '60/hour'
+
+
+class SixpackCheckoutRateThrottle(UserRateThrottle):
+    scope = 'sixpack-checkout'
+    rate = '10/hour'
+
+
+class SixpackView(APIView):
+    """
+    Generate a personalized sixpack via the recommendation service.
+
+    Completed responses get a `pricing` annotation (charm price). Pending
+    responses carry a task_id; the client polls the status endpoint and then
+    re-calls this view — the profile cache is warm by then, so the retry
+    returns synchronously WITH pricing (the raw task result has none).
+    """
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [SixpackRateThrottle]
+
+    def post(self, request):
+        user = request.user
+        service = RecommendationService()
+
+        serializer = SixpackGenerateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        params = serializer.validated_data
+        params['budget'] = float(params['budget'])
+
+        untappd_profile = _get_untappd_profile(user)
+        result = None
+        profile_source = 'shopify'
+        profile_identifier = user.email
+
+        try:
+            # Untappd first when linked. While Untappd profile building is
+            # broken (waiting on the Untappd for Business API) the build task
+            # fails fast against the cached-invalid profile and we fall back
+            # to Shopify below — no code change needed once it works again.
+            if untappd_profile:
+                try:
+                    result = service.get_sixpack(
+                        username=untappd_profile.username, **params
+                    )
+                    # Poll INSIDE the try: a failed profile build raises and
+                    # falls back to Shopify instead of surfacing an error.
+                    if result.get('status') == 'pending' and result.get('task_id'):
+                        result = service.poll_for_result(result['task_id'])
+                    profile_source = 'untappd'
+                    profile_identifier = untappd_profile.username
+                except RecommendationAPIError as e:
+                    logger.warning(
+                        f"Untappd sixpack failed for {user.email} "
+                        f"(username: {untappd_profile.username}): {e} — falling back to Shopify"
+                    )
+                    result = None
+                    profile_source = 'shopify'
+                    profile_identifier = user.email
+
+            if result is None:
+                result = service.get_sixpack(email=user.email, **params)
+                if result.get('status') == 'pending' and result.get('task_id'):
+                    result = service.poll_for_result(result['task_id'])
+
+            if result.get('status') == 'pending' and result.get('task_id'):
+                return Response({
+                    'status': 'pending',
+                    'task_id': result['task_id'],
+                    'profile_source': profile_source,
+                    'profile_identifier': profile_identifier,
+                })
+
+            pricing = charm_price(result.get('pack_value'))
+            result['pricing'] = {
+                'value': str(pricing['value']),
+                'price': str(pricing['price']),
+                'discount': str(pricing['discount']),
+            }
+            result['profile_source'] = profile_source
+
+            from analytics.tracker import track
+            track(
+                'sixpack_generate', user=user,
+                budget=params['budget'],
+                adventurousness=params.get('adventurousness'),
+                respin=bool(params.get('locked') or params.get('exclude')),
+            )
+
+            return Response(result)
+
+        except RecommendationAPIError as e:
+            logger.error(f"Sixpack API error for {user.email}: {e}")
+            if e.status_code == 404:
+                return Response({
+                    'error': 'no_profile',
+                    'message': 'No purchase history found yet. Start shopping '
+                               'to get a personalized sixpack!',
+                }, status=status.HTTP_404_NOT_FOUND)
+            if e.status_code == 422:
+                return Response(
+                    {'error': 'not_enough_beers', 'message': str(e)},
+                    status=status.HTTP_422_UNPROCESSABLE_ENTITY
+                )
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+        except Exception as e:
+            logger.error(f"Unexpected sixpack error for {user.email}: {e}")
+            return Response(
+                {'error': 'Failed to generate sixpack'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+def _generate_sixpack_code() -> str:
+    import secrets
+    import string
+    chars = string.ascii_uppercase + string.digits
+    return 'SIX-' + ''.join(secrets.choice(chars) for _ in range(8))
+
+
+class SixpackCheckoutView(APIView):
+    """
+    Mint the discount code for a sixpack and build the cart permalink.
+
+    Pricing is server-authoritative: prices come from the cached Shopify
+    product list keyed by shopify_id, never from the client. Identical packs
+    reuse their stored code instead of minting a new one.
+    """
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [SixpackCheckoutRateThrottle]
+
+    CODE_VALIDITY_DAYS = 7
+    REUSE_MIN_REMAINING_HOURS = 24
+
+    def post(self, request):
+        import hashlib
+        from datetime import timedelta
+
+        user = request.user
+        serializer = SixpackCheckoutSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        items = serializer.validated_data['items']
+
+        products = _get_shop_products()
+        if not products:
+            return Response(
+                {'error': 'Could not load shop products'},
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+        by_id = {str(p.get('id')): p for p in products}
+
+        unavailable = [
+            item['shopify_id'] for item in items
+            if item['shopify_id'] not in by_id
+            or _product_price(by_id[item['shopify_id']]) is None
+        ]
+        if unavailable:
+            return Response(
+                {'error': 'pack_unavailable', 'unavailable': unavailable},
+                status=status.HTTP_409_CONFLICT
+            )
+
+        value = sum(
+            _product_price(by_id[item['shopify_id']]) for item in items
+        )
+        pricing = charm_price(value)
+
+        variant_ids = [item['variant_id'] for item in items]
+        pack_hash = hashlib.sha256(
+            ','.join(sorted(variant_ids)).encode()
+        ).hexdigest()
+
+        # Reuse an identical, still-valid pack instead of minting again.
+        reuse_cutoff = timezone.now() + timedelta(hours=self.REUSE_MIN_REMAINING_HOURS)
+        existing = SixpackCheckout.objects.filter(
+            user=user, pack_hash=pack_hash,
+            expires_at__gt=reuse_cutoff,
+        ).exclude(discount_code='').first()
+        if existing:
+            return Response(self._response_payload(existing))
+
+        cart_path = ','.join(f"{vid}:1" for vid in variant_ids)
+        cart_url = f"{SHOP_BASE_URL}/cart/{cart_path}"
+
+        code = ''
+        shopify_discount_id = ''
+        expires_at = None
+        if pricing['discount'] > 0:
+            code = _generate_sixpack_code()
+            expires_at = timezone.now() + timedelta(days=self.CODE_VALIDITY_DAYS)
+            # Minimum subtotal just under the pack value stops stripping the
+            # cart down to one beer while keeping the full discount.
+            minimum = (value * Decimal('0.98')).quantize(Decimal('0.01'))
+            shopify_result = ShopifyService().create_basic_discount(
+                code=code,
+                title=f"Sixpack - {user.email}",
+                discount_type='fixed_amount',
+                value=float(pricing['discount']),
+                usage_limit=1,
+                applies_once_per_customer=True,
+                ends_at=expires_at,
+                minimum_subtotal=float(minimum),
+            )
+            if not shopify_result:
+                logger.error(f"Sixpack discount creation failed for {user.email}")
+                return Response(
+                    {'error': 'discount_failed'},
+                    status=status.HTTP_502_BAD_GATEWAY
+                )
+            shopify_discount_id = shopify_result.get('discount_id', '')
+            cart_url = f"{cart_url}?discount={code}"
+
+        checkout = SixpackCheckout.objects.create(
+            user=user,
+            pack_hash=pack_hash,
+            items=[
+                {
+                    'shopify_id': item['shopify_id'],
+                    'variant_id': item['variant_id'],
+                    'title': by_id[item['shopify_id']].get('title', ''),
+                    'price': str(_product_price(by_id[item['shopify_id']])),
+                }
+                for item in items
+            ],
+            pack_value=pricing['value'],
+            charm_price=pricing['price'],
+            discount_amount=pricing['discount'],
+            discount_code=code,
+            shopify_discount_id=shopify_discount_id,
+            cart_url=cart_url,
+            expires_at=expires_at,
+        )
+
+        from analytics.tracker import track
+        track(
+            'sixpack_checkout', user=user,
+            value=str(pricing['value']), discount=str(pricing['discount']),
+        )
+
+        return Response(self._response_payload(checkout))
+
+    @staticmethod
+    def _response_payload(checkout: SixpackCheckout) -> dict:
+        return {
+            'cart_url': checkout.cart_url,
+            'code': checkout.discount_code,
+            'value': str(checkout.pack_value),
+            'price': str(checkout.charm_price),
+            'discount': str(checkout.discount_amount),
+            'expires_at': checkout.expires_at.isoformat() if checkout.expires_at else None,
+        }
 
 
 class FavoritesSelectedCartLinkView(APIView):

@@ -152,6 +152,12 @@ CORS_ALLOW_CREDENTIALS = True
 SHOPIFY_STORE_URL = config('SHOPIFY_STORE_URL', default='')
 SHOPIFY_ACCESS_TOKEN = config('SHOPIFY_ACCESS_TOKEN', default='')
 
+# Beer Recommender service
+RECOMMENDER_API_URL = config(
+    'RECOMMENDER_API_URL', default='https://recommendation.houseofbeers.nl/api'
+)
+RECOMMENDER_API_KEY = config('RECOMMENDER_API_KEY', default='')
+
 # Email SMTP (Hostinger)
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = config('EMAIL_HOST', default='smtp.hostinger.com')

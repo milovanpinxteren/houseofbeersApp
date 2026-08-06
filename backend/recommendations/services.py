@@ -54,6 +54,9 @@ class RecommendationService:
     def _make_request(self, method: str, endpoint: str, **kwargs) -> dict:
         """Make HTTP request to recommendation API."""
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
+        api_key = getattr(settings, 'RECOMMENDER_API_KEY', '')
+        if api_key:
+            kwargs.setdefault('headers', {})['X-Recommender-Key'] = api_key
         # Never wait longer than the request's remaining budget allows.
         timeout = min(kwargs.pop('timeout', self.timeout), self.deadline.remaining())
         if timeout <= 0:
@@ -117,6 +120,47 @@ class RecommendationService:
             payload['style_filter'] = style_filter
 
         return self._make_request('POST', '/recommendations/', json=payload)
+
+    def get_sixpack(
+        self,
+        email: str = None,
+        username: str = None,
+        *,
+        budget: float,
+        exclude_style_categories: list = None,
+        include_alcohol_free: bool = False,
+        adventurousness: str = 'balanced',
+        max_abv: float = None,
+        locked: list = None,
+        exclude: list = None,
+        force_refresh: bool = False,
+    ) -> dict:
+        """
+        Build a personalized sixpack.
+
+        Returns either the completed pack or a pending dict
+        ({status: 'pending', task_id}) when the profile must be built first.
+        """
+        if not email and not username:
+            raise ValueError("Either email or username must be provided")
+
+        payload = {
+            'budget': float(budget),
+            'exclude_style_categories': exclude_style_categories or [],
+            'include_alcohol_free': include_alcohol_free,
+            'adventurousness': adventurousness,
+            'locked': locked or [],
+            'exclude': exclude or [],
+            'force_refresh': force_refresh,
+        }
+        if email:
+            payload['email'] = email
+        else:
+            payload['username'] = username
+        if max_abv is not None:
+            payload['max_abv'] = float(max_abv)
+
+        return self._make_request('POST', '/sixpack/', json=payload)
 
     def get_task_status(self, task_id: str, timeout: int = None) -> dict:
         """Poll for async task status."""

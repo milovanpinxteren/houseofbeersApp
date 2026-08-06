@@ -70,6 +70,62 @@ class RandomBeerFilterSerializer(serializers.Serializer):
     )
 
 
+class SixpackLockedSlotSerializer(serializers.Serializer):
+    """A locked reel the client wants to keep during a re-spin."""
+    shopify_id = serializers.CharField(max_length=50)
+    role = serializers.ChoiceField(choices=['safe', 'adjacent', 'wildcard'])
+
+
+class SixpackGenerateSerializer(serializers.Serializer):
+    """Wizard parameters for generating a sixpack."""
+    budget = serializers.DecimalField(
+        max_digits=10, decimal_places=2, min_value=20, max_value=250
+    )
+    exclude_style_categories = serializers.ListField(
+        child=serializers.CharField(max_length=50),
+        required=False, default=list, max_length=20,
+    )
+    include_alcohol_free = serializers.BooleanField(required=False, default=False)
+    adventurousness = serializers.ChoiceField(
+        choices=['safe', 'balanced', 'adventurous'],
+        required=False, default='balanced',
+    )
+    max_abv = serializers.FloatField(
+        required=False, allow_null=True, min_value=0, max_value=60
+    )
+    locked = SixpackLockedSlotSerializer(many=True, required=False, default=list)
+    exclude = serializers.ListField(
+        child=serializers.CharField(max_length=50),
+        required=False, default=list, max_length=120,
+    )
+
+    def validate_locked(self, value):
+        if len(value) > 5:
+            raise serializers.ValidationError('At most 5 slots can be locked.')
+        return value
+
+
+class SixpackCheckoutItemSerializer(serializers.Serializer):
+    shopify_id = serializers.CharField(max_length=50)
+    variant_id = serializers.RegexField(
+        r'^\d+$',
+        max_length=50,
+        error_messages={'invalid': 'Variant ID must be numeric.'}
+    )
+
+
+class SixpackCheckoutSerializer(serializers.Serializer):
+    """The six selected beers for checkout."""
+    items = SixpackCheckoutItemSerializer(many=True, min_length=6, max_length=6)
+
+    def validate_items(self, value):
+        shopify_ids = {item['shopify_id'] for item in value}
+        variant_ids = {item['variant_id'] for item in value}
+        if len(shopify_ids) != 6 or len(variant_ids) != 6:
+            raise serializers.ValidationError('Items must be 6 unique beers.')
+        return value
+
+
 class SelectedFavoritesSerializer(serializers.Serializer):
     """Serializer for generating a cart link from selected favorites."""
     favorite_ids = serializers.ListField(

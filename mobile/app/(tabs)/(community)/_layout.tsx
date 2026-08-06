@@ -4,15 +4,30 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
 import { colors, fonts } from '../../../src/theme/colors';
+import { safeOrigin } from '../../../src/navigation/origin';
 
-function BackButton({ navigation }: { navigation: any }) {
+function BackButton({ navigation, route }: { navigation: any; route: any }) {
   function handlePress() {
+    // 1. Within-stack history: normal pop.
     const state = navigation.getState();
     if (state?.index > 0) {
       navigation.goBack();
-    } else {
-      router.replace('/(tabs)/community' as any);
+      return;
     }
+    // 2. Web: real browser history — keeps the arrow and the browser back
+    //    button in agreement.
+    if (Platform.OS === 'web' && router.canGoBack()) {
+      router.back();
+      return;
+    }
+    // 3. Recorded origin: return to the tab the user actually came from.
+    const origin = safeOrigin(route?.params?.from);
+    if (origin) {
+      router.replace(origin as any);
+      return;
+    }
+    // 4. Static fallback (deep links, cold starts).
+    router.replace('/(tabs)/community' as any);
   }
   return (
     <Pressable
@@ -33,7 +48,7 @@ export default function CommunityStackLayout() {
 
   return (
     <Stack
-      screenOptions={({ navigation }) => ({
+      screenOptions={({ navigation, route }) => ({
         headerStyle: { backgroundColor: colors.background },
         headerShadowVisible: false,
         headerTintColor: colors.text,
@@ -43,7 +58,7 @@ export default function CommunityStackLayout() {
         },
         headerTitleAlign: 'center',
         headerBackVisible: false,
-        headerLeft: () => <BackButton navigation={navigation} />,
+        headerLeft: () => <BackButton navigation={navigation} route={route} />,
       })}
     >
       <Stack.Screen name="new-post" options={{ title: t('screenTitles.newPost') }} />

@@ -4,9 +4,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
 import { colors, fonts } from '../../../src/theme/colors';
+import { safeOrigin } from '../../../src/navigation/origin';
 
-// Where the header back should land when this stack has no own history
-// (e.g. after popToTopOnBlur cleared it, or on a fresh deep link).
+// Last-resort back target when there is no history and no recorded origin
+// (e.g. a fresh deep link straight into this screen).
 const FALLBACK: Record<string, string> = {
   orders: '/(tabs)/profile',
   'connect-untappd': '/(tabs)/profile',
@@ -14,16 +15,31 @@ const FALLBACK: Record<string, string> = {
   'taste-profile': '/(tabs)/ontdek',
   favorites: '/(tabs)/ontdek',
   'random-beer': '/(tabs)/ontdek',
+  sixpack: '/(tabs)/ontdek',
 };
 
-function BackButton({ navigation, routeName }: { navigation: any; routeName: string }) {
+function BackButton({ navigation, route }: { navigation: any; route: any }) {
   function handlePress() {
+    // 1. Within-stack history: normal pop.
     const state = navigation.getState();
     if (state?.index > 0) {
       navigation.goBack();
-    } else {
-      router.replace((FALLBACK[routeName] || '/(tabs)') as any);
+      return;
     }
+    // 2. Web: real browser history — keeps the arrow and the browser back
+    //    button in agreement.
+    if (Platform.OS === 'web' && router.canGoBack()) {
+      router.back();
+      return;
+    }
+    // 3. Recorded origin: return to the tab the user actually came from.
+    const origin = safeOrigin(route?.params?.from);
+    if (origin) {
+      router.replace(origin as any);
+      return;
+    }
+    // 4. Static fallback (deep links, cold starts).
+    router.replace((FALLBACK[route?.name] || '/(tabs)') as any);
   }
   return (
     <Pressable
@@ -54,13 +70,14 @@ export default function ProfileStackLayout() {
         },
         headerTitleAlign: 'center',
         headerBackVisible: false,
-        headerLeft: () => <BackButton navigation={navigation} routeName={route.name} />,
+        headerLeft: () => <BackButton navigation={navigation} route={route} />,
       })}
     >
       <Stack.Screen name="recommendations" options={{ title: t('profile.recommendations') }} />
       <Stack.Screen name="taste-profile" options={{ title: t('profile.tasteProfile') }} />
       <Stack.Screen name="favorites" options={{ title: t('profile.favorites') }} />
       <Stack.Screen name="random-beer" options={{ title: t('randomBeer.title') }} />
+      <Stack.Screen name="sixpack" options={{ title: t('sixpack.title') }} />
       <Stack.Screen name="orders" options={{ title: t('profile.orders') }} />
       <Stack.Screen name="connect-untappd" options={{ title: t('screenTitles.connectUntappd') }} />
     </Stack>

@@ -22,8 +22,10 @@ import { colors, spacing, borderRadius, fonts, type } from '../../src/theme/colo
 import { Screen, Card, Button, ListItem, SectionHeader, useToast } from '../../src/components/ui';
 import BirthdaySettings from '../../src/components/BirthdaySettings';
 import NotificationSettings from '../../src/components/NotificationSettings';
+import { useOriginPush } from '../../src/navigation/origin';
 
 export default function ProfileScreen() {
+  const pushFrom = useOriginPush();
   const { user, logout, refreshUser } = useAuth();
   const { language, setLanguage, languages } = useLanguage();
   const { showToast } = useToast();
@@ -155,13 +157,13 @@ export default function ProfileScreen() {
               ? t('profile.viewOrderHistory')
               : t('profile.linkShopifyFirst')
           }
-          onPress={() => router.push('/(profile)/orders' as any)}
+          onPress={() => pushFrom('/(profile)/orders')}
         />
         <ListItem
           icon="beer-outline"
           label={t('profile.connectUntappd')}
           subtitle={t('profile.connectUntappdHint')}
-          onPress={() => router.push('/(profile)/connect-untappd' as any)}
+          onPress={() => pushFrom('/(profile)/connect-untappd')}
         />
         <ListItem
           icon="sync-outline"
