@@ -202,10 +202,10 @@ CELERY_TIMEZONE = 'Europe/Amsterdam'
 # Periodic task schedule (celery beat)
 from celery.schedules import crontab
 CELERY_BEAT_SCHEDULE = {
-    'partial-points-sync': {
-        'task': 'loyalty.tasks.periodic_partial_sync',
-        'schedule': 3 * 60 * 60,  # Every 3 hours (in seconds)
-    },
+    # No periodic partial sync: the nightly sweep catches everyone, and the
+    # in-app sync button covers users who want their points right now.
+    # (Removed 2026-08-10: it polled Shopify once per user every 3 hours,
+    # ~2,000 API calls/day for ~24 orders/day.)
     'nightly-intermediate-sync': {
         'task': 'loyalty.tasks.periodic_intermediate_sync',
         'schedule': crontab(hour=3, minute=0),  # 3:00 AM Amsterdam time
