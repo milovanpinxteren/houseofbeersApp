@@ -13,9 +13,9 @@ logger = logging.getLogger(__name__)
 def refresh_random_beer_products():
     """
     Keep the random-beer product cache warm so no user request ever pays
-    the multi-second paginated Shopify fetch. Runs every 10 minutes via
-    beat (cache TTL is 15 minutes, so the cache never goes cold between
-    refreshes as long as the worker is up).
+    the multi-second paginated Shopify fetch. Runs hourly via beat (cache
+    TTL is 2 hours, so the cache never goes cold between refreshes as long
+    as the worker is up, even if a single run fails).
     """
     from users.services.shopify import ShopifyService
     from recommendations.views import PRODUCT_CACHE_KEY, PRODUCT_CACHE_TTL

@@ -213,11 +213,12 @@ CELERY_BEAT_SCHEDULE = {
     # Runs hourly but only acts at BirthdayRewardConfig.send_hour, so the
     # send hour is admin-tunable without touching this schedule. Also catches
     # up on birthdays missed while the worker was down.
-    # Cache TTL is 15 min; refreshing every 10 keeps the random-beer picker
-    # instant — no user request ever pays the paginated Shopify fetch.
+    # Cache TTL is 2h; hourly refresh keeps the random-beer picker instant
+    # while a missed cycle still can't go cold. The catalogue barely changes
+    # within the hour, and the view falls back to a synchronous fetch anyway.
     'refresh-random-beer-products': {
         'task': 'recommendations.tasks.refresh_random_beer_products',
-        'schedule': 10 * 60,
+        'schedule': 60 * 60,
     },
     'birthday-scan': {
         'task': 'loyalty.tasks.birthday_scan',

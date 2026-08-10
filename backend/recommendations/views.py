@@ -414,7 +414,7 @@ class UntappdProfileView(APIView):
 # v2: cached dicts gained variant_id/created_at — the key bump drops stale
 # entries that lack them.
 PRODUCT_CACHE_KEY = 'recommendations:shopify_active_products:v2'
-PRODUCT_CACHE_TTL = 60 * 15  # 15 minutes
+PRODUCT_CACHE_TTL = 60 * 60 * 2  # 2 hours (beat refreshes hourly, so one missed run is survivable)
 
 SHOP_BASE_URL = 'https://houseofbeers.nl'
 
