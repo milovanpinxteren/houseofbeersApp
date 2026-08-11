@@ -6,6 +6,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
+from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
 
@@ -666,8 +667,41 @@ class NewArrivalsView(APIView):
 APP_SHOP_CACHE_KEY = 'recommendations:app_only_products:v1'
 APP_SHOP_CACHE_TTL = 60 * 30  # 30 min — sold-out items should drop out fast
 
+# Local-dev fixtures: run the backend with APP_SHOP_DEMO=1 (DEBUG only) to see
+# the App-exclusief section in the app without touching Shopify or production.
+_APP_SHOP_DEMO_PRODUCTS = [
+    {
+        'id': '1', 'title': '3 Fonteinen Oude Geuze [DEMO]',
+        'shopify_title': 'Demo - Z1 - 3 Fonteinen Oude Geuze', 'handle': 'demo-1',
+        'description': 'Dit is lokale demo-data (APP_SHOP_DEMO=1) — er bestaat geen echt product. '
+                       'Een blend van jonge en oude lambik, spontaan gegist. Droog, complex en levendig.',
+        'image_url': 'https://cdn.shopify.com/s/files/1/0807/5624/4818/files/674a70651e3c622d1171eb9fe37dc45a.png?v=1706722294',
+        'tags': ['app-only'], 'created_at': '2026-08-01T10:00:00Z',
+        'price': '9.95', 'variant_id': '0', 'inventory': 4,
+        'untappd_rating': 4.42, 'untappd_checkins': 18234,
+        'untappd_url': None, 'style': 'Lambiek/Geuze', 'abv': '6.0',
+        'country': 'België', 'volume': '75 CL', 'deposit': '0.10',
+        'cart_url': 'https://houseofbeers.nl/',
+    },
+    {
+        'id': '2', 'title': 'Nevel Wilde Bosbes [DEMO]',
+        'shopify_title': 'Demo - Z2 - Nevel Wilde Bosbes', 'handle': 'demo-2',
+        'description': 'Demo-product zonder afbeelding, om de placeholder-weergave te zien.',
+        'image_url': '',
+        'tags': ['app-only'], 'created_at': '2026-08-05T10:00:00Z',
+        'price': '7.50', 'variant_id': '0', 'inventory': 2,
+        'untappd_rating': 3.98, 'untappd_checkins': 1543,
+        'untappd_url': None, 'style': 'Wild Ale', 'abv': '5.5',
+        'country': 'Nederland', 'volume': '37.5 CL', 'deposit': '0.10',
+        'cart_url': 'https://houseofbeers.nl/',
+    },
+]
+
 
 def _get_app_only_products() -> list:
+    import os as _os
+    if settings.DEBUG and _os.environ.get('APP_SHOP_DEMO') == '1':
+        return _APP_SHOP_DEMO_PRODUCTS
     """App-only products (cached). Empty list is cached briefly (5 min):
     'no leftovers right now' is a normal state, unlike the active-product
     cache where empty means the fetch failed."""
