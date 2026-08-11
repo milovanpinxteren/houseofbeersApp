@@ -21,7 +21,6 @@ import {
 import { getEvents, joinEvent, Event } from '../../src/api/events';
 import { getLoyaltySummary, LoyaltySummary } from '../../src/api/loyalty';
 import IOSInstallPrompt from '../../src/components/IOSInstallPrompt';
-import { useOriginPush } from '../../src/navigation/origin';
 
 const notificationIcons: Record<string, keyof typeof Ionicons.glyphMap> = {
   announcement: 'megaphone',
@@ -32,7 +31,6 @@ const notificationIcons: Record<string, keyof typeof Ionicons.glyphMap> = {
 
 export default function HomeScreen() {
   const router = useRouter();
-  const pushFrom = useOriginPush();
   const { user } = useAuth();
   const { language } = useLanguage();
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -209,10 +207,10 @@ export default function HomeScreen() {
                       label={t('events.joinLive')}
                       icon="play"
                       onPress={() =>
-                        pushFrom({
+                        router.push({
                           pathname: '/(community)/livestream',
                           params: { eventId: evt.id },
-                        })
+                        } as any)
                       }
                       style={styles.eventButton}
                     />
@@ -222,10 +220,10 @@ export default function HomeScreen() {
                       icon="checkmark"
                       variant="secondary"
                       onPress={() =>
-                        pushFrom({
+                        router.push({
                           pathname: '/(community)/livestream',
                           params: { eventId: evt.id },
-                        })
+                        } as any)
                       }
                       style={styles.eventButton}
                     />

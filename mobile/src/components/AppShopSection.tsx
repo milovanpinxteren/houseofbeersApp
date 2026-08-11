@@ -15,34 +15,41 @@ import { colors, spacing, borderRadius, fonts } from '../theme/colors';
 import { SectionHeader } from './ui';
 import { AppShopProduct } from '../api/recommendations';
 
+// The Ontdek rail is a teaser: the full page shows everything.
+const RAIL_MAX_PRODUCTS = 6;
+
 /**
  * "App exclusives" rail: leftover WhatsApp-sale beers sold only in the app.
  * Renders nothing when there are no products — the section simply does not
  * exist most of the time, by design.
  */
-export function AppShopSection({ products }: { products: AppShopProduct[] }) {
+export function AppShopSection({
+  products,
+  onViewAll,
+}: {
+  products: AppShopProduct[];
+  onViewAll?: () => void;
+}) {
   const [selected, setSelected] = useState<AppShopProduct | null>(null);
 
   if (products.length === 0) {
     return null;
   }
 
-  function order(product: AppShopProduct) {
-    Linking.openURL(product.cart_url).catch((err) =>
-      console.log('[AppShop] Open cart error:', err)
-    );
-  }
-
   return (
     <>
-      <SectionHeader title={t('discover.appShopTitle')} />
+      <SectionHeader
+        title={t('discover.appShopTitle')}
+        actionLabel={onViewAll ? t('discover.appShopViewAll') : undefined}
+        onAction={onViewAll}
+      />
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.railContent}
         style={styles.rail}
       >
-        {products.map((product) => (
+        {products.slice(0, RAIL_MAX_PRODUCTS).map((product) => (
           <Pressable
             key={product.id}
             onPress={() => setSelected(product)}
@@ -82,71 +89,94 @@ export function AppShopSection({ products }: { products: AppShopProduct[] }) {
         ))}
       </ScrollView>
 
-      {/* Detail sheet */}
-      <Modal
-        visible={selected !== null}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setSelected(null)}
-      >
-        <Pressable style={styles.modalOverlay} onPress={() => setSelected(null)}>
-          <Pressable style={styles.sheet} onPress={() => {}}>
-            {selected && (
-              <ScrollView showsVerticalScrollIndicator={false}>
-                <View style={styles.sheetHandle} />
-                {selected.image_url ? (
-                  <Image
-                    source={{ uri: selected.image_url }}
-                    style={styles.sheetImage}
-                    resizeMode="cover"
-                  />
-                ) : null}
-                <View style={styles.exclusiveBadge}>
-                  <Ionicons name="sparkles" size={12} color={colors.primary} />
-                  <Text style={styles.exclusiveText}>{t('discover.appShopBadge')}</Text>
-                </View>
-                <Text style={styles.sheetTitle}>{selected.title}</Text>
-
-                <View style={styles.chipRow}>
-                  {!!selected.style && <Chip label={selected.style} />}
-                  {!!selected.abv && <Chip label={selected.abv.includes('%') ? selected.abv : `${selected.abv}%`} />}
-                  {!!selected.volume && <Chip label={selected.volume} />}
-                  {!!selected.country && <Chip label={selected.country} />}
-                </View>
-
-                {selected.untappd_rating != null && (
-                  <View style={styles.untappdRow}>
-                    <Ionicons name="star" size={14} color={colors.primary} />
-                    <Text style={styles.untappdText}>
-                      {selected.untappd_rating.toFixed(2)}
-                      {selected.untappd_checkins
-                        ? `  ·  ${selected.untappd_checkins.toLocaleString()} ${t('discover.appShopCheckins')}`
-                        : ''}
-                    </Text>
-                  </View>
-                )}
-
-                {!!selected.description && (
-                  <Text style={styles.description}>{selected.description}</Text>
-                )}
-
-                <Pressable
-                  onPress={() => order(selected)}
-                  style={({ pressed }) => [styles.orderBtn, pressed && { opacity: 0.85 }]}
-                >
-                  <Text style={styles.orderBtnText}>
-                    {t('discover.appShopOrder')} · €{Number(selected.price).toFixed(2)}
-                  </Text>
-                </Pressable>
-                <Text style={styles.stockNote}>
-                  {t('discover.appShopStock', { count: selected.inventory })}
-                </Text>
-              </ScrollView>
-            )}
-          </Pressable>
-        </Pressable>
-      </Modal>
+      <AppShopDetailSheet product={selected} onClose={() => setSelected(null)} />
     </>
+  );
+}
+
+/**
+ * Product detail bottom sheet, shared between the Ontdek rail and the full
+ * App-exclusief page. Pass `product = null` to hide it.
+ */
+export function AppShopDetailSheet({
+  product,
+  onClose,
+}: {
+  product: AppShopProduct | null;
+  onClose: () => void;
+}) {
+  function order(selected: AppShopProduct) {
+    Linking.openURL(selected.cart_url).catch((err) =>
+      console.log('[AppShop] Open cart error:', err)
+    );
+  }
+
+  return (
+    <Modal
+      visible={product !== null}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <Pressable style={styles.modalOverlay} onPress={onClose}>
+        <Pressable style={styles.sheet} onPress={() => {}}>
+          {product && (
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <View style={styles.sheetHandle} />
+              {product.image_url ? (
+                <Image
+                  source={{ uri: product.image_url }}
+                  style={styles.sheetImage}
+                  resizeMode="cover"
+                />
+              ) : null}
+              <View style={styles.exclusiveBadge}>
+                <Ionicons name="sparkles" size={12} color={colors.primary} />
+                <Text style={styles.exclusiveText}>{t('discover.appShopBadge')}</Text>
+              </View>
+              <Text style={styles.sheetTitle}>{product.title}</Text>
+
+              <View style={styles.chipRow}>
+                {!!product.style && <Chip label={product.style} />}
+                {!!product.abv && (
+                  <Chip label={product.abv.includes('%') ? product.abv : `${product.abv}%`} />
+                )}
+                {!!product.volume && <Chip label={product.volume} />}
+                {!!product.country && <Chip label={product.country} />}
+              </View>
+
+              {product.untappd_rating != null && (
+                <View style={styles.untappdRow}>
+                  <Ionicons name="star" size={14} color={colors.primary} />
+                  <Text style={styles.untappdText}>
+                    {product.untappd_rating.toFixed(2)}
+                    {product.untappd_checkins
+                      ? `  ·  ${product.untappd_checkins.toLocaleString()} ${t('discover.appShopCheckins')}`
+                      : ''}
+                  </Text>
+                </View>
+              )}
+
+              {!!product.description && (
+                <Text style={styles.description}>{product.description}</Text>
+              )}
+
+              <Pressable
+                onPress={() => order(product)}
+                style={({ pressed }) => [styles.orderBtn, pressed && { opacity: 0.85 }]}
+              >
+                <Text style={styles.orderBtnText}>
+                  {t('discover.appShopOrder')} · €{Number(product.price).toFixed(2)}
+                </Text>
+              </Pressable>
+              <Text style={styles.stockNote}>
+                {t('discover.appShopStock', { count: product.inventory })}
+              </Text>
+            </ScrollView>
+          )}
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }
 

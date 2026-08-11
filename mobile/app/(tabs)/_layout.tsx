@@ -45,6 +45,10 @@ export default function TabsLayout() {
 
   return (
     <Tabs
+      // Back (header arrow bubbling up, Android hardware back) returns to the
+      // previously focused tab instead of the default "always first tab", so
+      // sub-screens opened from e.g. Ontdek go back to Ontdek, not Home.
+      backBehavior="history"
       screenOptions={{
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textMuted,
@@ -148,8 +152,9 @@ export default function TabsLayout() {
         options={{
           href: null,
           headerShown: false,
-          // Reset the nested stack when leaving, so the header back button
-          // never pops to a stale screen from an earlier visit.
+          // Trim the nested stack when leaving; together with the stale-stack
+          // collapse in src/navigation/subStack.tsx this keeps back from ever
+          // landing on a screen left over from an earlier visit.
           popToTopOnBlur: true,
         }}
       />

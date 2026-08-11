@@ -7,7 +7,6 @@ import { useLanguage } from '../../src/context/LanguageContext';
 import { t } from '../../src/i18n';
 import { colors, spacing, borderRadius, fonts, type } from '../../src/theme/colors';
 import { Card, Screen, SectionHeader, Badge, useToast } from '../../src/components/ui';
-import { useOriginPush } from '../../src/navigation/origin';
 import {
   addFavorite,
   AppShopProduct,
@@ -22,7 +21,6 @@ import { AppShopSection } from '../../src/components/AppShopSection';
 
 export default function OntdekScreen() {
   const router = useRouter();
-  const pushFrom = useOriginPush();
   const { language } = useLanguage();
   const { showToast } = useToast();
   const [favorites, setFavorites] = useState<Favorite[]>([]);
@@ -109,14 +107,17 @@ export default function OntdekScreen() {
       <Text style={styles.intro}>{t('discover.intro')}</Text>
 
       {/* App exclusives: leftover sale stock, only rendered when available */}
-      <AppShopSection products={appShop} />
+      <AppShopSection
+        products={appShop}
+        onViewAll={() => router.push('/(profile)/app-shop' as any)}
+      />
 
       <SectionHeader title={t('discover.forYou')} />
 
       {/* Hero: recommendations */}
       <Card
         variant="accent"
-        onPress={() => pushFrom('/(profile)/recommendations')}
+        onPress={() => router.push('/(profile)/recommendations' as any)}
         style={styles.heroCard}
       >
         <View style={styles.heroIconWrap}>
@@ -132,7 +133,7 @@ export default function OntdekScreen() {
       {/* Taste profile + favorites side by side */}
       <View style={styles.tileRow}>
         <Card
-          onPress={() => pushFrom('/(profile)/taste-profile')}
+          onPress={() => router.push('/(profile)/taste-profile' as any)}
           style={styles.tile}
         >
           <Ionicons name="analytics" size={24} color={colors.primary} />
@@ -142,7 +143,7 @@ export default function OntdekScreen() {
           </Text>
         </Card>
         <Card
-          onPress={() => pushFrom('/(profile)/favorites')}
+          onPress={() => router.push('/(profile)/favorites' as any)}
           style={styles.tile}
         >
           <View style={styles.tileHeader}>
@@ -159,7 +160,7 @@ export default function OntdekScreen() {
       {/* Random beer roulette */}
       <Card
         variant="elevated"
-        onPress={() => pushFrom('/(profile)/random-beer')}
+        onPress={() => router.push('/(profile)/random-beer' as any)}
         style={styles.rouletteCard}
       >
         <View style={styles.rouletteIconWrap}>
@@ -181,7 +182,7 @@ export default function OntdekScreen() {
       {/* Personalized sixpack slot machine */}
       <Card
         variant="elevated"
-        onPress={() => pushFrom('/(profile)/sixpack')}
+        onPress={() => router.push('/(profile)/sixpack' as any)}
         style={styles.rouletteCard}
       >
         <View style={styles.rouletteIconWrap}>

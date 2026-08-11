@@ -99,7 +99,8 @@
       "PowerShell(node 'C:\\\\Users\\\\Milo\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Code-house-of-beers-app\\\\123f0d57-5065-4126-9a7b-6bcde2bda370\\\\scratchpad\\\\check_i18n.js')",
       "Bash(node -e \"const sharp=require\\('sharp'\\); sharp\\('public/icons/badge-72.png'\\).metadata\\(\\).then\\(m=>console.log\\(JSON.stringify\\(m\\)\\)\\).then\\(\\(\\)=>sharp\\('public/icons/badge-72.png'\\).stats\\(\\)\\).then\\(s=>console.log\\(JSON.stringify\\(s.channels.map\\(c=>\\({mean:c.mean,min:c.min,max:c.max}\\)\\)\\)\\)\\)\")",
       "Bash(node -e ' *)",
-      "PowerShell(& \"C:\\\\Code\\\\house_of_beers_app\\\\backend\\\\venv\\\\Scripts\\\\python.exe\" \"C:\\\\Code\\\\house_of_beers_app\\\\backend\\\\manage.py\" makemigrations community)"
+      "PowerShell(& \"C:\\\\Code\\\\house_of_beers_app\\\\backend\\\\venv\\\\Scripts\\\\python.exe\" \"C:\\\\Code\\\\house_of_beers_app\\\\backend\\\\manage.py\" makemigrations community)",
+      "Bash(git -C \"C:/Code/house_of_beers_app\" log --oneline -12)"
     ],
     "deny": [],
     "ask": []

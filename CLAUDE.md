@@ -305,6 +305,14 @@ eas submit --platform android --profile production
 
 Sub-screens live in `(profile)` and `(community)` stacks (bottom bar stays visible); all have real header titles (no more logo-only header). Old `/favorites` tab route redirects to `(profile)/favorites`.
 
+**Navigation model (Aug 2026 rework):** plain stack history — back is always one real
+step back. Sub-screen headers use the shared `src/navigation/subStack.tsx`
+(BackButton + screenOptions + stale-stack collapse); the Tabs navigator runs
+`backBehavior="history"` so bubbling back (and Android hardware back) returns to
+the tab you actually came from instead of Home. The old `useOriginPush`/`?from=`
+system is deleted — push screens with plain `router.push`. Root `index` renders a
+branded boot screen (logo + spinner, headerShown false) during the auth check.
+
 ---
 
 ## Localization (i18n)

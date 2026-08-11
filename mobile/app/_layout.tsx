@@ -47,6 +47,7 @@ export default function RootLayout() {
               contentStyle: { backgroundColor: colors.background },
             }}
           >
+            <Stack.Screen name="index" options={{ headerShown: false, title: 'House of Beers' }} />
             <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
             <Stack.Screen name="(auth)" options={{ headerShown: false }} />
             <Stack.Screen
