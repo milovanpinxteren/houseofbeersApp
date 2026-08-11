@@ -312,6 +312,35 @@ export async function getNewArrivals(limit = 10): Promise<{ products: NewArrival
   );
 }
 
+// App-exclusive leftover sale beers (empty most of the time — the section
+// only renders when there is stock, so don't poll this).
+export interface AppShopProduct {
+  id: string;
+  title: string;
+  shopify_title: string;
+  handle: string;
+  description: string;
+  image_url: string;
+  tags: string[];
+  created_at: string;
+  price: string;
+  variant_id: string;
+  inventory: number;
+  untappd_rating: number | null;
+  untappd_checkins: number | null;
+  untappd_url: string | null;
+  style: string;
+  abv: string;
+  country: string;
+  volume: string;
+  deposit: string;
+  cart_url: string;
+}
+
+export async function getAppShop(): Promise<{ products: AppShopProduct[] }> {
+  return apiFetch<{ products: AppShopProduct[] }>('/recommendations/app-shop/');
+}
+
 // Lightweight prefetch of the style filter chips — no beer is picked.
 export async function getRandomBeerStyles(): Promise<{ styles: string[] }> {
   return apiFetch<{ styles: string[] }>('/recommendations/random-beer/?styles_only=1');

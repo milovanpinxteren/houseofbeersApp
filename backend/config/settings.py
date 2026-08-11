@@ -220,12 +220,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'recommendations.tasks.refresh_random_beer_products',
         'schedule': 60 * 60,
     },
-    # App-exclusive shop (leftover sale stock, tag app-only): refresh matches
-    # the 30-min cache TTL so sold-out beers drop out of the app quickly.
-    'refresh-app-only-products': {
-        'task': 'recommendations.tasks.refresh_app_only_products',
-        'schedule': 60 * 30,
-    },
+    # NB: the app-shop (tag app-only) deliberately has NO beat entry — the
+    # endpoint fetches on demand and caches 30 min (empty: 5 min), which
+    # costs zero Shopify calls while the app is unused. The manual task
+    # recommendations.tasks.refresh_app_only_products still exists.
     'birthday-scan': {
         'task': 'loyalty.tasks.birthday_scan',
         'schedule': crontab(minute=5),  # every hour at :05

@@ -636,17 +636,19 @@ The bottleneck is gunicorn workers, not the database. Each poll is ~5-15ms DB ti
 - Push notifications (separate from in-app notifications)
 - Product browsing from Shopify
 - Loyalty tiers/levels
-- **App-exclusive shop UI** (backend is DONE, mobile screen pending): the
-  `houseofbeers_whatsapp` pipeline tags leftover WhatsApp-sale products
-  `app-only` and moves remaining stock to an "App" variant at a secondary
-  price. Backend: `GET /api/recommendations/app-shop/` serves them
-  (cached 30 min, beat-refreshed) with `title` (clean `custom.app_title`),
-  `price`/`variant_id`/`inventory` from the **App variant** (never
-  `variants[0]` — that's the Sale variant), Untappd rating/check-ins/URL,
-  style, ABV, description, and a ready-made `cart_url`. Products are
-  UNLISTED in the webshop — the app is the only place they're visible.
-  Mobile: add a section in the Ontdek tab using the existing beer-card UI;
-  checkout = open `cart_url` like favorites do.
+- ~~App-exclusive shop UI~~ **DONE (2026-08-11)**: the `houseofbeers_whatsapp`
+  pipeline tags leftover WhatsApp-sale products `app-only` and moves remaining
+  stock to an "App" variant at a secondary price. Backend:
+  `GET /api/recommendations/app-shop/` serves them on demand (cached 30 min,
+  empty state 5 min, **deliberately no beat task** — zero background Shopify
+  calls) with `title` (clean `custom.app_title`), `price`/`variant_id`/
+  `inventory` from the **App variant** (never `variants[0]` — that's the Sale
+  variant), Untappd rating/check-ins, style, ABV, description, and a
+  ready-made `cart_url`. Mobile: `AppShopSection` at the top of the Ontdek
+  tab — renders NOTHING when the list is empty (the normal state), card rail
+  + detail bottom sheet with a Bestellen button that opens `cart_url`.
+  Products are UNLISTED in the webshop — the app is the only place they're
+  visible. Tested end-to-end with a live temp product (created + deleted).
 
 ---
 

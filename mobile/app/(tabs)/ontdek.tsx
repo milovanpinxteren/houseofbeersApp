@@ -10,12 +10,15 @@ import { Card, Screen, SectionHeader, Badge, useToast } from '../../src/componen
 import { useOriginPush } from '../../src/navigation/origin';
 import {
   addFavorite,
+  AppShopProduct,
   Favorite,
+  getAppShop,
   getFavorites,
   getNewArrivals,
   NewArrival,
   removeFavorite,
 } from '../../src/api/recommendations';
+import { AppShopSection } from '../../src/components/AppShopSection';
 
 export default function OntdekScreen() {
   const router = useRouter();
@@ -24,6 +27,7 @@ export default function OntdekScreen() {
   const { showToast } = useToast();
   const [favorites, setFavorites] = useState<Favorite[]>([]);
   const [newArrivals, setNewArrivals] = useState<NewArrival[]>([]);
+  const [appShop, setAppShop] = useState<AppShopProduct[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [togglingIds, setTogglingIds] = useState<Set<string>>(new Set());
 
@@ -31,9 +35,10 @@ export default function OntdekScreen() {
   const favoriteByBeerId = new Map(favorites.map((fav) => [fav.beer_id, fav]));
 
   const loadData = useCallback(async () => {
-    const [favoritesResult, arrivalsResult] = await Promise.allSettled([
+    const [favoritesResult, arrivalsResult, appShopResult] = await Promise.allSettled([
       getFavorites(),
       getNewArrivals(10),
+      getAppShop(),
     ]);
     if (favoritesResult.status === 'fulfilled') {
       setFavorites(favoritesResult.value.favorites);
@@ -44,6 +49,13 @@ export default function OntdekScreen() {
       setNewArrivals(arrivalsResult.value.products);
     } else {
       console.log('[Ontdek] New arrivals load error:', arrivalsResult.reason);
+    }
+    // Empty or failed → no section at all; never retry in a loop
+    if (appShopResult.status === 'fulfilled') {
+      setAppShop(appShopResult.value.products);
+    } else {
+      console.log('[Ontdek] App shop load error:', appShopResult.reason);
+      setAppShop([]);
     }
   }, []);
 
@@ -95,6 +107,9 @@ export default function OntdekScreen() {
   return (
     <Screen refreshing={refreshing} onRefresh={handleRefresh}>
       <Text style={styles.intro}>{t('discover.intro')}</Text>
+
+      {/* App exclusives: leftover sale stock, only rendered when available */}
+      <AppShopSection products={appShop} />
 
       <SectionHeader title={t('discover.forYou')} />
 
