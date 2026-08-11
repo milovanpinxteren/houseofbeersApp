@@ -28,3 +28,20 @@ def refresh_random_beer_products():
         # Keep whatever is cached; an empty list usually means the fetch failed
         logger.warning("Random-beer product refresh returned no products; cache left as-is")
     return {'products': len(products)}
+
+
+@shared_task
+def refresh_app_only_products():
+    """
+    Keep the app-shop cache warm. Leftover-sale products tagged `app-only`
+    change after each sale and as items sell out; every 30 minutes matches
+    the cache TTL. An empty list is a normal state here (no leftovers) and
+    is cached too.
+    """
+    from users.services.shopify import ShopifyService
+    from recommendations.views import APP_SHOP_CACHE_KEY, APP_SHOP_CACHE_TTL
+
+    products = ShopifyService().get_app_only_products()
+    cache.set(APP_SHOP_CACHE_KEY, products, APP_SHOP_CACHE_TTL if products else 300)
+    logger.info(f"Refreshed app-shop cache: {len(products)} products")
+    return {'products': len(products)}

@@ -9,6 +9,7 @@ urlpatterns = [
     path('styles/', views.StylesListView.as_view(), name='styles'),
     path('random-beer/', views.RandomBeerView.as_view(), name='random-beer'),
     path('new-arrivals/', views.NewArrivalsView.as_view(), name='new-arrivals'),
+    path('app-shop/', views.AppShopView.as_view(), name='app-shop'),
 
     # Personalized sixpack
     path('sixpack/', views.SixpackView.as_view(), name='sixpack'),

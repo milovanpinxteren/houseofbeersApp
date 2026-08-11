@@ -377,6 +377,7 @@ function MyComponent() {
 | GET | `/api/recommendations/untappd/` | Get linked Untappd profile |
 | POST | `/api/recommendations/untappd/link/` | Link Untappd username |
 | POST | `/api/recommendations/untappd/unlink/` | Unlink Untappd account |
+| GET | `/api/recommendations/app-shop/` | App-exclusive beers (leftover sale stock at app price) |
 | GET | `/api/recommendations/favorites/` | Get user's favorite beers |
 | POST | `/api/recommendations/favorites/` | Add beer to favorites |
 | DELETE | `/api/recommendations/favorites/<id>/` | Remove from favorites |
@@ -635,6 +636,17 @@ The bottleneck is gunicorn workers, not the database. Each poll is ~5-15ms DB ti
 - Push notifications (separate from in-app notifications)
 - Product browsing from Shopify
 - Loyalty tiers/levels
+- **App-exclusive shop UI** (backend is DONE, mobile screen pending): the
+  `houseofbeers_whatsapp` pipeline tags leftover WhatsApp-sale products
+  `app-only` and moves remaining stock to an "App" variant at a secondary
+  price. Backend: `GET /api/recommendations/app-shop/` serves them
+  (cached 30 min, beat-refreshed) with `title` (clean `custom.app_title`),
+  `price`/`variant_id`/`inventory` from the **App variant** (never
+  `variants[0]` — that's the Sale variant), Untappd rating/check-ins/URL,
+  style, ABV, description, and a ready-made `cart_url`. Products are
+  UNLISTED in the webshop — the app is the only place they're visible.
+  Mobile: add a section in the Ontdek tab using the existing beer-card UI;
+  checkout = open `cart_url` like favorites do.
 
 ---
 

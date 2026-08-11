@@ -660,6 +660,55 @@ class NewArrivalsView(APIView):
         })
 
 
+# App-exclusive shop — leftover WhatsApp-sale stock tagged `app-only` by the
+# hob pipeline, sold at the secondary app price. Products are UNLISTED in the
+# webshop; the App variant (never variants[0]) carries price and stock.
+APP_SHOP_CACHE_KEY = 'recommendations:app_only_products:v1'
+APP_SHOP_CACHE_TTL = 60 * 30  # 30 min — sold-out items should drop out fast
+
+
+def _get_app_only_products() -> list:
+    """App-only products (cached). Empty list is cached briefly (5 min):
+    'no leftovers right now' is a normal state, unlike the active-product
+    cache where empty means the fetch failed."""
+    products = cache.get(APP_SHOP_CACHE_KEY)
+    if products is None:
+        products = ShopifyService().get_app_only_products()
+        ttl = APP_SHOP_CACHE_TTL if products else 300
+        cache.set(APP_SHOP_CACHE_KEY, products, ttl)
+    return products
+
+
+class AppShopView(APIView):
+    """
+    App-exclusive beers: leftover sale stock at the app price.
+
+    GET /api/recommendations/app-shop/
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            products = _get_app_only_products()
+        except Exception as e:
+            logger.error(f"App shop fetch failed: {e}")
+            return Response(
+                {'error': 'Could not load app shop products'},
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+
+        return Response({
+            'products': [
+                {
+                    **product,
+                    'cart_url': f"{SHOP_BASE_URL}/cart/{product['variant_id']}:1",
+                }
+                for product in products
+                if product.get('variant_id')
+            ]
+        })
+
+
 class SixpackRateThrottle(UserRateThrottle):
     scope = 'sixpack'
     rate = '60/hour'

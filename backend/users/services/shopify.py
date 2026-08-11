@@ -356,6 +356,153 @@ class ShopifyService:
                 logger.error(f"Response body: {e.response.text}")
             return None
 
+    def get_app_only_products(self) -> list:
+        """
+        Fetch app-exclusive products: leftover WhatsApp-sale stock tagged
+        `app-only` by the hob pipeline.
+
+        These products are UNLISTED (invisible in webshop listings and in the
+        status:active caches) but buyable via cart permalink. Each has an
+        "Editie" option with a Sale and an App variant; ONLY the App variant
+        (secondary price) is for the app — never use variants[0] here.
+
+        Returns a list of dicts with the App variant's price/variant_id and
+        the Untappd metafields for a rich card UI. Products whose App variant
+        is out of stock are excluded.
+        """
+        query = """
+        query appOnlyProducts($cursor: String) {
+            products(first: 50, after: $cursor, query: "tag:'app-only'") {
+                pageInfo { hasNextPage endCursor }
+                edges {
+                    node {
+                        id
+                        legacyResourceId
+                        title
+                        handle
+                        status
+                        tags
+                        createdAt
+                        description(truncateAt: 600)
+                        featuredImage { url }
+                        variants(first: 10) {
+                            edges {
+                                node {
+                                    id
+                                    legacyResourceId
+                                    price
+                                    inventoryQuantity
+                                    selectedOptions { name value }
+                                }
+                            }
+                        }
+                        metafields(first: 30, namespace: "custom") {
+                            edges { node { key value type } }
+                        }
+                    }
+                }
+            }
+        }
+        """
+
+        products = []
+        cursor = None
+        for _page in range(10):  # safety bound; app-only sets are small
+            data = self._graphql_request(query, {"cursor": cursor})
+            if not data:
+                break
+            conn = data.get('products') or {}
+            for edge in conn.get('edges') or []:
+                node = edge['node']
+                parsed = self._parse_app_only_product(node)
+                if parsed:
+                    products.append(parsed)
+            page_info = conn.get('pageInfo') or {}
+            if not page_info.get('hasNextPage'):
+                break
+            cursor = page_info.get('endCursor')
+
+        return products
+
+    @staticmethod
+    def _parse_app_only_product(node: dict) -> Optional[dict]:
+        """Parse one GraphQL product node into an app-shop dict (or None)."""
+        import json as _json
+
+        # The App variant carries the secondary price and the leftover stock
+        app_variant = None
+        for v_edge in (node.get('variants') or {}).get('edges') or []:
+            v = v_edge['node']
+            options = {o['name']: o['value'] for o in v.get('selectedOptions') or []}
+            if options.get('Editie') == 'App':
+                app_variant = v
+                break
+        if not app_variant:
+            return None
+        if (app_variant.get('inventoryQuantity') or 0) <= 0:
+            return None
+
+        metafields = {}
+        for m_edge in (node.get('metafields') or {}).get('edges') or []:
+            m = m_edge['node']
+            metafields[m['key']] = m['value']
+
+        def _mf_json(key):
+            raw = metafields.get(key)
+            if not raw:
+                return None
+            try:
+                return _json.loads(raw)
+            except (ValueError, TypeError):
+                return None
+
+        rating = None
+        score = _mf_json('untappd_score')
+        if isinstance(score, dict):
+            try:
+                rating = float(score.get('value'))
+            except (TypeError, ValueError):
+                rating = None
+        if rating is None and metafields.get('untappd_rating'):
+            try:
+                rating = float(metafields['untappd_rating'])
+            except (TypeError, ValueError):
+                rating = None
+
+        untappd_link = _mf_json('untappd_link')
+        untappd_url = untappd_link.get('url') if isinstance(untappd_link, dict) else None
+
+        checkins = None
+        if metafields.get('untappd_checkins'):
+            try:
+                checkins = int(metafields['untappd_checkins'])
+            except (TypeError, ValueError):
+                checkins = None
+
+        image = node.get('featuredImage') or {}
+
+        return {
+            'id': node.get('legacyResourceId'),
+            'title': metafields.get('app_title') or node.get('title'),
+            'shopify_title': node.get('title'),
+            'handle': node.get('handle'),
+            'description': node.get('description') or '',
+            'image_url': image.get('url') or '',
+            'tags': node.get('tags') or [],
+            'created_at': node.get('createdAt'),
+            'price': app_variant.get('price'),
+            'variant_id': str(app_variant.get('legacyResourceId') or ''),
+            'inventory': app_variant.get('inventoryQuantity') or 0,
+            'untappd_rating': rating,
+            'untappd_checkins': checkins,
+            'untappd_url': untappd_url,
+            'style': metafields.get('soort_bier') or '',
+            'abv': metafields.get('alcoholpercentage') or '',
+            'country': metafields.get('land_van_herkomst') or '',
+            'volume': metafields.get('inhoud') or '',
+            'deposit': metafields.get('deposit') or '',
+        }
+
     def create_basic_discount(
         self,
         code: str,
