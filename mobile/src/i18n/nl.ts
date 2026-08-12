@@ -131,6 +131,7 @@ export default {
     appShopCheckins: 'check-ins',
     appShopViewAll: 'Bekijk alles',
     appShopSaleFallback: 'Sale van {{date}}',
+    appShopGroupCount: '{{count}} bieren',
     appShopCheckout: 'Afrekenen ({{count}}) · €{{total}}',
     appShopQtyPlus: 'Eén meer',
     appShopQtyMinus: 'Eén minder',

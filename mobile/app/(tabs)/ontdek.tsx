@@ -130,7 +130,7 @@ export default function OntdekScreen() {
         <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
       </Card>
 
-      {/* Taste profile + favorites side by side */}
+      {/* 2x2 feature grid: taste profile, favorites, random beer, sixpack */}
       <View style={styles.tileRow}>
         <Card
           onPress={() => router.push('/(profile)/taste-profile' as any)}
@@ -156,50 +156,28 @@ export default function OntdekScreen() {
           </Text>
         </Card>
       </View>
-
-      {/* Random beer roulette */}
-      <Card
-        variant="elevated"
-        onPress={() => router.push('/(profile)/random-beer' as any)}
-        style={styles.rouletteCard}
-      >
-        <View style={styles.rouletteIconWrap}>
-          <Ionicons name="dice" size={28} color={colors.primary} />
-          <Ionicons
-            name="sparkles"
-            size={14}
-            color={colors.primary}
-            style={styles.rouletteSparkle}
-          />
-        </View>
-        <View style={styles.heroText}>
-          <Text style={styles.heroTitle}>{t('randomBeer.cardTitle')}</Text>
-          <Text style={styles.heroSubtitle}>{t('randomBeer.cardSubtitle')}</Text>
-        </View>
-        <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
-      </Card>
-
-      {/* Personalized sixpack slot machine */}
-      <Card
-        variant="elevated"
-        onPress={() => router.push('/(profile)/sixpack' as any)}
-        style={styles.rouletteCard}
-      >
-        <View style={styles.rouletteIconWrap}>
-          <Ionicons name="gift" size={28} color={colors.primary} />
-          <Ionicons
-            name="sparkles"
-            size={14}
-            color={colors.primary}
-            style={styles.rouletteSparkle}
-          />
-        </View>
-        <View style={styles.heroText}>
-          <Text style={styles.heroTitle}>{t('sixpack.cardTitle')}</Text>
-          <Text style={styles.heroSubtitle}>{t('sixpack.cardSubtitle')}</Text>
-        </View>
-        <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
-      </Card>
+      <View style={styles.tileRow}>
+        <Card
+          onPress={() => router.push('/(profile)/random-beer' as any)}
+          style={styles.tile}
+        >
+          <Ionicons name="dice" size={24} color={colors.primary} />
+          <Text style={styles.tileTitle}>{t('randomBeer.cardTitle')}</Text>
+          <Text style={styles.tileSubtitle} numberOfLines={2}>
+            {t('randomBeer.cardSubtitle')}
+          </Text>
+        </Card>
+        <Card
+          onPress={() => router.push('/(profile)/sixpack' as any)}
+          style={styles.tile}
+        >
+          <Ionicons name="gift" size={24} color={colors.primary} />
+          <Text style={styles.tileTitle}>{t('sixpack.cardTitle')}</Text>
+          <Text style={styles.tileSubtitle} numberOfLines={2}>
+            {t('sixpack.cardSubtitle')}
+          </Text>
+        </Card>
+      </View>
 
       {/* New arrivals rail */}
       {newArrivals.length > 0 && (
@@ -304,25 +282,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.textMuted,
     marginTop: 2,
-  },
-  rouletteCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    marginBottom: spacing.sm,
-  },
-  rouletteIconWrap: {
-    width: 56,
-    height: 56,
-    borderRadius: 18,
-    backgroundColor: colors.primary + '14',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  rouletteSparkle: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
   },
   tileRow: {
     flexDirection: 'row',

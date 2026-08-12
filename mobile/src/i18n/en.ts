@@ -142,6 +142,7 @@ export default {
     appShopCheckins: 'check-ins',
     appShopViewAll: 'View all',
     appShopSaleFallback: 'Sale of {{date}}',
+    appShopGroupCount: '{{count}} beers',
     appShopCheckout: 'Checkout ({{count}}) · €{{total}}',
     appShopQtyPlus: 'One more',
     appShopQtyMinus: 'One less',

@@ -120,6 +120,14 @@ export function AppShopDetailSheet({
     >
       <Pressable style={styles.modalOverlay} onPress={onClose}>
         <Pressable style={styles.sheet} onPress={() => {}}>
+          <Pressable
+            onPress={onClose}
+            hitSlop={8}
+            accessibilityLabel={t('common.cancel')}
+            style={({ pressed }) => [styles.sheetClose, pressed && { opacity: 0.7 }]}
+          >
+            <Ionicons name="close" size={20} color={colors.text} />
+          </Pressable>
           {product && (
             <ScrollView showsVerticalScrollIndicator={false}>
               <View style={styles.sheetHandle} />
@@ -279,6 +287,18 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     backgroundColor: colors.surfaceLow,
     marginBottom: spacing.sm,
+  },
+  sheetClose: {
+    position: 'absolute',
+    top: spacing.sm,
+    right: spacing.sm,
+    zIndex: 1,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: colors.surfaceHigh,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   sheetImage: {
     width: '100%',

@@ -665,7 +665,7 @@ class NewArrivalsView(APIView):
 # hob pipeline, sold at the secondary app price. Products are UNLISTED in the
 # webshop; the App variant (never variants[0]) carries price and stock.
 APP_SHOP_CACHE_KEY = 'recommendations:app_only_products:v1'
-APP_SHOP_CACHE_TTL = 60 * 30  # 30 min — sold-out items should drop out fast
+APP_SHOP_CACHE_TTL = 60 * 15  # 15 min — bounds how long sold-out items stay visible
 
 # Local-dev fixtures: run the backend with APP_SHOP_DEMO=1 (DEBUG only) to see
 # the App-exclusief section in the app without touching Shopify or production.

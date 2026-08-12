@@ -6,7 +6,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
 import { colors, spacing, borderRadius, fonts } from '../../../src/theme/colors';
-import { EmptyState, Screen, SectionHeader, SkeletonCard } from '../../../src/components/ui';
+import { EmptyState, Screen, SkeletonCard } from '../../../src/components/ui';
 import { AppShopProduct, getAppShop } from '../../../src/api/recommendations';
 import { AppShopDetailSheet } from '../../../src/components/AppShopSection';
 
@@ -74,6 +74,9 @@ export default function AppShopScreen() {
   // Client-side cart: product id → quantity. Deliberately screen-local (v1):
   // leaving the page may reset it.
   const [cart, setCart] = useState<Record<string, number>>({});
+  // Collapse overrides per sale group. Absent = default: newest sale
+  // (index 0) expanded, older sales collapsed.
+  const [groupOverrides, setGroupOverrides] = useState<Record<string, boolean>>({});
 
   const loadData = useCallback(async () => {
     try {
@@ -188,10 +191,29 @@ export default function AppShopScreen() {
           />
         )}
 
-        {groups.map((group) => (
-          <View key={group.label}>
-            <SectionHeader title={group.label} />
-            {group.products.map((product) => {
+        {groups.map((group, groupIndex) => {
+          const isCollapsed = groupOverrides[group.label] ?? groupIndex > 0;
+          return (
+          <View key={group.label} style={styles.saleGroup}>
+            <Pressable
+              onPress={() =>
+                setGroupOverrides((prev) => ({ ...prev, [group.label]: !isCollapsed }))
+              }
+              style={({ pressed }) => [styles.saleHeader, pressed && { opacity: 0.85 }]}
+            >
+              <Text style={styles.saleTitle}>{group.label}</Text>
+              <View style={styles.saleHeaderRight}>
+                <Text style={styles.saleCount}>
+                  {t('discover.appShopGroupCount', { count: group.products.length })}
+                </Text>
+                <Ionicons
+                  name={isCollapsed ? 'chevron-down' : 'chevron-up'}
+                  size={18}
+                  color={colors.textMuted}
+                />
+              </View>
+            </Pressable>
+            {!isCollapsed && group.products.map((product) => {
               const qty = cart[product.id] || 0;
               return (
                 <Pressable
@@ -245,7 +267,8 @@ export default function AppShopScreen() {
               );
             })}
           </View>
-        ))}
+          );
+        })}
 
         {/* Keep the last cards reachable above the sticky checkout bar */}
         {totalQty > 0 && <View style={{ height: CHECKOUT_BAR_HEIGHT }} />}
@@ -342,6 +365,36 @@ const styles = StyleSheet.create({
   },
   skeletons: {
     marginTop: spacing.lg,
+  },
+  saleGroup: {
+    marginBottom: spacing.md,
+  },
+  saleHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 2,
+    marginBottom: spacing.sm,
+  },
+  saleTitle: {
+    fontFamily: fonts.heading,
+    fontSize: 16,
+    letterSpacing: 0.4,
+    color: colors.text,
+  },
+  saleHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  saleCount: {
+    fontSize: 12,
+    color: colors.textMuted,
   },
   card: {
     flexDirection: 'row',
