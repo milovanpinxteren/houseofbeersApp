@@ -6,8 +6,9 @@ A loyalty and community app for houseofbeers.nl. This is a new project built fro
 ## Stack
 - **Backend**: Django + Django REST Framework, hosted on Dokku at `appadmin.houseofbeers.nl`
 - **Frontend**: Expo (React Native) with Expo Router
-  - **Android**: Native app on Google Play Store
-  - **iOS**: Progressive Web App (PWA) at `app.houseofbeers.nl`
+  - **All platforms**: Progressive Web App (PWA) at `app.houseofbeers.nl`
+  - The native Android app (Google Play) is **deprecated** — every user is on
+    the PWA, so frontend changes ship with a Netlify deploy, no store release.
 - **Database**: PostgreSQL (production), SQLite (development)
 - **Task Queue**: Celery + Redis (background sync, scheduled tasks)
 - **Hosting**: Dokku (backend), Netlify (PWA)
@@ -149,25 +150,11 @@ npm run build:web      # Build for production API
 npm run serve:web      # Serve locally at http://localhost:3000
 ```
 
-### Mobile App (EAS Build) - For Android
-- **Build service**: Expo Application Services (EAS)
-- **Package**: `nl.houseofbeers.app`
-- **EAS Project**: https://expo.dev/accounts/milovp/projects/house-of-beers
-- **Play Store**: Published on Google Play
-
-#### Build Commands
-```bash
-cd mobile
-
-# Preview build (APK for testing)
-eas build --platform android --profile preview
-
-# Production build (AAB for Play Store)
-eas build --platform android --profile production
-
-# Submit to Play Store
-eas submit --platform android --profile production
-```
+### Native Android app — DEPRECATED
+The Google Play listing is retired; all users (Android and iOS) use the PWA.
+Do not create EAS builds or Play Store submissions. The EAS project
+(`nl.houseofbeers.app`, https://expo.dev/accounts/milovp/projects/house-of-beers)
+remains only as historical reference.
 
 ---
 
@@ -206,7 +193,7 @@ eas submit --platform android --profile production
 - [x] Password reset via email (Hostinger SMTP)
 - [x] Password reset web page at `/reset-password/`
 - [x] Profile screen with Shopify link status
-- [x] Account deletion endpoint (Google Play compliance)
+- [x] Account deletion endpoint (originally for Google Play compliance; kept for GDPR)
 
 ### Phase 2: Order History ✅
 - [x] Orders tab showing Shopify order history

@@ -16,11 +16,9 @@ This app allows House of Beers customers to:
 |-----------|------------|
 | Backend | Django 5 + Django REST Framework |
 | Database | PostgreSQL (prod) / SQLite (dev) |
-| Android App | Expo (React Native) - Google Play Store |
-| iOS App | Progressive Web App (PWA) |
+| App (all platforms) | Expo (React Native) as Progressive Web App (PWA) |
 | Backend Hosting | Dokku on VPS |
 | PWA Hosting | Netlify (auto-deploy from GitHub) |
-| Build Service | Expo Application Services (EAS) |
 | E-commerce | Shopify (customer data, orders, discounts) |
 
 ## Project Structure
@@ -54,9 +52,10 @@ house_of_beers_app/
 | Environment | URL | Purpose |
 |-------------|-----|---------|
 | Backend API | https://appadmin.houseofbeers.nl | Production API |
-| PWA (iOS) | https://app.houseofbeers.nl | iOS Progressive Web App |
-| Android | Google Play Store | Native Android app |
+| PWA (all platforms) | https://app.houseofbeers.nl | Progressive Web App (Android + iOS) |
 | Development | http://localhost:8000 | Local backend |
+
+> The native Android app on Google Play is **deprecated** — all users are on the PWA.
 
 ## Quick Start
 
@@ -125,7 +124,7 @@ Key files for Dokku deployment:
 - `runtime.txt` - Python version
 - `requirements.txt` - Dependencies
 
-### PWA (Netlify) - For iOS Users
+### PWA (Netlify) - All Users
 
 The PWA auto-deploys from GitHub when you push to `main`. Configuration is in `netlify.toml`.
 
@@ -136,22 +135,11 @@ npm run build:web
 npm run serve:web
 ```
 
-### Android (EAS Build)
+### Android (deprecated)
 
-Mobile builds are created using Expo Application Services.
-
-```bash
-cd mobile
-
-# Preview build (APK for testing)
-eas build --platform android --profile preview
-
-# Production build (AAB for Play Store)
-eas build --platform android --profile production
-
-# Submit to Google Play
-eas submit --platform android --profile production
-```
+The native Android app and its Google Play listing are deprecated; Android
+users install the PWA from https://app.houseofbeers.nl. EAS build profiles in
+`eas.json` remain for historical reference only — do not create new builds.
 
 ## Configuration
 
@@ -167,13 +155,6 @@ eas submit --platform android --profile production
 | `EMAIL_HOST_USER` | SMTP email address |
 | `EMAIL_HOST_PASSWORD` | SMTP password |
 | `FRONTEND_URL` | URL for password reset links |
-
-### Mobile Build Profiles
-
-Configured in `eas.json`:
-- **development** - Local API, development client
-- **preview** - Production API, internal distribution (APK)
-- **production** - Production API, Play Store (AAB)
 
 ## API Documentation
 
@@ -203,11 +184,11 @@ See [CLAUDE.md](./CLAUDE.md) for complete API documentation.
 - Rewards redemption with Shopify discount codes
 - Admin-managed notifications
 - Multi-language support (EN/NL)
-- Account deletion (GDPR/Play Store compliance)
+- Account deletion (GDPR compliance)
 - Beer recommendations based on taste profile
 - Untappd integration
 - Favorites system with cart integration
-- PWA for iOS users (installable, offline support)
+- PWA for all users (installable, offline support)
 
 ### Planned
 - Push notifications
