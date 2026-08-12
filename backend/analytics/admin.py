@@ -46,6 +46,49 @@ class AnalyticsDashboardAdmin(admin.ModelAdmin):
         ]
         return custom_urls + urls
 
+    def _build_revenue_stats(self, since) -> dict:
+        """
+        App-shop and sixpack revenue over the window. Every Shopify call is
+        best-effort: a failed lookup yields None fields (rendered as 'n/a'),
+        never a broken dashboard.
+        """
+        from users.services.shopify import ShopifyService
+        from recommendations.models import SixpackCheckout
+
+        service = ShopifyService()
+
+        try:
+            app_shop = service.get_app_variant_sales(days=30)
+        except Exception:
+            app_shop = None
+
+        checkouts = SixpackCheckout.objects.filter(created_at__gte=since)
+        minted = checkouts.count()
+        redeemed = 0
+        sixpack_revenue = 0.0
+        usage_known = True
+        for checkout in checkouts.exclude(discount_code=''):
+            try:
+                usage = service.get_discount_code_usage(checkout.discount_code)
+            except Exception:
+                usage = None
+            if usage is None:
+                usage_known = False
+                continue
+            if usage > 0:
+                redeemed += 1
+                sixpack_revenue += float(checkout.charm_price)
+
+        return {
+            'app_shop': app_shop,  # {'units', 'revenue', 'orders'} or None
+            'sixpack': {
+                'minted': minted,
+                'redeemed': redeemed,
+                'revenue': round(sixpack_revenue, 2),
+                'usage_known': usage_known,
+            },
+        }
+
     def dashboard_view(self, request):
         now = timezone.now()
         today = now.date()
@@ -146,6 +189,14 @@ class AnalyticsDashboardAdmin(admin.ModelAdmin):
         total_untappd = UntappdProfile.objects.count()
         total_redemptions = Redemption.objects.filter(status='completed').count()
 
+        # --- Revenue (30d, cached — Shopify round-trips are slow) ---
+        from django.core.cache import cache
+
+        revenue = cache.get('analytics:revenue:v1')
+        if revenue is None:
+            revenue = self._build_revenue_stats(last_30)
+            cache.set('analytics:revenue:v1', revenue, 60 * 30)
+
         # --- Recent events ---
         recent_events = UsageEvent.objects.select_related('user')[:15]
 
@@ -176,6 +227,7 @@ class AnalyticsDashboardAdmin(admin.ModelAdmin):
             'total_favorites': total_favorites,
             'total_untappd': total_untappd,
             'total_redemptions': total_redemptions,
+            'revenue': revenue,
             'recent_events': recent_events,
             'top_users': top_users,
         }

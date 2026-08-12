@@ -503,6 +503,91 @@ class ShopifyService:
             'deposit': metafields.get('deposit') or '',
         }
 
+    def get_app_variant_sales(self, days: int = 30) -> Optional[dict]:
+        """
+        Sum app-shop sales: order lines on an App variant (option Editie=App).
+
+        The App variant is only purchasable through the PWA, so these lines
+        are exactly the app-shop's orders — no attribution guesswork needed.
+        Scans recent orders (bounded pages); returns None when the order
+        query fails, so callers can distinguish 'no sales' from 'no data'.
+        """
+        from datetime import datetime, timedelta, timezone as dt_timezone
+
+        since = (datetime.now(dt_timezone.utc) - timedelta(days=days)).strftime('%Y-%m-%d')
+        query = """
+        query appVariantSales($cursor: String, $q: String!) {
+            orders(first: 50, after: $cursor, query: $q) {
+                pageInfo { hasNextPage endCursor }
+                edges {
+                    node {
+                        name
+                        lineItems(first: 50) {
+                            edges {
+                                node {
+                                    quantity
+                                    discountedTotalSet { shopMoney { amount } }
+                                    variant { selectedOptions { name value } }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        """
+
+        units = 0
+        revenue = 0.0
+        order_names = set()
+        cursor = None
+        for _page in range(10):  # bounded: 500 most recent orders max
+            data = self._graphql_request(
+                query, {"cursor": cursor, "q": f"created_at:>={since}"}
+            )
+            if not data:
+                return None
+            conn = data.get('orders') or {}
+            for edge in conn.get('edges') or []:
+                node = edge['node']
+                for li_edge in (node.get('lineItems') or {}).get('edges') or []:
+                    li = li_edge['node']
+                    options = {
+                        o['name']: o['value']
+                        for o in (li.get('variant') or {}).get('selectedOptions') or []
+                    }
+                    if options.get('Editie') == 'App':
+                        units += li.get('quantity') or 0
+                        amount = ((li.get('discountedTotalSet') or {})
+                                  .get('shopMoney') or {}).get('amount')
+                        revenue += float(amount or 0)
+                        order_names.add(node.get('name'))
+            page_info = conn.get('pageInfo') or {}
+            if not page_info.get('hasNextPage'):
+                break
+            cursor = page_info.get('endCursor')
+
+        return {'units': units, 'revenue': round(revenue, 2), 'orders': len(order_names)}
+
+    def get_discount_code_usage(self, code: str) -> Optional[int]:
+        """Usage count of a discount code (0 = minted but never redeemed)."""
+        query = """
+        query discountUsage($code: String!) {
+            codeDiscountNodeByCode(code: $code) {
+                codeDiscount {
+                    ... on DiscountCodeBasic { asyncUsageCount }
+                }
+            }
+        }
+        """
+        data = self._graphql_request(query, {"code": code})
+        if not data:
+            return None
+        node = data.get('codeDiscountNodeByCode')
+        if not node:
+            return None
+        return (node.get('codeDiscount') or {}).get('asyncUsageCount') or 0
+
     def create_basic_discount(
         self,
         code: str,

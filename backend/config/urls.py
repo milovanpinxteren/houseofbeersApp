@@ -10,5 +10,6 @@ urlpatterns = [
     path('api/community/', include('community.urls')),
     path('api/events/', include('events.urls')),
     path('api/notifications/', include('notifications.urls')),
+    path('api/analytics/', include('analytics.urls')),
     path('reset-password/', password_reset_page, name='password_reset_page'),
 ]

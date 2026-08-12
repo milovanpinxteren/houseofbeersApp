@@ -8,6 +8,7 @@ import { t } from '../../../src/i18n';
 import { colors, spacing, borderRadius, fonts } from '../../../src/theme/colors';
 import { EmptyState, Screen, SkeletonCard } from '../../../src/components/ui';
 import { AppShopProduct, getAppShop } from '../../../src/api/recommendations';
+import { trackEvent } from '../../../src/api/analytics';
 import { AppShopDetailSheet } from '../../../src/components/AppShopSection';
 
 const SHOP_BASE_URL = 'https://houseofbeers.nl';
@@ -163,8 +164,10 @@ export default function AppShopScreen() {
     const items = [...perVariant.entries()]
       .map(([variantId, qty]) => `${variantId}:${qty}`)
       .join(',');
-    Linking.openURL(`${SHOP_BASE_URL}/cart/${items}`).catch((err) =>
-      console.log('[AppShop] Open cart error:', err)
+    trackEvent('app_shop_checkout', { items: totalQty, total: totalPrice.toFixed(2) });
+    // attributes[source] tags the Shopify order as app-originated
+    Linking.openURL(`${SHOP_BASE_URL}/cart/${items}?attributes[source]=app-shop`).catch(
+      (err) => console.log('[AppShop] Open cart error:', err)
     );
   }
 

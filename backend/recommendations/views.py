@@ -771,11 +771,19 @@ class AppShopView(APIView):
                 status=status.HTTP_502_BAD_GATEWAY
             )
 
+        from analytics.tracker import track
+        track('app_shop_view', user=request.user, products=len(products))
+
         return Response({
             'products': [
                 {
                     **product,
-                    'cart_url': f"{SHOP_BASE_URL}/cart/{product['variant_id']}:1",
+                    # attributes[source] tags the resulting Shopify order as
+                    # app-originated — visible in admin, usable for reporting
+                    'cart_url': (
+                        f"{SHOP_BASE_URL}/cart/{product['variant_id']}:1"
+                        f"?attributes[source]=app-shop"
+                    ),
                 }
                 for product in products
                 if product.get('variant_id')
@@ -969,7 +977,8 @@ class SixpackCheckoutView(APIView):
             return Response(self._response_payload(existing))
 
         cart_path = ','.join(f"{vid}:1" for vid in variant_ids)
-        cart_url = f"{SHOP_BASE_URL}/cart/{cart_path}"
+        # attributes[source] tags the Shopify order as sixpack-originated
+        cart_url = f"{SHOP_BASE_URL}/cart/{cart_path}?attributes[source]=app-sixpack"
 
         code = ''
         shopify_discount_id = ''
@@ -997,7 +1006,7 @@ class SixpackCheckoutView(APIView):
                     status=status.HTTP_502_BAD_GATEWAY
                 )
             shopify_discount_id = shopify_result.get('discount_id', '')
-            cart_url = f"{cart_url}?discount={code}"
+            cart_url = f"{cart_url}&discount={code}"
 
         checkout = SixpackCheckout.objects.create(
             user=user,

@@ -15,6 +15,7 @@ import {
 import { AuthProvider } from '../src/context/AuthContext';
 import { LanguageProvider } from '../src/context/LanguageContext';
 import { ToastProvider } from '../src/components/ui/Toast';
+import { ScreenTracker } from '../src/components/ScreenTracker';
 import { colors } from '../src/theme/colors';
 
 export default function RootLayout() {
@@ -40,6 +41,7 @@ export default function RootLayout() {
       <AuthProvider>
         <ToastProvider>
           <StatusBar style="light" />
+          <ScreenTracker />
           <Stack
             screenOptions={{
               headerStyle: { backgroundColor: colors.background },

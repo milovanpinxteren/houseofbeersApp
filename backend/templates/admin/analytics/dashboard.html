@@ -247,6 +247,36 @@
         </div>
     </div>
 
+    <!-- Revenue (last 30 days, cached 30 min) -->
+    <div class="section">
+        <h2>Revenue (Last 30 Days)</h2>
+        <div class="stats-grid" style="margin-bottom: 0;">
+            {% if revenue.app_shop %}
+            <div class="stat-card highlight">
+                <div class="number">&euro;{{ revenue.app_shop.revenue }}</div>
+                <div class="label">App Shop Revenue</div>
+            </div>
+            <div class="stat-card">
+                <div class="number">{{ revenue.app_shop.units }}</div>
+                <div class="label">App Shop Beers Sold ({{ revenue.app_shop.orders }} orders)</div>
+            </div>
+            {% else %}
+            <div class="stat-card warn">
+                <div class="number">n/a</div>
+                <div class="label">App Shop (Shopify lookup failed)</div>
+            </div>
+            {% endif %}
+            <div class="stat-card highlight">
+                <div class="number">&euro;{{ revenue.sixpack.revenue }}</div>
+                <div class="label">Sixpack Revenue{% if not revenue.sixpack.usage_known %} (partial){% endif %}</div>
+            </div>
+            <div class="stat-card">
+                <div class="number">{{ revenue.sixpack.redeemed }} / {{ revenue.sixpack.minted }}</div>
+                <div class="label">Sixpacks Bought / Minted</div>
+            </div>
+        </div>
+    </div>
+
     <!-- Daily activity chart -->
     <div class="section">
         <h2>Daily Activity (Last 30 Days)</h2>

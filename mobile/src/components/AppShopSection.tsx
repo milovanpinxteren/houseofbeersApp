@@ -14,6 +14,7 @@ import { t } from '../i18n';
 import { colors, spacing, borderRadius, fonts } from '../theme/colors';
 import { SectionHeader } from './ui';
 import { AppShopProduct } from '../api/recommendations';
+import { trackEvent } from '../api/analytics';
 
 // The Ontdek rail is a teaser: the full page shows everything.
 const RAIL_MAX_PRODUCTS = 6;
@@ -106,6 +107,7 @@ export function AppShopDetailSheet({
   onClose: () => void;
 }) {
   function order(selected: AppShopProduct) {
+    trackEvent('app_shop_checkout', { items: 1, total: selected.price, single: true });
     Linking.openURL(selected.cart_url).catch((err) =>
       console.log('[AppShop] Open cart error:', err)
     );
