@@ -11,9 +11,8 @@ from datetime import date
 from django.utils import timezone
 from rest_framework import serializers
 
-# Legal drinking age in NL. Deliberately a constant rather than an
-# admin-tunable setting: BirthdayRewardConfig.minimum_age tunes who gets a
-# *gift*, it must not be able to lower who is allowed to *register*.
+# Legal drinking age in NL. Deliberately a constant, not an admin-tunable
+# setting: nothing in the admin should be able to lower who may register.
 MINIMUM_AGE = 18
 
 # Plausibility ceiling.

@@ -499,7 +499,7 @@ class NotificationAdmin(admin.ModelAdmin):
 class BirthdayRewardConfigAdmin(admin.ModelAdmin):
     """Single configuration row for the birthday reward."""
     list_display = ['__str__', 'is_active', 'discount_type', 'discount_value',
-                    'validity_days', 'lead_time_days', 'send_hour', 'updated_at']
+                    'validity_days', 'send_hour', 'updated_at']
     readonly_fields = ['updated_at']
 
     fieldsets = (
@@ -508,11 +508,9 @@ class BirthdayRewardConfigAdmin(admin.ModelAdmin):
             'description': 'Discount value is euros for "Fixed amount off", '
                            'or a percentage (e.g. 10 for 10%) for "Percentage off".'
         }),
-        ('Eligibility & timing', {
-            'fields': ('lead_time_days', 'minimum_age', 'send_hour'),
-            'description': 'Lead time is the anti-abuse window: the birthdate must have '
-                           'been set at least this many days before the birthday. '
-                           'Send hour is Europe/Amsterdam local time.'
+        ('Timing', {
+            'fields': ('send_hour',),
+            'description': 'Send hour is Europe/Amsterdam local time.'
         }),
         ('Meta', {
             'fields': ('updated_at',),

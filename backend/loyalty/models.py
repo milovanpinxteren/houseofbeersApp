@@ -481,16 +481,6 @@ class BirthdayRewardConfig(models.Model):
         validators=[MinValueValidator(1)],
         help_text="How long the discount code stays valid"
     )
-    lead_time_days = models.PositiveIntegerField(
-        default=30,
-        help_text="Anti-abuse: the birthdate must have been set at least this "
-                  "many days before the birthday for a gift to be issued"
-    )
-    minimum_age = models.PositiveIntegerField(
-        default=18,
-        help_text="Minimum age to receive a gift. Note: registration is always "
-                  "blocked below 18 regardless of this value."
-    )
     send_hour = models.PositiveIntegerField(
         default=9,
         validators=[MinValueValidator(0), MaxValueValidator(23)],

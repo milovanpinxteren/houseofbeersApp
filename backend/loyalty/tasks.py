@@ -116,17 +116,6 @@ def _generate_birthday_code() -> str:
     return 'BDAY-' + ''.join(secrets.choice(chars) for _ in range(8))
 
 
-def _celebration_date(birthdate: date, year: int) -> date:
-    """
-    The date this year's birthday is celebrated on.
-    29 February is celebrated on 28 February in non-leap years.
-    """
-    try:
-        return date(year, birthdate.month, birthdate.day)
-    except ValueError:
-        return date(year, 2, 28)
-
-
 def _celebration_keys(day: date) -> set:
     """
     The (month, day) birthdate values that are celebrated on `day`.
@@ -147,13 +136,13 @@ def _offer_label(config) -> str:
     return f"€{text} off"
 
 
-def _issue_birthday_gift(user, year: int, config, enforce_lead_time: bool = True) -> bool:
+def _issue_birthday_gift(user, year: int, config) -> bool:
     """
     Issue one birthday gift. Returns True if a gift was issued.
     Raises on Shopify failure so the caller can log it per-user.
 
-    enforce_lead_time=False lets the admin "issue now" action bypass the
-    anti-abuse rule; the scheduled scan always enforces it.
+    No lead-time rule: the birthdate is set-once (see User.birthdate_locked),
+    which already prevents moving your birthday around to farm gifts.
     """
     from loyalty.models import BirthdayReward
     from users.services import ShopifyService
@@ -161,21 +150,6 @@ def _issue_birthday_gift(user, year: int, config, enforce_lead_time: bool = True
     if BirthdayReward.objects.filter(user=user, year=year).exists():
         logger.debug(f"Birthday gift already issued to {user.email} for {year}")
         return False
-
-    celebration = _celebration_date(user.birthdate, year)
-
-    # Anti-abuse lead time: setting your birthday to next week must not
-    # produce a gift next week.
-    if enforce_lead_time and user.birthdate_set_at:
-        set_on = timezone.localtime(user.birthdate_set_at, BIRTHDAY_TZ).date()
-        cutoff = celebration - timedelta(days=config.lead_time_days)
-        if set_on > cutoff:
-            logger.info(
-                f"Skipping birthday gift for {user.email} ({year}): birthdate set "
-                f"{set_on}, which is inside the {config.lead_time_days}-day lead "
-                f"time before {celebration}. First gift arrives next year."
-            )
-            return False
 
     code = _generate_birthday_code()
     expires_at = timezone.now() + timedelta(days=config.validity_days)

@@ -68,15 +68,14 @@ class UserAdmin(BaseUserAdmin):
         # usual reason for silence, and it means no reachable device.
         self.message_user(request, ' | '.join(results))
 
-    @admin.action(description='Issue birthday gift now (ignores date and timing rules)')
+    @admin.action(description='Issue birthday gift now (ignores date and send hour)')
     def issue_birthday_gift_now(self, request, queryset):
         """
         Force this year's birthday gift, for testing and for goodwill.
 
-        Skips the send-hour window and the lead-time rule so the flow can be
-        exercised without waiting a month, and without loosening the
-        anti-abuse config on a live site. The one-gift-per-year constraint
-        still applies - this cannot hand out a second gift.
+        Skips the send-hour window so the flow can be exercised on any day.
+        The one-gift-per-year constraint still applies - this cannot hand
+        out a second gift.
         """
         from loyalty.models import BirthdayReward, BirthdayRewardConfig
         from loyalty.tasks import _issue_birthday_gift
@@ -93,7 +92,7 @@ class UserAdmin(BaseUserAdmin):
                 skipped.append(f"{user.email}: already received one in {year}")
                 continue
             try:
-                if _issue_birthday_gift(user, year, config, enforce_lead_time=False):
+                if _issue_birthday_gift(user, year, config):
                     issued += 1
                 else:
                     skipped.append(f"{user.email}: not issued")

@@ -114,7 +114,8 @@ class BirthdateEndpointTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['birthdate'], birthdate.isoformat())
-        self.assertFalse(response.data['birthdate_locked'])
+        # Set-once: the very act of setting it locks it.
+        self.assertTrue(response.data['birthdate_locked'])
 
         self.user.refresh_from_db()
         self.assertEqual(self.user.birthdate, birthdate)
@@ -147,37 +148,27 @@ class BirthdateEndpointTests(APITestCase):
         response = self.client.patch(self.url, {'birthdate': 'not-a-date'}, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_editable_while_unlocked(self):
+    def test_can_only_be_set_once(self):
+        """Set-once: changes go through us (Django admin), not the app."""
         first, second = years_ago(30), years_ago(31)
 
         self.client.patch(self.url, {'birthdate': first.isoformat()}, format='json')
         response = self.client.patch(self.url, {'birthdate': second.isoformat()}, format='json')
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.user.refresh_from_db()
-        self.assertEqual(self.user.birthdate, second)
+        self.assertEqual(self.user.birthdate, first)
 
-    def test_locked_once_a_gift_has_been_issued(self):
-        from loyalty.models import BirthdayReward
-
-        original = years_ago(30)
-        self.user.birthdate = original
-        self.user.birthdate_set_at = timezone.now()
-        self.user.save()
-
-        BirthdayReward.objects.create(
-            user=self.user,
-            year=timezone.localdate().year,
-            discount_code='BDAY-TESTCODE',
-        )
+    def test_locked_when_birthdate_arrived_via_registration(self):
+        """A birthdate supplied at registration counts as the one set."""
+        self.user.birthdate = years_ago(30)
+        self.user.save(update_fields=['birthdate'])
 
         response = self.client.patch(
             self.url, {'birthdate': years_ago(40).isoformat()}, format='json'
         )
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
-        self.user.refresh_from_db()
-        self.assertEqual(self.user.birthdate, original)
 
 
 class UserSerializerBirthdateTests(APITestCase):
@@ -198,17 +189,15 @@ class UserSerializerBirthdateTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['birthdate'], self.user.birthdate.isoformat())
-        self.assertFalse(response.data['birthdate_locked'])
+        # Set-once: having a birthdate at all means it is locked.
+        self.assertTrue(response.data['birthdate_locked'])
 
-    def test_me_reports_locked_after_a_gift(self):
-        from loyalty.models import BirthdayReward
-
-        BirthdayReward.objects.create(
-            user=self.user, year=2026, discount_code='BDAY-TESTCODE'
-        )
+    def test_me_reports_unlocked_without_a_birthdate(self):
+        self.user.birthdate = None
+        self.user.save(update_fields=['birthdate'])
 
         response = self.client.get(self.url)
-        self.assertTrue(response.data['birthdate_locked'])
+        self.assertFalse(response.data['birthdate_locked'])
 
     def test_me_patch_cannot_bypass_the_lock(self):
         """birthdate is read-only on /users/me/ so the lock cannot be sidestepped."""
@@ -506,17 +495,12 @@ class AdminActionTests(APITestCase):
         )
 
     @patch('loyalty.tasks._issue_birthday_gift', return_value=True)
-    def test_force_gift_bypasses_timing_rules(self, mock_issue):
-        """The whole point: no waiting for the send hour or the lead time."""
-        self.user.birthdate_set_at = timezone.now()  # would fail the lead-time rule
-        self.user.save(update_fields=['birthdate_set_at'])
+    def test_force_gift_issues_on_any_day(self, mock_issue):
+        """The whole point: no waiting for the birthday or the send hour."""
         self.admin.issue_birthday_gift_now(
             self.request, User.objects.filter(pk=self.user.pk)
         )
         mock_issue.assert_called_once()
-        # The real function enforces the lead time itself, so the action must
-        # explicitly opt out — a plain call would silently skip the user.
-        self.assertFalse(mock_issue.call_args.kwargs['enforce_lead_time'])
         self.assertIn('Issued 1', self.messages[0])
 
     @patch('loyalty.tasks._issue_birthday_gift', return_value=True)

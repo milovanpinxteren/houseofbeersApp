@@ -100,8 +100,8 @@ class UserBirthdateView(APIView):
     """
     Set the current user's birthdate.
 
-    Freely editable until the first birthday gift is issued, then locked
-    (an admin can still correct it in Django admin).
+    Can be set exactly once; changes go through Django admin (users contact
+    us). Set-once doubles as the anti-abuse rule for birthday gifts.
     """
     permission_classes = [IsAuthenticated]
 
@@ -110,8 +110,8 @@ class UserBirthdateView(APIView):
 
         if user.birthdate_locked:
             return Response(
-                {'error': 'Your birthdate is locked because a birthday gift has already '
-                          'been issued. Contact us if it needs correcting.'},
+                {'error': 'Your birthdate can only be set once. '
+                          'Contact us if it needs correcting.'},
                 status=status.HTTP_403_FORBIDDEN
             )
 

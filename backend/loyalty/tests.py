@@ -29,7 +29,6 @@ class BirthdayScanTestCase(TestCase):
         self.config.discount_type = 'fixed_amount'
         self.config.discount_value = Decimal('5.00')
         self.config.validity_days = 30
-        self.config.lead_time_days = 30
         self.config.send_hour = 9
         self.config.save()
 
@@ -136,47 +135,21 @@ class BirthdayGiftIssuingTests(BirthdayScanTestCase):
         mock_shopify.assert_not_called()
 
 
-class BirthdayLeadTimeTests(BirthdayScanTestCase):
-    """Anti-abuse: set your birthday to next week, get nothing until next year."""
+class BirthdayImmediateTests(BirthdayScanTestCase):
+    """
+    No lead time: a birthdate set today still gets today's gift. Set-once
+    (User.birthdate_locked) is what prevents gift farming instead.
+    """
 
-    NOW = datetime(2026, 7, 29, 9, 30, tzinfo=AMS)
-    BIRTHDAY = date(1990, 7, 29)
-
-    def test_no_gift_when_birthdate_set_inside_the_lead_time(self):
+    def test_gift_issued_when_birthdate_was_set_on_the_birthday_itself(self):
+        now = datetime(2026, 7, 29, 9, 30, tzinfo=AMS)
         user = self.make_user(
-            'gamer@example.com',
-            birthdate=self.BIRTHDAY,
-            set_at=datetime(2026, 7, 24, 12, 0, tzinfo=AMS),  # 5 days before
+            'lastminute@example.com',
+            birthdate=date(1990, 7, 29),
+            set_at=datetime(2026, 7, 29, 8, 0, tzinfo=AMS),  # 90 minutes ago
         )
 
-        result, mock_shopify, mock_notify = self.run_scan(self.NOW)
-
-        self.assertEqual(result['issued'], 0)
-        self.assertFalse(BirthdayReward.objects.filter(user=user).exists())
-        mock_shopify.assert_not_called()
-        mock_notify.assert_not_called()
-
-    def test_gift_when_birthdate_set_before_the_lead_time(self):
-        user = self.make_user(
-            'honest@example.com',
-            birthdate=self.BIRTHDAY,
-            set_at=datetime(2026, 6, 19, 12, 0, tzinfo=AMS),  # 40 days before
-        )
-
-        result, mock_shopify, mock_notify = self.run_scan(self.NOW)
-
-        self.assertEqual(result['issued'], 1)
-        self.assertTrue(BirthdayReward.objects.filter(user=user).exists())
-
-    def test_gift_when_birthdate_set_exactly_at_the_lead_time(self):
-        """'At least 30 days before' includes exactly 30 days."""
-        user = self.make_user(
-            'edge@example.com',
-            birthdate=self.BIRTHDAY,
-            set_at=datetime(2026, 6, 29, 12, 0, tzinfo=AMS),  # exactly 30 days
-        )
-
-        result, _, _ = self.run_scan(self.NOW)
+        result, _, _ = self.run_scan(now)
 
         self.assertEqual(result['issued'], 1)
         self.assertTrue(BirthdayReward.objects.filter(user=user).exists())
@@ -451,8 +424,6 @@ class BirthdayRewardConfigTests(TestCase):
         self.assertEqual(config.pk, 1)
         self.assertTrue(config.is_active)
         self.assertEqual(config.validity_days, 30)
-        self.assertEqual(config.lead_time_days, 30)
-        self.assertEqual(config.minimum_age, 18)
         self.assertEqual(config.send_hour, 9)
 
     def test_config_is_a_singleton(self):

@@ -16,8 +16,6 @@ import { updateBirthdate } from '../api/auth';
 import { usePushSubscription } from '../hooks/usePushSubscription';
 import { Button, useToast } from './ui';
 
-/** Matches the backend's anti-abuse window; the backend stays the authority. */
-const LEAD_TIME_DAYS = 30;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 function isRealDate(iso: string): boolean {
@@ -30,19 +28,6 @@ function isRealDate(iso: string): boolean {
     date.getDate() === day &&
     date.getTime() <= Date.now()
   );
-}
-
-/** Hint only — used to warn honestly that the first gift lands next year. */
-function daysUntilNextBirthday(iso: string): number | null {
-  if (!ISO_DATE.test(iso)) return null;
-  const [, month, day] = iso.split('-').map(Number);
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  let next = new Date(today.getFullYear(), month - 1, day);
-  if (next.getTime() < today.getTime()) {
-    next = new Date(today.getFullYear() + 1, month - 1, day);
-  }
-  return Math.round((next.getTime() - today.getTime()) / 86400000);
 }
 
 function formatDate(iso: string): string {
@@ -170,7 +155,6 @@ export default function BirthdaySettings() {
   const [value, setValue] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [leadTimeNotice, setLeadTimeNotice] = useState<string | null>(null);
   const [showPushPrompt, setShowPushPrompt] = useState(false);
 
   const birthdate = user?.birthdate ?? null;
@@ -182,7 +166,7 @@ export default function BirthdaySettings() {
   }
 
   function startEditing() {
-    setValue(birthdate || '');
+    setValue('');
     setError(null);
     setIsEditing(true);
   }
@@ -199,10 +183,6 @@ export default function BirthdaySettings() {
     try {
       await updateBirthdate(trimmed);
 
-      const days = daysUntilNextBirthday(trimmed);
-      setLeadTimeNotice(
-        days !== null && days < LEAD_TIME_DAYS ? t('birthday.leadTimeNotice') : null
-      );
       showToast(t('birthday.saved'), 'success');
       setIsEditing(false);
       setShowPushPrompt(canAskForPush);
@@ -285,20 +265,15 @@ export default function BirthdaySettings() {
             </View>
           ) : (
             <View style={styles.idleBlock}>
-              {!birthdate && <Text style={styles.bodyText}>{t('birthday.prompt')}</Text>}
+              <Text style={styles.bodyText}>{t('birthday.prompt')}</Text>
               <Button
-                label={birthdate ? t('birthday.edit') : t('birthday.set')}
-                variant={birthdate ? 'secondary' : 'primary'}
+                label={t('birthday.set')}
                 size="sm"
                 icon="calendar-outline"
                 onPress={startEditing}
                 style={styles.startButton}
               />
             </View>
-          )}
-
-          {leadTimeNotice && !isEditing && (
-            <Text style={styles.hintText}>{leadTimeNotice}</Text>
           )}
 
           {/* The high-value moment to ask: a gift is now on its way. */}

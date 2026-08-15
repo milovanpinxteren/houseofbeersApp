@@ -91,12 +91,8 @@ class User(AbstractUser):
     @property
     def birthdate_locked(self) -> bool:
         """
-        True once a birthday gift has been issued, after which the birthdate
-        can no longer be changed in-app (admin can still correct it).
+        The birthdate can be set once; after that it is locked in-app
+        (admin can still correct it). Set-once is also the anti-abuse rule:
+        nobody can move their birthday around to farm gifts.
         """
-        if not self.pk:
-            return False
-        # Imported locally: loyalty imports users, so a module-level import
-        # would be circular.
-        from loyalty.models import BirthdayReward
-        return BirthdayReward.objects.filter(user=self).exists()
+        return self.birthdate is not None
