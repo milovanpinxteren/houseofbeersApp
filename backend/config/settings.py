@@ -119,6 +119,31 @@ STORAGES = {
     },
 }
 
+# Logging: without an explicit config, app-level logger.info() never reaches
+# the console (Python's last-resort handler only emits WARNING+), which makes
+# production issues like "was the password reset mail sent?" undiagnosable
+# from Dokku logs. Route everything to stdout at INFO.
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'simple': {
+            'format': '{levelname} {asctime} {name} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'simple',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
+    },
+}
+
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 

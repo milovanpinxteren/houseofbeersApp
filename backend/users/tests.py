@@ -302,6 +302,102 @@ class LastActiveTests(APITestCase):
         self.assertIsNotNone(self.user.last_active_at)
 
 
+class EmailCaseInsensitivityTests(APITestCase):
+    """
+    Phone keyboards auto-capitalize the email field, which used to strand
+    users: login and password reset matched case-sensitively. Emails are now
+    stored lowercase and looked up case-insensitively — but exact matches win,
+    because legacy case-duplicate account pairs exist and both must stay
+    reachable.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='ruud@example.com',
+            email='ruud@example.com',
+            password='SuperSecret123!',
+        )
+
+    def test_login_ignores_email_case(self):
+        response = self.client.post(
+            reverse('login'),
+            {'email': 'Ruud@Example.com', 'password': 'SuperSecret123!'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_password_reset_ignores_email_case(self):
+        from django.core import mail
+
+        response = self.client.post(
+            reverse('password_reset'), {'email': 'Ruud@example.com'}, format='json'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_registration_stores_email_lowercase(self):
+        with patch('users.views.ShopifyService') as mock_shopify:
+            mock_shopify.return_value.link_customer_to_user.return_value = False
+            response = self.client.post(
+                reverse('register'),
+                {
+                    'email': 'New.User@Example.com',
+                    'password': 'SuperSecret123!',
+                    'password_confirm': 'SuperSecret123!',
+                },
+                format='json',
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        user = User.objects.get(email='new.user@example.com')
+        self.assertEqual(user.username, 'new.user@example.com')
+
+    def test_registration_rejects_case_variant_of_existing_email(self):
+        """No new Foo@x.com / foo@x.com duplicate pairs."""
+        response = self.client.post(
+            reverse('register'),
+            {
+                'email': 'RUUD@example.com',
+                'password': 'SuperSecret123!',
+                'password_confirm': 'SuperSecret123!',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('email', response.data)
+        self.assertEqual(User.objects.count(), 1)
+
+    def test_exact_match_wins_over_case_insensitive(self):
+        """Both halves of a legacy duplicate pair stay reachable."""
+        twin = User.objects.create_user(
+            username='Ruud@example.com',
+            email='Ruud@example.com',
+            password='OtherSecret123!',
+        )
+
+        self.assertEqual(
+            User.objects.get_by_natural_key('Ruud@example.com').pk, twin.pk
+        )
+        self.assertEqual(
+            User.objects.get_by_natural_key('ruud@example.com').pk, self.user.pk
+        )
+
+    def test_ambiguous_case_variant_of_duplicate_pair_does_not_crash(self):
+        """A third casing matches neither exactly and two case-insensitively;
+        it must raise DoesNotExist (auth failure), not MultipleObjectsReturned
+        (a 500)."""
+        User.objects.create_user(
+            username='Ruud@example.com',
+            email='Ruud@example.com',
+            password='OtherSecret123!',
+        )
+
+        with self.assertRaises(User.DoesNotExist):
+            User.objects.get_by_natural_key('RUUD@example.com')
+
+
 class ShopifyEndsAtTests(APITestCase):
     """create_discount_code / create_basic_discount accept an optional expiry."""
 

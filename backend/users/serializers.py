@@ -30,6 +30,14 @@ class RegisterSerializer(serializers.ModelSerializer):
         model = User
         fields = ['email', 'password', 'password_confirm', 'first_name', 'last_name', 'birthdate']
 
+    def validate_email(self, value):
+        # Stored lowercase so login and password reset are case-insensitive
+        # regardless of what the phone keyboard capitalized.
+        value = value.lower()
+        if User.objects.filter(email__iexact=value).exists():
+            raise serializers.ValidationError('A user with this email already exists.')
+        return value
+
     def validate(self, attrs):
         if attrs['password'] != attrs['password_confirm']:
             raise serializers.ValidationError({'password_confirm': 'Passwords do not match.'})

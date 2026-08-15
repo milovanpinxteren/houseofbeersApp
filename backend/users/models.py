@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.models import UserManager as DjangoUserManager
 from django.db import models
 from django.utils import timezone
 
@@ -9,6 +10,26 @@ from django.utils import timezone
 # audience segmentation ("nobody who has visited in 90 days"), where
 # quarter-hour precision is far more than enough.
 LAST_ACTIVE_THROTTLE = timedelta(minutes=15)
+
+
+class UserManager(DjangoUserManager):
+    def get_by_natural_key(self, username):
+        """
+        Case-insensitive email lookup, exact match first.
+
+        Exact-first matters: a handful of legacy accounts exist in
+        case-duplicate pairs (e.g. Foo@x.com and foo@x.com are different
+        users), and both must stay reachable with the casing they registered.
+        """
+        try:
+            return self.get(**{self.model.USERNAME_FIELD: username})
+        except self.model.DoesNotExist:
+            matches = self.filter(
+                **{f"{self.model.USERNAME_FIELD}__iexact": username}
+            )
+            if len(matches) == 1:
+                return matches[0]
+            raise
 
 
 class User(AbstractUser):
@@ -38,6 +59,8 @@ class User(AbstractUser):
         db_index=True,
         help_text="Last recorded activity. Updated from analytics.tracker.track()."
     )
+
+    objects = UserManager()
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['username']

@@ -39,7 +39,7 @@ class EmailTokenObtainPairView(TokenObtainPairView):
             from analytics.tracker import track
             email = request.data.get('email', '')
             try:
-                user = User.objects.get(email=email)
+                user = User.objects.get_by_natural_key(email)
                 track('login', user=user)
             except User.DoesNotExist:
                 pass
@@ -158,8 +158,10 @@ class PasswordResetRequestView(APIView):
         email = serializer.validated_data['email']
         
         try:
-            user = User.objects.get(email=email)
-            
+            # Case-insensitive (exact match first, see UserManager) so a
+            # capitalized signup still gets their reset mail.
+            user = User.objects.get_by_natural_key(email)
+
             # Generate token
             token = default_token_generator.make_token(user)
             uid = urlsafe_base64_encode(force_bytes(user.pk))
