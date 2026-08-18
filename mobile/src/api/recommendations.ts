@@ -324,6 +324,10 @@ export interface AppShopProduct {
   tags: string[];
   created_at: string;
   price: string;
+  // Sale variant price: the (lower) WhatsApp deal price, shown for comparison
+  sale_price: string | null;
+  // false = archived ("gemist"): app window closed by a newer sale — visible, not orderable
+  buyable: boolean;
   variant_id: string;
   inventory: number;
   untappd_rating: number | null;
@@ -334,11 +338,17 @@ export interface AppShopProduct {
   country: string;
   volume: string;
   deposit: string;
-  cart_url: string;
+  cart_url: string | null;
 }
 
 export async function getAppShop(): Promise<{ products: AppShopProduct[] }> {
   return apiFetch<{ products: AppShopProduct[] }>('/recommendations/app-shop/');
+}
+
+// Missed ("gemist") = explicit buyable: false only — a response from an older
+// backend without the field must keep rendering as buyable.
+export function isAppShopMissed(product: AppShopProduct): boolean {
+  return product.buyable === false;
 }
 
 // Lightweight prefetch of the style filter chips — no beer is picked.

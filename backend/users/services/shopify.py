@@ -366,9 +366,15 @@ class ShopifyService:
         "Editie" option with a Sale and an App variant; ONLY the App variant
         (secondary price) is for the app — never use variants[0] here.
 
-        Returns a list of dicts with the App variant's price/variant_id and
-        the Untappd metafields for a rich card UI. Products whose App variant
-        is out of stock are excluded.
+        Returns a list of dicts with the App variant's price/variant_id, the
+        Sale variant's price (sale_price, the WhatsApp deal price shown for
+        comparison) and the Untappd metafields for a rich card UI.
+
+        Buyability: products additionally tagged `app-archived` had their app
+        window closed by a newer sale — they stay in the list with
+        buyable=False as the "gemist" FOMO wall. Non-archived products whose
+        App variant is out of stock are excluded (sold out mid-window is a
+        normal disappearance, not a missed deal). Buyable products sort first.
         """
         query = """
         query appOnlyProducts($cursor: String) {
@@ -422,6 +428,8 @@ class ShopifyService:
                 break
             cursor = page_info.get('endCursor')
 
+        # Buyable batch first, archived (gemist) wall after
+        products.sort(key=lambda p: (not p['buyable'], p.get('title') or ''))
         return products
 
     @staticmethod
@@ -429,18 +437,28 @@ class ShopifyService:
         """Parse one GraphQL product node into an app-shop dict (or None)."""
         import json as _json
 
-        # The App variant carries the secondary price and the leftover stock
+        # The App variant carries the secondary price and the leftover stock;
+        # the Sale variant's price is the WhatsApp deal shown for comparison.
         app_variant = None
+        sale_variant = None
         for v_edge in (node.get('variants') or {}).get('edges') or []:
             v = v_edge['node']
             options = {o['name']: o['value'] for o in v.get('selectedOptions') or []}
             if options.get('Editie') == 'App':
                 app_variant = v
-                break
+            elif options.get('Editie') == 'Sale':
+                sale_variant = v
         if not app_variant:
             return None
-        if (app_variant.get('inventoryQuantity') or 0) <= 0:
+
+        # `app-archived` = app window closed by a newer sale: keep the product
+        # visible as a missed deal (not buyable). Without the tag, zero
+        # inventory just means sold out — drop it as before.
+        archived = 'app-archived' in (node.get('tags') or [])
+        inventory = app_variant.get('inventoryQuantity') or 0
+        if inventory <= 0 and not archived:
             return None
+        buyable = not archived and inventory > 0
 
         metafields = {}
         for m_edge in (node.get('metafields') or {}).get('edges') or []:
@@ -491,8 +509,10 @@ class ShopifyService:
             'tags': node.get('tags') or [],
             'created_at': node.get('createdAt'),
             'price': app_variant.get('price'),
+            'sale_price': sale_variant.get('price') if sale_variant else None,
+            'buyable': buyable,
             'variant_id': str(app_variant.get('legacyResourceId') or ''),
-            'inventory': app_variant.get('inventoryQuantity') or 0,
+            'inventory': inventory,
             'untappd_rating': rating,
             'untappd_checkins': checkins,
             'untappd_url': untappd_url,

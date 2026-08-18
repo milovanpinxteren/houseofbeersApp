@@ -664,7 +664,7 @@ class NewArrivalsView(APIView):
 # App-exclusive shop — leftover WhatsApp-sale stock tagged `app-only` by the
 # hob pipeline, sold at the secondary app price. Products are UNLISTED in the
 # webshop; the App variant (never variants[0]) carries price and stock.
-APP_SHOP_CACHE_KEY = 'recommendations:app_only_products:v1'
+APP_SHOP_CACHE_KEY = 'recommendations:app_only_products:v2'
 APP_SHOP_CACHE_TTL = 60 * 15  # 15 min — bounds how long sold-out items stay visible
 
 # Local-dev fixtures: run the backend with APP_SHOP_DEMO=1 (DEBUG only) to see
@@ -677,7 +677,8 @@ _APP_SHOP_DEMO_PRODUCTS = [
                        'Een blend van jonge en oude lambik, spontaan gegist. Droog, complex en levendig.',
         'image_url': 'https://cdn.shopify.com/s/files/1/0807/5624/4818/files/674a70651e3c622d1171eb9fe37dc45a.png?v=1706722294',
         'tags': ['app-only'], 'created_at': '2026-08-01T10:00:00Z',
-        'price': '9.95', 'variant_id': '900000000001', 'inventory': 4,
+        'price': '9.95', 'sale_price': '8.50', 'buyable': True,
+        'variant_id': '900000000001', 'inventory': 4,
         'untappd_rating': 4.42, 'untappd_checkins': 18234,
         'untappd_url': None, 'style': 'Lambiek/Geuze', 'abv': '6.0',
         'country': 'België', 'volume': '75 CL', 'deposit': '0.10',
@@ -689,7 +690,8 @@ _APP_SHOP_DEMO_PRODUCTS = [
         'description': 'Demo-product zonder afbeelding, om de placeholder-weergave te zien.',
         'image_url': '',
         'tags': ['app-only'], 'created_at': '2026-08-05T10:00:00Z',
-        'price': '7.50', 'variant_id': '900000000002', 'inventory': 2,
+        'price': '7.50', 'sale_price': '6.00', 'buyable': True,
+        'variant_id': '900000000002', 'inventory': 2,
         'untappd_rating': 3.98, 'untappd_checkins': 1543,
         'untappd_url': None, 'style': 'Wild Ale', 'abv': '5.5',
         'country': 'Nederland', 'volume': '37.5 CL', 'deposit': '0.10',
@@ -703,7 +705,8 @@ _APP_SHOP_DEMO_PRODUCTS = [
                        'fruitig en scherp zuur.',
         'image_url': '',
         'tags': ['app-only'], 'created_at': '2026-08-08T09:00:00Z',
-        'price': '24.95', 'variant_id': '900000000003', 'inventory': 1,
+        'price': '24.95', 'sale_price': '21.00', 'buyable': True,
+        'variant_id': '900000000003', 'inventory': 1,
         'untappd_rating': 4.61, 'untappd_checkins': 45120,
         'untappd_url': None, 'style': 'Lambiek/Fruit', 'abv': '5.0',
         'country': 'België', 'volume': '75 CL', 'deposit': '0.10',
@@ -716,7 +719,8 @@ _APP_SHOP_DEMO_PRODUCTS = [
                        'met tonen van bourbon en karamel.',
         'image_url': '',
         'tags': ['app-only'], 'created_at': '2026-08-08T09:00:00Z',
-        'price': '11.50', 'variant_id': '900000000004', 'inventory': 6,
+        'price': '11.50', 'sale_price': '9.75', 'buyable': True,
+        'variant_id': '900000000004', 'inventory': 6,
         'untappd_rating': 4.12, 'untappd_checkins': 3891,
         'untappd_url': None, 'style': 'Barleywine', 'abv': '12.0',
         'country': 'Nederland', 'volume': '33 CL', 'deposit': '0.10',
@@ -729,11 +733,42 @@ _APP_SHOP_DEMO_PRODUCTS = [
                        'hoppig en droog.',
         'image_url': '',
         'tags': ['app-only'], 'created_at': '2026-08-10T09:00:00Z',
-        'price': '4.95', 'variant_id': '900000000005', 'inventory': 12,
+        'price': '4.95', 'sale_price': '3.95', 'buyable': True,
+        'variant_id': '900000000005', 'inventory': 12,
         'untappd_rating': 3.89, 'untappd_checkins': 25644,
         'untappd_url': None, 'style': 'Belgian Blonde', 'abv': '5.8',
         'country': 'België', 'volume': '33 CL', 'deposit': '0.10',
         'cart_url': 'https://houseofbeers.nl/',
+    },
+    # Archived (gemist) demo items: app window closed by a newer sale —
+    # visible with both prices, not buyable.
+    {
+        'id': '6', 'title': 'De Moersleutel Grindset [DEMO]',
+        'shopify_title': 'Vorige Sale - C - De Moersleutel Grindset', 'handle': 'demo-6',
+        'description': 'Demo van een gemist bier: de app-ronde is voorbij, '
+                       'dus alleen nog te bekijken. Imperial stout met hazelnoot.',
+        'image_url': '',
+        'tags': ['app-only', 'app-archived'], 'created_at': '2026-07-20T09:00:00Z',
+        'price': '13.50', 'sale_price': '11.00', 'buyable': False,
+        'variant_id': '900000000006', 'inventory': 0,
+        'untappd_rating': 4.28, 'untappd_checkins': 6210,
+        'untappd_url': None, 'style': 'Stout - Imperial', 'abv': '11.0',
+        'country': 'Nederland', 'volume': '33 CL', 'deposit': '0.15',
+        'cart_url': None,
+    },
+    {
+        'id': '7', 'title': 'Tilquin Oude Quetsche [DEMO]',
+        'shopify_title': 'Vorige Sale - D - Tilquin Oude Quetsche', 'handle': 'demo-7',
+        'description': 'Tweede gemist demo-bier. Lambik met pruimen, '
+                       'zacht zuur en fruitig.',
+        'image_url': '',
+        'tags': ['app-only', 'app-archived'], 'created_at': '2026-07-20T09:00:00Z',
+        'price': '16.95', 'sale_price': '14.00', 'buyable': False,
+        'variant_id': '900000000007', 'inventory': 0,
+        'untappd_rating': 4.35, 'untappd_checkins': 12890,
+        'untappd_url': None, 'style': 'Lambiek/Fruit', 'abv': '6.4',
+        'country': 'België', 'volume': '75 CL', 'deposit': '0.10',
+        'cart_url': None,
     },
 ]
 
@@ -779,11 +814,13 @@ class AppShopView(APIView):
                 {
                     **product,
                     # attributes[source] tags the resulting Shopify order as
-                    # app-originated — visible in admin, usable for reporting
+                    # app-originated — visible in admin, usable for reporting.
+                    # Archived (gemist) items get no cart_url: their App
+                    # variant is zeroed, the deal is over.
                     'cart_url': (
                         f"{SHOP_BASE_URL}/cart/{product['variant_id']}:1"
                         f"?attributes[source]=app-shop"
-                    ),
+                    ) if product.get('buyable') else None,
                 }
                 for product in products
                 if product.get('variant_id')

@@ -135,6 +135,12 @@ export default {
     appShopCheckout: 'Afrekenen ({{count}}) · €{{total}}',
     appShopQtyPlus: 'Eén meer',
     appShopQtyMinus: 'Eén minder',
+    appShopMissed: 'Sale voorbij',
+    appShopWaPrice: 'WhatsApp-prijs',
+    appShopAppPrice: 'App-prijs',
+    appShopMissedInfo:
+      'Deze ronde is voorbij — dit bier is niet meer via de app te bestellen. '
+      + 'Na elke WhatsApp-sale verschijnen de restjes hier voor korte tijd. Op = op.',
     appShopEmptyTitle: 'Alles is uitverkocht',
     appShopEmptyMessage: 'Op dit moment zijn er geen app-exclusieve bieren. Kom later terug!',
     untappdTitle: 'Untappd',

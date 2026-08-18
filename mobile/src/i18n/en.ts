@@ -146,6 +146,13 @@ export default {
     appShopCheckout: 'Checkout ({{count}}) · €{{total}}',
     appShopQtyPlus: 'One more',
     appShopQtyMinus: 'One less',
+    appShopMissed: 'Sale over',
+    appShopWaPrice: 'WhatsApp price',
+    appShopAppPrice: 'App price',
+    appShopMissedInfo:
+      'This round is over — this beer can no longer be ordered through the app. '
+      + 'After every WhatsApp sale the leftovers appear here for a short while. '
+      + "When they're gone, they're gone.",
     appShopEmptyTitle: 'Everything is sold out',
     appShopEmptyMessage: 'There are no app-exclusive beers right now. Check back later!',
     untappdTitle: 'Untappd',

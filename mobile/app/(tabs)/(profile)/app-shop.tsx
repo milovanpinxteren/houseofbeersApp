@@ -7,7 +7,7 @@ import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
 import { colors, spacing, borderRadius, fonts } from '../../../src/theme/colors';
 import { EmptyState, Screen, SkeletonCard } from '../../../src/components/ui';
-import { AppShopProduct, getAppShop } from '../../../src/api/recommendations';
+import { AppShopProduct, getAppShop, isAppShopMissed } from '../../../src/api/recommendations';
 import { trackEvent } from '../../../src/api/analytics';
 import { AppShopDetailSheet } from '../../../src/components/AppShopSection';
 
@@ -206,6 +206,9 @@ export default function AppShopScreen() {
             >
               <Text style={styles.saleTitle}>{group.label}</Text>
               <View style={styles.saleHeaderRight}>
+                {group.products.every(isAppShopMissed) && (
+                  <Text style={styles.saleMissed}>{t('discover.appShopMissed')}</Text>
+                )}
                 <Text style={styles.saleCount}>
                   {t('discover.appShopGroupCount', { count: group.products.length })}
                 </Text>
@@ -222,12 +225,16 @@ export default function AppShopScreen() {
                 <Pressable
                   key={product.id}
                   onPress={() => setSelected(product)}
-                  style={({ pressed }) => [styles.card, pressed && { opacity: 0.9 }]}
+                  style={({ pressed }) => [
+                    styles.card,
+                    isAppShopMissed(product) && styles.cardMissed,
+                    pressed && { opacity: 0.9 },
+                  ]}
                 >
                   {product.image_url ? (
                     <Image
                       source={{ uri: product.image_url }}
-                      style={styles.cardImage}
+                      style={[styles.cardImage, isAppShopMissed(product) && styles.cardImageMissed]}
                       resizeMode="cover"
                     />
                   ) : (
@@ -252,18 +259,36 @@ export default function AppShopScreen() {
                       )}
                     </View>
                     <View style={styles.cardFooter}>
-                      <Text style={styles.price}>
-                        €{Number(product.price).toFixed(2)}
-                        <Text style={styles.stock}>
-                          {'   '}
-                          {t('discover.appShopStock', { count: product.inventory })}
-                        </Text>
-                      </Text>
-                      <QuantityStepper
-                        quantity={qty}
-                        max={product.inventory}
-                        onChange={(delta) => adjustQuantity(product, delta)}
-                      />
+                      {!isAppShopMissed(product) ? (
+                        <>
+                          <Text style={styles.price}>
+                            €{Number(product.price).toFixed(2)}
+                            <Text style={styles.stock}>
+                              {'   '}
+                              {t('discover.appShopStock', { count: product.inventory })}
+                            </Text>
+                          </Text>
+                          <QuantityStepper
+                            quantity={qty}
+                            max={product.inventory}
+                            onChange={(delta) => adjustQuantity(product, delta)}
+                          />
+                        </>
+                      ) : (
+                        <>
+                          <Text style={styles.priceMissed}>
+                            {product.sale_price != null && (
+                              <Text style={styles.priceStruck}>
+                                €{Number(product.sale_price).toFixed(2)}{'  '}
+                              </Text>
+                            )}
+                            €{Number(product.price).toFixed(2)}
+                          </Text>
+                          <Text style={styles.missedLabel}>
+                            {t('discover.appShopMissed')}
+                          </Text>
+                        </>
+                      )}
                     </View>
                   </View>
                 </Pressable>
@@ -399,6 +424,18 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textMuted,
   },
+  saleMissed: {
+    fontFamily: fonts.heading,
+    fontSize: 11,
+    letterSpacing: 0.5,
+    color: colors.textMuted,
+    textTransform: 'uppercase',
+    backgroundColor: colors.surfaceLow,
+    borderRadius: 8,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    overflow: 'hidden',
+  },
   card: {
     flexDirection: 'row',
     backgroundColor: colors.surface,
@@ -416,6 +453,13 @@ const styles = StyleSheet.create({
   cardImagePlaceholder: {
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  cardMissed: {
+    borderColor: colors.border,
+    opacity: 0.85,
+  },
+  cardImageMissed: {
+    opacity: 0.55,
   },
   cardBody: {
     flex: 1,
@@ -470,6 +514,23 @@ const styles = StyleSheet.create({
     fontFamily: fonts.heading,
     fontSize: 15,
     color: colors.primary,
+  },
+  priceMissed: {
+    fontFamily: fonts.heading,
+    fontSize: 15,
+    color: colors.textMuted,
+  },
+  priceStruck: {
+    fontSize: 13,
+    color: colors.textMuted,
+    textDecorationLine: 'line-through',
+  },
+  missedLabel: {
+    fontFamily: fonts.heading,
+    fontSize: 11,
+    letterSpacing: 0.5,
+    color: colors.textMuted,
+    textTransform: 'uppercase',
   },
   stock: {
     fontFamily: fonts.serif,

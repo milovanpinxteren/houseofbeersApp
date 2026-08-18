@@ -257,3 +257,115 @@ class GetActiveProductsTests(APITestCase):
         products = ShopifyService().get_active_products()
 
         self.assertEqual(products, [])
+
+
+def _app_only_node(**overrides):
+    """Raw GraphQL node for an app-only product (Sale + App variant)."""
+    node = {
+        'id': 'gid://shopify/Product/100',
+        'legacyResourceId': '100',
+        'title': 'Sale X - A - Test Gueuze',
+        'handle': 'sale-x-a-test-gueuze',
+        'status': 'UNLISTED',
+        'tags': ['app-only'],
+        'createdAt': '2026-08-01T10:00:00Z',
+        'description': 'A test beer.',
+        'featuredImage': None,
+        'variants': {'edges': [
+            {'node': {
+                'id': 'gid://shopify/ProductVariant/11', 'legacyResourceId': '11',
+                'price': '10.00', 'inventoryQuantity': 3,
+                'selectedOptions': [{'name': 'Editie', 'value': 'Sale'}],
+            }},
+            {'node': {
+                'id': 'gid://shopify/ProductVariant/22', 'legacyResourceId': '22',
+                'price': '12.50', 'inventoryQuantity': 7,
+                'selectedOptions': [{'name': 'Editie', 'value': 'App'}],
+            }},
+        ]},
+        'metafields': {'edges': [
+            {'node': {'key': 'app_title', 'value': 'Test Gueuze', 'type': 'single_line_text_field'}},
+        ]},
+    }
+    node.update(overrides)
+    return node
+
+
+def _set_app_inventory(node, quantity):
+    node['variants']['edges'][1]['node']['inventoryQuantity'] = quantity
+    return node
+
+
+class ParseAppOnlyProductTests(APITestCase):
+    """
+    ShopifyService._parse_app_only_product — buyability rules.
+
+    Archived products (tag app-archived, App variant zeroed by the hob
+    pipeline when a newer sale arrives) stay visible as the gemist wall;
+    non-archived products with zero inventory are simply sold out and drop.
+    """
+
+    def test_buyable_product_has_both_prices(self):
+        parsed = ShopifyService._parse_app_only_product(_app_only_node())
+        self.assertTrue(parsed['buyable'])
+        self.assertEqual(parsed['price'], '12.50')       # App variant
+        self.assertEqual(parsed['sale_price'], '10.00')  # WhatsApp deal price
+        self.assertEqual(parsed['variant_id'], '22')     # never variants[0]
+        self.assertEqual(parsed['inventory'], 7)
+
+    def test_archived_zero_inventory_is_kept_as_not_buyable(self):
+        node = _set_app_inventory(
+            _app_only_node(tags=['app-only', 'app-archived']), 0)
+        parsed = ShopifyService._parse_app_only_product(node)
+        self.assertIsNotNone(parsed)
+        self.assertFalse(parsed['buyable'])
+        self.assertEqual(parsed['sale_price'], '10.00')
+
+    def test_archived_with_leftover_inventory_is_still_not_buyable(self):
+        # Belt-and-braces: the tag alone closes the window, even if zeroing
+        # the variant failed or lagged.
+        node = _app_only_node(tags=['app-only', 'app-archived'])
+        parsed = ShopifyService._parse_app_only_product(node)
+        self.assertFalse(parsed['buyable'])
+
+    def test_sold_out_without_archive_tag_is_dropped(self):
+        node = _set_app_inventory(_app_only_node(), 0)
+        self.assertIsNone(ShopifyService._parse_app_only_product(node))
+
+    def test_product_without_app_variant_is_dropped(self):
+        node = _app_only_node()
+        node['variants']['edges'] = node['variants']['edges'][:1]  # Sale only
+        self.assertIsNone(ShopifyService._parse_app_only_product(node))
+
+
+@override_settings(CACHES={
+    'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}
+})
+class AppShopViewTests(APITestCase):
+    """GET /api/recommendations/app-shop/ — cart_url only for buyable items."""
+
+    def setUp(self):
+        from .views import APP_SHOP_CACHE_KEY
+        self.url = reverse('app-shop')
+        self.user = User.objects.create_user(
+            username='beerfan2', email='beerfan2@example.com', password='SuperSecret123!'
+        )
+        self.client.force_authenticate(user=self.user)
+        cache.delete(APP_SHOP_CACHE_KEY)
+
+        patcher = patch('recommendations.views.ShopifyService')
+        self.mock_service = patcher.start().return_value
+        self.addCleanup(patcher.stop)
+
+    def test_archived_products_get_no_cart_url(self):
+        self.mock_service.get_app_only_products.return_value = [
+            {'id': '1', 'title': 'Buyable', 'variant_id': '22',
+             'price': '12.50', 'sale_price': '10.00', 'buyable': True, 'inventory': 7},
+            {'id': '2', 'title': 'Gemist', 'variant_id': '33',
+             'price': '13.50', 'sale_price': '11.00', 'buyable': False, 'inventory': 0},
+        ]
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        products = {p['id']: p for p in response.data['products']}
+        self.assertIn('/cart/22:1', products['1']['cart_url'])
+        self.assertIsNone(products['2']['cart_url'])

@@ -644,6 +644,15 @@ The bottleneck is gunicorn workers, not the database. Each poll is ~5-15ms DB ti
   + detail bottom sheet with a Bestellen button that opens `cart_url`.
   Products are UNLISTED in the webshop — the app is the only place they're
   visible. Tested end-to-end with a live temp product (created + deleted).
+  **Gemist wall (2026-08-18)**: when hob archives a batch (next sale arrived)
+  it zeroes the App variant and adds tag `app-archived`; those products stay
+  in the API response with `buyable: false`, `sale_price` (WhatsApp deal
+  price) next to `price`, and `cart_url: null`. UI shows them dimmed with a
+  "Sale voorbij" badge, both prices struck through, no order button — the
+  FOMO wall (hob keeps the 5 most recent archived sales, older ones get the
+  tags removed and disappear). Sold-out-but-NOT-archived products are still
+  dropped as before. Local demo: `APP_SHOP_DEMO=1` includes two archived
+  items.
 
 ---
 

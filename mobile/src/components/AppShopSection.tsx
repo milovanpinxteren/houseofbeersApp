@@ -13,7 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { t } from '../i18n';
 import { colors, spacing, borderRadius, fonts } from '../theme/colors';
 import { SectionHeader } from './ui';
-import { AppShopProduct } from '../api/recommendations';
+import { AppShopProduct, isAppShopMissed } from '../api/recommendations';
 import { trackEvent } from '../api/analytics';
 
 // The Ontdek rail is a teaser: the full page shows everything.
@@ -54,12 +54,16 @@ export function AppShopSection({
           <Pressable
             key={product.id}
             onPress={() => setSelected(product)}
-            style={({ pressed }) => [styles.card, pressed && { opacity: 0.85 }]}
+            style={({ pressed }) => [
+              styles.card,
+              isAppShopMissed(product) && styles.cardMissed,
+              pressed && { opacity: 0.85 },
+            ]}
           >
             {product.image_url ? (
               <Image
                 source={{ uri: product.image_url }}
-                style={styles.image}
+                style={[styles.image, isAppShopMissed(product) && styles.imageMissed]}
                 resizeMode="cover"
               />
             ) : (
@@ -80,9 +84,18 @@ export function AppShopSection({
                 {product.title}
               </Text>
               <View style={styles.priceRow}>
-                <Text style={styles.price}>€{Number(product.price).toFixed(2)}</Text>
-                <Text style={styles.stock}>
-                  {t('discover.appShopStock', { count: product.inventory })}
+                <Text style={[styles.price, isAppShopMissed(product) && styles.priceMuted]}>
+                  {isAppShopMissed(product) && product.sale_price != null && (
+                    <Text style={styles.priceStruck}>
+                      €{Number(product.sale_price).toFixed(2)}{'  '}
+                    </Text>
+                  )}
+                  €{Number(product.price).toFixed(2)}
+                </Text>
+                <Text style={[styles.stock, isAppShopMissed(product) && styles.stockMissed]}>
+                  {!isAppShopMissed(product)
+                    ? t('discover.appShopStock', { count: product.inventory })
+                    : t('discover.appShopMissed')}
                 </Text>
               </View>
             </View>
@@ -107,6 +120,7 @@ export function AppShopDetailSheet({
   onClose: () => void;
 }) {
   function order(selected: AppShopProduct) {
+    if (!selected.cart_url) return;
     trackEvent('app_shop_checkout', { items: 1, total: selected.price, single: true });
     Linking.openURL(selected.cart_url).catch((err) =>
       console.log('[AppShop] Open cart error:', err)
@@ -140,9 +154,17 @@ export function AppShopDetailSheet({
                   resizeMode="cover"
                 />
               ) : null}
-              <View style={styles.exclusiveBadge}>
-                <Ionicons name="sparkles" size={12} color={colors.primary} />
-                <Text style={styles.exclusiveText}>{t('discover.appShopBadge')}</Text>
+              <View style={styles.badgeRow}>
+                <View style={styles.exclusiveBadge}>
+                  <Ionicons name="sparkles" size={12} color={colors.primary} />
+                  <Text style={styles.exclusiveText}>{t('discover.appShopBadge')}</Text>
+                </View>
+                {isAppShopMissed(product) && (
+                  <View style={styles.missedBadge}>
+                    <Ionicons name="time-outline" size={12} color={colors.textMuted} />
+                    <Text style={styles.missedBadgeText}>{t('discover.appShopMissed')}</Text>
+                  </View>
+                )}
               </View>
               <Text style={styles.sheetTitle}>{product.title}</Text>
 
@@ -171,17 +193,49 @@ export function AppShopDetailSheet({
                 <Text style={styles.description}>{product.description}</Text>
               )}
 
-              <Pressable
-                onPress={() => order(product)}
-                style={({ pressed }) => [styles.orderBtn, pressed && { opacity: 0.85 }]}
-              >
-                <Text style={styles.orderBtnText}>
-                  {t('discover.appShopOrder')} · €{Number(product.price).toFixed(2)}
-                </Text>
-              </Pressable>
-              <Text style={styles.stockNote}>
-                {t('discover.appShopStock', { count: product.inventory })}
-              </Text>
+              {!isAppShopMissed(product) ? (
+                <>
+                  <Pressable
+                    onPress={() => order(product)}
+                    style={({ pressed }) => [styles.orderBtn, pressed && { opacity: 0.85 }]}
+                  >
+                    <Text style={styles.orderBtnText}>
+                      {t('discover.appShopOrder')} · €{Number(product.price).toFixed(2)}
+                    </Text>
+                  </Pressable>
+                  <Text style={styles.stockNote}>
+                    {t('discover.appShopStock', { count: product.inventory })}
+                  </Text>
+                </>
+              ) : (
+                <>
+                  {/* Missed deal: show what the WhatsApp group and the app
+                      window paid — the urgency for next time. */}
+                  <View style={styles.missedPrices}>
+                    {product.sale_price != null && (
+                      <View style={styles.missedPriceRow}>
+                        <Text style={styles.missedPriceLabel}>
+                          {t('discover.appShopWaPrice')}
+                        </Text>
+                        <Text style={styles.missedPriceStruck}>
+                          €{Number(product.sale_price).toFixed(2)}
+                        </Text>
+                      </View>
+                    )}
+                    <View style={styles.missedPriceRow}>
+                      <Text style={styles.missedPriceLabel}>
+                        {t('discover.appShopAppPrice')}
+                      </Text>
+                      <Text style={styles.missedPriceStruck}>
+                        €{Number(product.price).toFixed(2)}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={styles.missedInfo}>
+                    {t('discover.appShopMissedInfo')}
+                  </Text>
+                </>
+              )}
             </ScrollView>
           )}
         </Pressable>
@@ -215,10 +269,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.primary + '33',
   },
+  cardMissed: {
+    borderColor: colors.border,
+    opacity: 0.85,
+  },
   image: {
     width: '100%',
     aspectRatio: 1,
     backgroundColor: colors.surfaceLow,
+  },
+  imageMissed: {
+    opacity: 0.55,
   },
   imagePlaceholder: {
     width: '100%',
@@ -266,9 +327,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.primary,
   },
+  priceMuted: {
+    color: colors.textMuted,
+  },
+  priceStruck: {
+    textDecorationLine: 'line-through',
+    color: colors.textMuted,
+    fontSize: 12,
+  },
   stock: {
     fontSize: 11,
     color: colors.textMuted,
+  },
+  stockMissed: {
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    fontSize: 10,
   },
   modalOverlay: {
     flex: 1,
@@ -309,6 +383,12 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceLow,
     marginBottom: spacing.sm,
   },
+  badgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: spacing.xs,
+  },
   exclusiveBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -318,7 +398,23 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 9,
     paddingVertical: 4,
-    marginBottom: spacing.xs,
+  },
+  missedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    alignSelf: 'flex-start',
+    backgroundColor: colors.surfaceLow,
+    borderRadius: 10,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+  },
+  missedBadgeText: {
+    fontFamily: fonts.heading,
+    fontSize: 11,
+    letterSpacing: 0.5,
+    color: colors.textMuted,
+    textTransform: 'uppercase',
   },
   exclusiveText: {
     fontFamily: fonts.heading,
@@ -385,6 +481,38 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textMuted,
     marginTop: spacing.xs,
+    marginBottom: spacing.md,
+  },
+  missedPrices: {
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+    gap: 8,
+  },
+  missedPriceRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+  },
+  missedPriceLabel: {
+    fontFamily: fonts.heading,
+    fontSize: 13,
+    letterSpacing: 0.4,
+    color: colors.textMuted,
+    textTransform: 'uppercase',
+  },
+  missedPriceStruck: {
+    fontFamily: fonts.heading,
+    fontSize: 16,
+    color: colors.textMuted,
+    textDecorationLine: 'line-through',
+  },
+  missedInfo: {
+    fontFamily: fonts.serif,
+    fontSize: 14,
+    lineHeight: 21,
+    color: colors.textMuted,
+    marginTop: spacing.sm,
     marginBottom: spacing.md,
   },
 });
