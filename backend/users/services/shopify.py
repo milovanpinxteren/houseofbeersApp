@@ -529,7 +529,8 @@ class ShopifyService:
 
         The App variant is only purchasable through the PWA, so these lines
         are exactly the app-shop's orders — no attribution guesswork needed.
-        Scans recent orders (bounded pages); returns None when the order
+        Scans paid orders newest-first (bounded at 2500; if the window holds
+        more, only the oldest tail is dropped); returns None when the order
         query fails, so callers can distinguish 'no sales' from 'no data'.
         """
         from datetime import datetime, timedelta, timezone as dt_timezone
@@ -537,7 +538,7 @@ class ShopifyService:
         since = (datetime.now(dt_timezone.utc) - timedelta(days=days)).strftime('%Y-%m-%d')
         query = """
         query appVariantSales($cursor: String, $q: String!) {
-            orders(first: 50, after: $cursor, query: $q) {
+            orders(first: 250, after: $cursor, query: $q, sortKey: CREATED_AT, reverse: true) {
                 pageInfo { hasNextPage endCursor }
                 edges {
                     node {
@@ -561,9 +562,10 @@ class ShopifyService:
         revenue = 0.0
         order_names = set()
         cursor = None
-        for _page in range(10):  # bounded: 500 most recent orders max
+        for _page in range(10):  # bounded: 2500 most recent orders max
             data = self._graphql_request(
-                query, {"cursor": cursor, "q": f"created_at:>={since}"}
+                query,
+                {"cursor": cursor, "q": f"created_at:>={since} AND financial_status:paid"},
             )
             if not data:
                 return None

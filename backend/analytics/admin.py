@@ -192,10 +192,10 @@ class AnalyticsDashboardAdmin(admin.ModelAdmin):
         # --- Revenue (30d, cached — Shopify round-trips are slow) ---
         from django.core.cache import cache
 
-        revenue = cache.get('analytics:revenue:v1')
+        revenue = cache.get('analytics:revenue:v2')
         if revenue is None:
             revenue = self._build_revenue_stats(last_30)
-            cache.set('analytics:revenue:v1', revenue, 60 * 30)
+            cache.set('analytics:revenue:v2', revenue, 60 * 30)
 
         # --- Recent events ---
         recent_events = UsageEvent.objects.select_related('user')[:15]
