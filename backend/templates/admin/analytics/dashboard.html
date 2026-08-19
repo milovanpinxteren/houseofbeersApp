@@ -38,6 +38,8 @@
     }
     .dashboard .stat-card.highlight .number { color: #28a745; }
     .dashboard .stat-card.warn .number { color: #ffc107; }
+    .dashboard .stat-card.error .number { color: #dc3545; }
+    .dashboard .stat-card.ok .number { color: #28a745; }
 
     .dashboard .section {
         background: #fff;
@@ -52,6 +54,48 @@
         color: #333;
         border-bottom: 2px solid #417690;
         padding-bottom: 8px;
+    }
+
+    .dashboard .range-form {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        font-size: 13px;
+    }
+    .dashboard .range-form label { color: #666; }
+    .dashboard .range-form input[type="date"] {
+        padding: 5px 8px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+    }
+    .dashboard .range-form button,
+    .dashboard .refresh-form button {
+        background: #417690;
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+        padding: 7px 16px;
+        cursor: pointer;
+        font-size: 13px;
+    }
+    .dashboard .range-form .preset {
+        color: #417690;
+        text-decoration: underline;
+    }
+    .dashboard .revenue-meta {
+        font-size: 12px;
+        color: #999;
+        margin: 12px 0 0 0;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+    .dashboard .revenue-pending {
+        color: #666;
+        font-size: 14px;
+        padding: 12px 0;
     }
 
     .dashboard .bar-chart-row {
@@ -123,6 +167,8 @@
         text-align: center;
         font-size: 9px;
         color: #999;
+        white-space: nowrap;
+        overflow: visible;
     }
     .dashboard .chart-legend {
         display: flex;
@@ -199,8 +245,6 @@
         color: #417690;
         margin-left: 8px;
     }
-    .dashboard .stat-card.error .number { color: #dc3545; }
-    .dashboard .stat-card.ok .number { color: #28a745; }
 
     .dashboard .funnel-row {
         display: flex;
@@ -255,7 +299,20 @@
 
 <div class="dashboard">
 
-    <!-- Overview stats -->
+    <!-- Date range picker -->
+    <div class="section">
+        <form method="get" class="range-form">
+            <label>From <input type="date" name="start" value="{{ start_date|date:'Y-m-d' }}" max="{{ today|date:'Y-m-d' }}"></label>
+            <label>To <input type="date" name="end" value="{{ end_date|date:'Y-m-d' }}" max="{{ today|date:'Y-m-d' }}"></label>
+            <button type="submit">Apply</button>
+            {% for preset in presets %}
+            <a class="preset" href="?start={{ preset.start|date:'Y-m-d' }}&end={{ today|date:'Y-m-d' }}">{{ preset.label }}</a>
+            {% endfor %}
+            <span style="color: #999;">Showing {{ start_date|date:'j M Y' }} &ndash; {{ end_date|date:'j M Y' }} ({{ window_days }} day{{ window_days|pluralize }})</span>
+        </form>
+    </div>
+
+    <!-- Overview stats (fixed windows) -->
     <div class="stats-grid">
         <div class="stat-card">
             <div class="number">{{ total_users }}</div>
@@ -278,12 +335,36 @@
             <div class="label">Active (30 days)</div>
         </div>
         <div class="stat-card">
-            <div class="number">{{ new_users_7d }} / {{ new_users_30d }}</div>
-            <div class="label">New Users (7d / 30d)</div>
-        </div>
-        <div class="stat-card">
             <div class="number">{{ stickiness }}%</div>
             <div class="label">Stickiness (today / 30d actives)</div>
+        </div>
+    </div>
+
+    <!-- Selected range stats -->
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="number">{{ active_window }}</div>
+            <div class="label">Active Users (range)</div>
+        </div>
+        <div class="stat-card">
+            <div class="number">{{ events_window_count }}</div>
+            <div class="label">Events (range)</div>
+        </div>
+        <div class="stat-card">
+            <div class="number">{{ new_users_window }}</div>
+            <div class="label">New Users (range)</div>
+        </div>
+        <div class="stat-card">
+            <div class="number">{{ total_favorites }}</div>
+            <div class="label">Total Favorites</div>
+        </div>
+        <div class="stat-card">
+            <div class="number">{{ total_untappd }}</div>
+            <div class="label">Untappd Linked</div>
+        </div>
+        <div class="stat-card">
+            <div class="number">{{ total_redemptions }}</div>
+            <div class="label">Rewards Redeemed</div>
         </div>
     </div>
 
@@ -322,27 +403,12 @@
         {% endif %}
     </div>
 
-    <!-- Feature adoption -->
-    <div class="stats-grid">
-        <div class="stat-card">
-            <div class="number">{{ total_favorites }}</div>
-            <div class="label">Total Favorites</div>
-        </div>
-        <div class="stat-card">
-            <div class="number">{{ total_untappd }}</div>
-            <div class="label">Untappd Linked</div>
-        </div>
-        <div class="stat-card">
-            <div class="number">{{ total_redemptions }}</div>
-            <div class="label">Rewards Redeemed</div>
-        </div>
-    </div>
-
-    <!-- Revenue (last 30 days, cached 30 min) -->
+    <!-- Revenue (built in the background by Celery) -->
     <div class="section">
-        <h2>Revenue (Last 30 Days)</h2>
+        <h2>Revenue ({{ start_date|date:'j M' }} &ndash; {{ end_date|date:'j M Y' }})</h2>
+
+        {% if revenue_status == 'ready' and revenue %}
         <div class="stats-grid" style="margin-bottom: 0;">
-            {% if revenue.app_shop %}
             <div class="stat-card highlight">
                 <div class="number">&euro;{{ revenue.app_shop.revenue }}</div>
                 <div class="label">App Shop Revenue</div>
@@ -351,22 +417,15 @@
                 <div class="number">{{ revenue.app_shop.units }}</div>
                 <div class="label">App Shop Beers Sold ({{ revenue.app_shop.orders }} orders)</div>
             </div>
-            {% else %}
-            <div class="stat-card warn">
-                <div class="number">n/a</div>
-                <div class="label">App Shop (Shopify lookup failed)</div>
-            </div>
-            {% endif %}
             <div class="stat-card highlight">
-                <div class="number">&euro;{{ revenue.sixpack.revenue|default_if_none:"n/a" }}</div>
+                <div class="number">&euro;{{ revenue.sixpack.revenue }}</div>
                 <div class="label">Sixpack Revenue (paid)</div>
             </div>
             <div class="stat-card">
-                <div class="number">{{ revenue.sixpack.redeemed|default_if_none:"?" }} / {{ revenue.sixpack.minted }}</div>
+                <div class="number">{{ revenue.sixpack.orders }} / {{ sixpack_minted }}</div>
                 <div class="label">Sixpacks Bought / Minted</div>
             </div>
         </div>
-        {% if revenue.codes %}
         <div class="stats-grid" style="margin: 16px 0 0 0;">
             <div class="stat-card">
                 <div class="number">&euro;{{ revenue.codes.loyalty.revenue }}</div>
@@ -385,17 +444,43 @@
                 <div class="label">Birthday Gifts Cost (discounts given)</div>
             </div>
         </div>
-        {% endif %}
         {% if revenue.truncated %}
         <p style="color: #dc3545; font-size: 12px; margin: 12px 0 0 0;">
-            &#9888; Order scan hit its 2500-order bound — the oldest part of the window is not counted.
+            &#9888; Order scan hit its 10000-order bound &mdash; the oldest part of the range is not counted.
         </p>
+        {% endif %}
+        <div class="revenue-meta">
+            <span>Built {{ revenue_built_at|timesince }} ago &mdash; new orders since then are not included.</span>
+            <form method="post" action="{% url 'admin:analytics_refresh_revenue' %}" class="refresh-form">
+                {% csrf_token %}
+                <input type="hidden" name="start" value="{{ start_date|date:'Y-m-d' }}">
+                <input type="hidden" name="end" value="{{ end_date|date:'Y-m-d' }}">
+                <button type="submit">Refresh from Shopify</button>
+            </form>
+        </div>
+
+        {% elif revenue_status == 'running' %}
+        <p class="revenue-pending">
+            &#8987; Building the revenue report from Shopify in the background&hellip;
+            this page reloads automatically. (Needs the Celery worker to be running.)
+        </p>
+
+        {% else %}
+        <p class="revenue-pending" style="color: #dc3545;">
+            Revenue report could not be built (Shopify or task-queue error).
+        </p>
+        <form method="post" action="{% url 'admin:analytics_refresh_revenue' %}" class="refresh-form">
+            {% csrf_token %}
+            <input type="hidden" name="start" value="{{ start_date|date:'Y-m-d' }}">
+            <input type="hidden" name="end" value="{{ end_date|date:'Y-m-d' }}">
+            <button type="submit">Try Again</button>
+        </form>
         {% endif %}
     </div>
 
     <!-- Conversion funnels -->
     <div class="section">
-        <h2>Conversion Funnels (Last 30 Days)</h2>
+        <h2>Conversion Funnels ({{ start_date|date:'j M' }} &ndash; {{ end_date|date:'j M Y' }})</h2>
         {% for funnel in funnels %}
         <div class="funnel-row">
             <div class="funnel-name">{{ funnel.name }}</div>
@@ -413,7 +498,7 @@
 
     <!-- Daily activity chart -->
     <div class="section">
-        <h2>Daily Activity (Last 30 Days)</h2>
+        <h2>Daily Activity ({{ start_date|date:'j M' }} &ndash; {{ end_date|date:'j M Y' }})</h2>
         <div class="chart-legend">
             <span class="legend-users">Active Users</span>
             <span class="legend-events">Total Events</span>
@@ -430,36 +515,16 @@
         </div>
         <div class="chart-labels">
             {% for day in chart_days %}
-            {% if forloop.counter0|divisibleby:5 %}
-            <div class="day-label" style="flex: 2;">{{ day.label }}</div>
-            {% else %}
-            {% if forloop.counter0|divisibleby:5 == False and forloop.counter|divisibleby:5 == False %}
-            {% endif %}
-            {% endif %}
+            <div class="day-label">{% if day.show_label %}{{ day.label }}{% endif %}</div>
             {% endfor %}
         </div>
     </div>
 
-    <!-- Events breakdown -->
+    <!-- Usage breakdown -->
     <div class="two-col">
         <div class="section">
-            <h2>Feature Usage (Last 7 Days)</h2>
-            {% for event in events_by_type_7d %}
-            <div class="bar-chart-row">
-                <div class="label">{{ event.label }}</div>
-                <div class="bar-container">
-                    <div class="bar" style="width: {{ event.bar_width }}%;"></div>
-                </div>
-                <div class="count">{{ event.count }}</div>
-            </div>
-            {% empty %}
-            <p style="color: #999; font-style: italic;">No events recorded yet.</p>
-            {% endfor %}
-        </div>
-
-        <div class="section">
-            <h2>Feature Usage (Last 30 Days)</h2>
-            {% for event in events_by_type_30d %}
+            <h2>Feature Usage ({{ window_days }} day{{ window_days|pluralize }})</h2>
+            {% for event in events_by_type %}
             <div class="bar-chart-row">
                 <div class="label">{{ event.label }}</div>
                 <div class="bar-container">
@@ -468,16 +533,12 @@
                 <div class="count">{{ event.count }} <span class="sub-count">{{ event.users }}u</span></div>
             </div>
             {% empty %}
-            <p style="color: #999; font-style: italic;">No events recorded yet.</p>
+            <p style="color: #999; font-style: italic;">No events recorded in this range.</p>
             {% endfor %}
         </div>
-    </div>
 
-    <!-- Bottom row -->
-    <div class="two-col">
-        <!-- Top screens -->
         <div class="section">
-            <h2>Top Screens (Last 30 Days)</h2>
+            <h2>Top Screens ({{ window_days }} day{{ window_days|pluralize }})</h2>
             {% for screen in top_screens %}
             <div class="bar-chart-row">
                 <div class="label" title="{{ screen.screen }}">{{ screen.screen }}</div>
@@ -487,13 +548,16 @@
                 <div class="count">{{ screen.count }} <span class="sub-count">{{ screen.users }}u</span></div>
             </div>
             {% empty %}
-            <p style="color: #999; font-style: italic;">No screen views recorded yet.</p>
+            <p style="color: #999; font-style: italic;">No screen views recorded in this range.</p>
             {% endfor %}
         </div>
+    </div>
 
+    <!-- Bottom row -->
+    <div class="two-col">
         <!-- Top users -->
         <div class="section">
-            <h2>Most Active Users (Last 30 Days)</h2>
+            <h2>Most Active Users ({{ window_days }} day{{ window_days|pluralize }})</h2>
             {% for user in top_users %}
             <div class="top-user-row">
                 <div class="rank">{{ forloop.counter }}.</div>
@@ -501,7 +565,7 @@
                 <div class="user-count">{{ user.count }} events</div>
             </div>
             {% empty %}
-            <p style="color: #999; font-style: italic;">No activity recorded yet.</p>
+            <p style="color: #999; font-style: italic;">No activity recorded in this range.</p>
             {% endfor %}
         </div>
 
@@ -534,4 +598,8 @@
     </div>
 
 </div>
+
+{% if revenue_status == 'running' %}
+<script>setTimeout(function () { window.location.reload(); }, 4000);</script>
+{% endif %}
 {% endblock %}

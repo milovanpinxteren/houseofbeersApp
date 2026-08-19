@@ -1,12 +1,15 @@
 from django.contrib import admin
-from django.urls import path
+from django.core.cache import cache
+from django.http import HttpResponseRedirect
 from django.template.response import TemplateResponse
+from django.urls import path, reverse
 from django.utils import timezone
-from django.db.models import Count, Q
+from django.db.models import Count
 from django.db.models.functions import TruncDate
-from datetime import timedelta
+from datetime import date, datetime, time, timedelta
 
 from .models import UsageEvent
+from .tasks import build_revenue_report, revenue_cache_key, REVENUE_RUNNING_TTL
 
 
 @admin.register(UsageEvent)
@@ -39,65 +42,120 @@ class UsageEventAdmin(admin.ModelAdmin):
 class AnalyticsDashboardAdmin(admin.ModelAdmin):
     """Proxy admin that provides the dashboard view."""
 
+    MAX_RANGE_DAYS = 365
+
     def get_urls(self):
         urls = super().get_urls()
         custom_urls = [
+            path(
+                'refresh-revenue/',
+                self.admin_site.admin_view(self.refresh_revenue_view),
+                name='analytics_refresh_revenue',
+            ),
             path('', self.admin_site.admin_view(self.dashboard_view), name='analytics_dashboard'),
         ]
         return custom_urls + urls
 
-    def _build_revenue_stats(self, since) -> dict:
-        """
-        All app-attributed money over the window, from one Shopify order scan
-        (App-variant lines, source attributes, SIX-/HOB-/BDAY- codes).
-        Best-effort: a failed scan yields None fields (rendered as 'n/a'),
-        never a broken dashboard.
-        """
-        from users.services.shopify import ShopifyService
-        from recommendations.models import SixpackCheckout
+    def _parse_range(self, request):
+        """Selected [start, end] dates (inclusive); defaults to the last 30 days."""
+        params = request.POST if request.method == 'POST' else request.GET
+        today = timezone.localdate()
 
+        def _parse(name, fallback):
+            try:
+                return date.fromisoformat(params.get(name) or '')
+            except ValueError:
+                return fallback
+
+        end = min(_parse('end', today), today)
+        start = _parse('start', end - timedelta(days=29))
+        if start > end:
+            start = end
+        if (end - start).days >= self.MAX_RANGE_DAYS:
+            start = end - timedelta(days=self.MAX_RANGE_DAYS - 1)
+        return start, end
+
+    def _enqueue_build(self, key, start, end) -> str:
+        """Mark the range as building and dispatch the Celery task."""
+        cache.set(
+            key,
+            {'status': 'running', 'built_at': timezone.now().isoformat()},
+            REVENUE_RUNNING_TTL,
+        )
         try:
-            report = ShopifyService().get_app_sales_report(days=30)
+            build_revenue_report.delay(start.isoformat(), end.isoformat())
         except Exception:
-            report = None
+            # Broker unreachable — degrade to a visible failed state instead
+            # of breaking the dashboard.
+            cache.set(
+                key,
+                {'status': 'failed', 'built_at': timezone.now().isoformat()},
+                REVENUE_RUNNING_TTL,
+            )
+            return 'failed'
+        return 'running'
 
-        minted = SixpackCheckout.objects.filter(created_at__gte=since).count()
+    def _ensure_revenue_report(self, start, end):
+        """
+        Cached Shopify revenue report for the range. Enqueues a Celery build
+        when none exists yet — the dashboard itself never calls Shopify.
+        Returns (status, data, built_at datetime).
+        """
+        key = revenue_cache_key(start, end)
+        cached = cache.get(key)
+        if cached is None:
+            status = self._enqueue_build(key, start, end)
+            return status, None, None
+        built_at = cached.get('built_at')
+        if built_at:
+            try:
+                built_at = datetime.fromisoformat(built_at)
+            except ValueError:
+                built_at = None
+        return cached.get('status'), cached.get('data'), built_at
 
-        if report is None:
-            return {
-                'app_shop': None,
-                'sixpack': {'minted': minted, 'redeemed': None, 'revenue': None},
-                'codes': None,
-                'truncated': False,
-            }
-
-        return {
-            'app_shop': report['app_shop'],  # {'units', 'revenue', 'orders'}
-            'sixpack': {
-                'minted': minted,
-                'redeemed': report['sixpack']['orders'],
-                'revenue': report['sixpack']['revenue'],
-            },
-            # per feature: {'orders', 'revenue', 'discounted'}
-            'codes': report['codes'],
-            'truncated': report['truncated'],
-        }
+    def refresh_revenue_view(self, request):
+        """Force a rebuild of the revenue report for the selected range."""
+        start, end = self._parse_range(request)
+        key = revenue_cache_key(start, end)
+        existing = cache.get(key)
+        already_running = existing and existing.get('status') == 'running'
+        if request.method == 'POST' and not already_running:
+            self._enqueue_build(key, start, end)
+        dashboard_url = reverse('admin:analytics_dashboard')
+        return HttpResponseRedirect(
+            f"{dashboard_url}?start={start.isoformat()}&end={end.isoformat()}"
+        )
 
     def dashboard_view(self, request):
         now = timezone.now()
-        today = now.date()
+        today = timezone.localdate()
         last_7 = now - timedelta(days=7)
         last_30 = now - timedelta(days=30)
 
-        # --- User stats ---
+        # --- Selected window ---
+        start_date, end_date = self._parse_range(request)
+        tz = timezone.get_current_timezone()
+        window_start = timezone.make_aware(datetime.combine(start_date, time.min), tz)
+        window_end = timezone.make_aware(
+            datetime.combine(end_date + timedelta(days=1), time.min), tz
+        )
+        window_days = (end_date - start_date).days + 1
+
+        presets = [
+            {'label': 'Last 7 days', 'start': today - timedelta(days=6)},
+            {'label': 'Last 30 days', 'start': today - timedelta(days=29)},
+            {'label': 'Last 90 days', 'start': today - timedelta(days=89)},
+        ]
+
+        # --- User stats (fixed windows, cheap) ---
         from django.contrib.auth import get_user_model
         User = get_user_model()
         total_users = User.objects.count()
-        users_with_shopify = User.objects.filter(shopify_customer_id__isnull=False).exclude(shopify_customer_id='').count()
-        new_users_7d = User.objects.filter(date_joined__gte=last_7).count()
-        new_users_30d = User.objects.filter(date_joined__gte=last_30).count()
+        users_with_shopify = User.objects.filter(
+            shopify_customer_id__isnull=False
+        ).exclude(shopify_customer_id='').count()
 
-        # Active users = distinct users with any event
         active_7d = UsageEvent.objects.filter(
             timestamp__gte=last_7, user__isnull=False
         ).values('user').distinct().count()
@@ -111,106 +169,98 @@ class AnalyticsDashboardAdmin(admin.ModelAdmin):
         # Stickiness: what share of the monthly actives came back today
         stickiness = round(active_today / active_30d * 100) if active_30d else 0
 
-        # --- Event counts ---
-        events_7d = UsageEvent.objects.filter(timestamp__gte=last_7)
-        events_30d = UsageEvent.objects.filter(timestamp__gte=last_30)
-        total_events = UsageEvent.objects.count()
-
-        events_by_type_7d = list(
-            events_7d.values('event_type')
-            .annotate(count=Count('id'))
-            .order_by('-count')
+        # --- Window-driven stats ---
+        events_window = UsageEvent.objects.filter(
+            timestamp__gte=window_start, timestamp__lt=window_end
         )
-        events_by_type_30d = list(
-            events_30d.values('event_type')
+        events_window_count = events_window.count()
+        active_window = events_window.filter(
+            user__isnull=False
+        ).values('user').distinct().count()
+        new_users_window = User.objects.filter(
+            date_joined__gte=window_start, date_joined__lt=window_end
+        ).count()
+
+        events_by_type = list(
+            events_window.values('event_type')
             .annotate(count=Count('id'), users=Count('user', distinct=True))
             .order_by('-count')
         )
-
-        # Friendly labels
         type_labels = dict(UsageEvent.EVENT_TYPES)
-        for item in events_by_type_7d:
+        max_count = max((e['count'] for e in events_by_type), default=1)
+        for item in events_by_type:
             item['label'] = type_labels.get(item['event_type'], item['event_type'])
-        for item in events_by_type_30d:
-            item['label'] = type_labels.get(item['event_type'], item['event_type'])
+            item['bar_width'] = int(item['count'] / max_count * 100)
 
-        # Max count for bar widths
-        max_count_7d = max((e['count'] for e in events_by_type_7d), default=1)
-        max_count_30d = max((e['count'] for e in events_by_type_30d), default=1)
-        for item in events_by_type_7d:
-            item['bar_width'] = int(item['count'] / max_count_7d * 100)
-        for item in events_by_type_30d:
-            item['bar_width'] = int(item['count'] / max_count_30d * 100)
-
-        # --- Daily active users (last 30 days) ---
+        # --- Daily charts over the window ---
         daily_active = list(
-            UsageEvent.objects.filter(timestamp__gte=last_30, user__isnull=False)
+            events_window.filter(user__isnull=False)
             .annotate(date=TruncDate('timestamp'))
             .values('date')
             .annotate(users=Count('user', distinct=True))
             .order_by('date')
         )
-
-        # --- Daily events (last 30 days) ---
         daily_events = list(
-            UsageEvent.objects.filter(timestamp__gte=last_30)
+            events_window
             .annotate(date=TruncDate('timestamp'))
             .values('date')
             .annotate(count=Count('id'))
             .order_by('date')
         )
-
-        # Fill gaps for charts
         daily_active_map = {d['date']: d['users'] for d in daily_active}
         daily_events_map = {d['date']: d['count'] for d in daily_events}
 
+        label_step = max(1, window_days // 7)
         chart_days = []
-        for i in range(30, -1, -1):
-            day = today - timedelta(days=i)
+        for i in range(window_days):
+            day = start_date + timedelta(days=i)
             chart_days.append({
                 'date': day,
                 'label': day.strftime('%d/%m'),
+                'show_label': i % label_step == 0,
                 'active_users': daily_active_map.get(day, 0),
                 'events': daily_events_map.get(day, 0),
             })
-
         max_daily_users = max((d['active_users'] for d in chart_days), default=1) or 1
         max_daily_events = max((d['events'] for d in chart_days), default=1) or 1
         for d in chart_days:
             d['user_bar_height'] = int(d['active_users'] / max_daily_users * 100)
             d['event_bar_height'] = int(d['events'] / max_daily_events * 100)
 
-        # --- Key feature metrics ---
-        from recommendations.models import Favorite, UntappdProfile
+        # --- Key feature metrics (all time) ---
+        from recommendations.models import Favorite, SixpackCheckout, UntappdProfile
         from loyalty.models import Redemption
 
         total_favorites = Favorite.objects.count()
         total_untappd = UntappdProfile.objects.count()
         total_redemptions = Redemption.objects.filter(status='completed').count()
 
-        # --- Revenue (30d, cached — Shopify round-trips are slow) ---
-        from django.core.cache import cache
+        # --- Revenue (built by Celery, cached per range) ---
+        revenue_status, revenue, revenue_built_at = self._ensure_revenue_report(
+            start_date, end_date
+        )
+        sixpack_minted = SixpackCheckout.objects.filter(
+            created_at__gte=window_start, created_at__lt=window_end
+        ).count()
 
-        revenue = cache.get('analytics:revenue:v3')
-        if revenue is None:
-            revenue = self._build_revenue_stats(last_30)
-            cache.set('analytics:revenue:v3', revenue, 60 * 30)
-
-        # --- Conversion funnels (30d): usage events → mints → paid orders ---
+        # --- Conversion funnels (window): usage events → mints → paid orders ---
         def _users_and_count(event_type):
-            agg = events_30d.filter(event_type=event_type).aggregate(
+            agg = events_window.filter(event_type=event_type).aggregate(
                 count=Count('id'), users=Count('user', distinct=True)
             )
             return {'count': agg['count'] or 0, 'users': agg['users'] or 0}
 
-        app_shop_orders = revenue['app_shop']['orders'] if revenue['app_shop'] else None
         funnels = [
             {
                 'name': 'App Shop',
                 'steps': [
                     {'label': 'Views', **_users_and_count('app_shop_view')},
                     {'label': 'Checkouts', **_users_and_count('app_shop_checkout')},
-                    {'label': 'Paid orders', 'count': app_shop_orders, 'users': None},
+                    {
+                        'label': 'Paid orders',
+                        'count': revenue['app_shop']['orders'] if revenue else None,
+                        'users': None,
+                    },
                 ],
             },
             {
@@ -220,7 +270,7 @@ class AnalyticsDashboardAdmin(admin.ModelAdmin):
                     {'label': 'Packs minted', **_users_and_count('sixpack_checkout')},
                     {
                         'label': 'Bought',
-                        'count': revenue['sixpack']['redeemed'],
+                        'count': revenue['sixpack']['orders'] if revenue else None,
                         'users': None,
                     },
                 ],
@@ -235,11 +285,11 @@ class AnalyticsDashboardAdmin(admin.ModelAdmin):
             },
         ]
 
-        # --- Top screens (30d, from screen_view metadata) ---
+        # --- Top screens (window, from screen_view metadata) ---
         from django.db.models.fields.json import KeyTextTransform
 
         top_screens = list(
-            events_30d.filter(event_type='screen_view')
+            events_window.filter(event_type='screen_view')
             .annotate(screen=KeyTextTransform('screen', 'metadata'))
             .exclude(screen__isnull=True)
             .values('screen')
@@ -272,9 +322,9 @@ class AnalyticsDashboardAdmin(admin.ModelAdmin):
         # --- Recent events ---
         recent_events = UsageEvent.objects.select_related('user')[:15]
 
-        # --- Top users (last 30 days) ---
+        # --- Top users (window) ---
         top_users = list(
-            events_30d.filter(user__isnull=False)
+            events_window.filter(user__isnull=False)
             .values('user__email')
             .annotate(count=Count('id'))
             .order_by('-count')[:10]
@@ -283,26 +333,29 @@ class AnalyticsDashboardAdmin(admin.ModelAdmin):
         context = {
             **self.admin_site.each_context(request),
             'title': 'Usage Analytics Dashboard',
+            'start_date': start_date,
+            'end_date': end_date,
+            'today': today,
+            'window_days': window_days,
+            'presets': presets,
             'total_users': total_users,
             'users_with_shopify': users_with_shopify,
-            'new_users_7d': new_users_7d,
-            'new_users_30d': new_users_30d,
+            'new_users_window': new_users_window,
             'stickiness': stickiness,
             'active_today': active_today,
             'active_7d': active_7d,
             'active_30d': active_30d,
-            'total_events': total_events,
-            'events_7d_count': events_7d.count(),
-            'events_30d_count': events_30d.count(),
-            'events_by_type_7d': events_by_type_7d,
-            'events_by_type_30d': events_by_type_30d,
+            'active_window': active_window,
+            'events_window_count': events_window_count,
+            'events_by_type': events_by_type,
             'chart_days': chart_days,
-            'max_daily_users': max_daily_users,
-            'max_daily_events': max_daily_events,
             'total_favorites': total_favorites,
             'total_untappd': total_untappd,
             'total_redemptions': total_redemptions,
+            'revenue_status': revenue_status,
             'revenue': revenue,
+            'revenue_built_at': revenue_built_at,
+            'sixpack_minted': sixpack_minted,
             'funnels': funnels,
             'top_screens': top_screens,
             'failed_sync_count': failed_syncs.count(),

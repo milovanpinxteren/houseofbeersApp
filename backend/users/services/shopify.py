@@ -531,9 +531,10 @@ class ShopifyService:
         'BDAY-': 'birthday',   # birthday gift codes
     }
 
-    def get_app_sales_report(self, days: int = 30) -> Optional[dict]:
+    def get_app_sales_report(self, start_date: str, end_date: str) -> Optional[dict]:
         """
-        One scan of recent paid orders that attributes all app-driven money:
+        One scan of paid orders created in [start_date, end_date] (inclusive
+        ISO dates) that attributes all app-driven money:
 
         - app_shop: order lines on an App variant (option Editie=App). The App
           variant is only purchasable through the PWA, so these lines are
@@ -546,14 +547,19 @@ class ShopifyService:
           used one of its codes, the revenue on those orders and the € the
           codes discounted — i.e. what each program cost and touched.
 
-        Scans newest-first (bounded at 2500 orders; `truncated` flags when the
-        window held more, dropping only the oldest tail). Returns None when
-        the order query fails, so callers can distinguish 'no sales' from
-        'no data'.
+        Scans newest-first (bounded at 10000 orders; `truncated` flags when
+        the window held more, dropping only the oldest tail). Returns None
+        when the order query fails, so callers can distinguish 'no sales'
+        from 'no data'. Slow for big ranges — run it in a Celery task, not a
+        request cycle.
         """
-        from datetime import datetime, timedelta, timezone as dt_timezone
+        from datetime import date, timedelta
 
-        since = (datetime.now(dt_timezone.utc) - timedelta(days=days)).strftime('%Y-%m-%d')
+        end_exclusive = (date.fromisoformat(end_date) + timedelta(days=1)).isoformat()
+        order_filter = (
+            f"created_at:>={start_date} AND created_at:<{end_exclusive}"
+            f" AND financial_status:paid"
+        )
         query = """
         query appSalesReport($cursor: String, $q: String!) {
             orders(first: 250, after: $cursor, query: $q, sortKey: CREATED_AT, reverse: true) {
@@ -588,10 +594,10 @@ class ShopifyService:
         }
         truncated = True
         cursor = None
-        for _page in range(10):  # bounded: 2500 most recent orders max
+        for _page in range(40):  # bounded: 10000 most recent orders max
             data = self._graphql_request(
                 query,
-                {"cursor": cursor, "q": f"created_at:>={since} AND financial_status:paid"},
+                {"cursor": cursor, "q": order_filter},
             )
             if not data:
                 return None
