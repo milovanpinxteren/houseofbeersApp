@@ -48,45 +48,39 @@ class AnalyticsDashboardAdmin(admin.ModelAdmin):
 
     def _build_revenue_stats(self, since) -> dict:
         """
-        App-shop and sixpack revenue over the window. Every Shopify call is
-        best-effort: a failed lookup yields None fields (rendered as 'n/a'),
+        All app-attributed money over the window, from one Shopify order scan
+        (App-variant lines, source attributes, SIX-/HOB-/BDAY- codes).
+        Best-effort: a failed scan yields None fields (rendered as 'n/a'),
         never a broken dashboard.
         """
         from users.services.shopify import ShopifyService
         from recommendations.models import SixpackCheckout
 
-        service = ShopifyService()
-
         try:
-            app_shop = service.get_app_variant_sales(days=30)
+            report = ShopifyService().get_app_sales_report(days=30)
         except Exception:
-            app_shop = None
+            report = None
 
-        checkouts = SixpackCheckout.objects.filter(created_at__gte=since)
-        minted = checkouts.count()
-        redeemed = 0
-        sixpack_revenue = 0.0
-        usage_known = True
-        for checkout in checkouts.exclude(discount_code=''):
-            try:
-                usage = service.get_discount_code_usage(checkout.discount_code)
-            except Exception:
-                usage = None
-            if usage is None:
-                usage_known = False
-                continue
-            if usage > 0:
-                redeemed += 1
-                sixpack_revenue += float(checkout.charm_price)
+        minted = SixpackCheckout.objects.filter(created_at__gte=since).count()
+
+        if report is None:
+            return {
+                'app_shop': None,
+                'sixpack': {'minted': minted, 'redeemed': None, 'revenue': None},
+                'codes': None,
+                'truncated': False,
+            }
 
         return {
-            'app_shop': app_shop,  # {'units', 'revenue', 'orders'} or None
+            'app_shop': report['app_shop'],  # {'units', 'revenue', 'orders'}
             'sixpack': {
                 'minted': minted,
-                'redeemed': redeemed,
-                'revenue': round(sixpack_revenue, 2),
-                'usage_known': usage_known,
+                'redeemed': report['sixpack']['orders'],
+                'revenue': report['sixpack']['revenue'],
             },
+            # per feature: {'orders', 'revenue', 'discounted'}
+            'codes': report['codes'],
+            'truncated': report['truncated'],
         }
 
     def dashboard_view(self, request):
@@ -100,6 +94,8 @@ class AnalyticsDashboardAdmin(admin.ModelAdmin):
         User = get_user_model()
         total_users = User.objects.count()
         users_with_shopify = User.objects.filter(shopify_customer_id__isnull=False).exclude(shopify_customer_id='').count()
+        new_users_7d = User.objects.filter(date_joined__gte=last_7).count()
+        new_users_30d = User.objects.filter(date_joined__gte=last_30).count()
 
         # Active users = distinct users with any event
         active_7d = UsageEvent.objects.filter(
@@ -111,6 +107,9 @@ class AnalyticsDashboardAdmin(admin.ModelAdmin):
         active_today = UsageEvent.objects.filter(
             timestamp__date=today, user__isnull=False
         ).values('user').distinct().count()
+
+        # Stickiness: what share of the monthly actives came back today
+        stickiness = round(active_today / active_30d * 100) if active_30d else 0
 
         # --- Event counts ---
         events_7d = UsageEvent.objects.filter(timestamp__gte=last_7)
@@ -124,7 +123,7 @@ class AnalyticsDashboardAdmin(admin.ModelAdmin):
         )
         events_by_type_30d = list(
             events_30d.values('event_type')
-            .annotate(count=Count('id'))
+            .annotate(count=Count('id'), users=Count('user', distinct=True))
             .order_by('-count')
         )
 
@@ -192,10 +191,83 @@ class AnalyticsDashboardAdmin(admin.ModelAdmin):
         # --- Revenue (30d, cached — Shopify round-trips are slow) ---
         from django.core.cache import cache
 
-        revenue = cache.get('analytics:revenue:v2')
+        revenue = cache.get('analytics:revenue:v3')
         if revenue is None:
             revenue = self._build_revenue_stats(last_30)
-            cache.set('analytics:revenue:v2', revenue, 60 * 30)
+            cache.set('analytics:revenue:v3', revenue, 60 * 30)
+
+        # --- Conversion funnels (30d): usage events → mints → paid orders ---
+        def _users_and_count(event_type):
+            agg = events_30d.filter(event_type=event_type).aggregate(
+                count=Count('id'), users=Count('user', distinct=True)
+            )
+            return {'count': agg['count'] or 0, 'users': agg['users'] or 0}
+
+        app_shop_orders = revenue['app_shop']['orders'] if revenue['app_shop'] else None
+        funnels = [
+            {
+                'name': 'App Shop',
+                'steps': [
+                    {'label': 'Views', **_users_and_count('app_shop_view')},
+                    {'label': 'Checkouts', **_users_and_count('app_shop_checkout')},
+                    {'label': 'Paid orders', 'count': app_shop_orders, 'users': None},
+                ],
+            },
+            {
+                'name': 'Sixpack',
+                'steps': [
+                    {'label': 'Spins', **_users_and_count('sixpack_generate')},
+                    {'label': 'Packs minted', **_users_and_count('sixpack_checkout')},
+                    {
+                        'label': 'Bought',
+                        'count': revenue['sixpack']['redeemed'],
+                        'users': None,
+                    },
+                ],
+            },
+            {
+                'name': 'Random Beer',
+                'steps': [
+                    {'label': 'Spins', **_users_and_count('random_beer')},
+                    {'label': 'Bought', 'count': None, 'users': None,
+                     'note': 'not measurable — flow opens an untagged product page'},
+                ],
+            },
+        ]
+
+        # --- Top screens (30d, from screen_view metadata) ---
+        from django.db.models.fields.json import KeyTextTransform
+
+        top_screens = list(
+            events_30d.filter(event_type='screen_view')
+            .annotate(screen=KeyTextTransform('screen', 'metadata'))
+            .exclude(screen__isnull=True)
+            .values('screen')
+            .annotate(count=Count('id'), users=Count('user', distinct=True))
+            .order_by('-count')[:12]
+        )
+        max_screen_count = max((s['count'] for s in top_screens), default=1)
+        for s in top_screens:
+            s['bar_width'] = int(s['count'] / max_screen_count * 100)
+
+        # --- Sync health / errors ---
+        from loyalty.models import SyncState
+
+        failed_syncs = SyncState.objects.filter(sync_status='failed')
+        stuck_syncs = SyncState.objects.filter(
+            sync_status='in_progress',
+            sync_started_at__lt=now - timedelta(minutes=10),
+        ).count()
+        # Partial sync runs every 3h; a linked user not synced for >24h is broken
+        stale_syncs = SyncState.objects.filter(
+            user__shopify_customer_id__isnull=False,
+            last_successful_sync__lt=now - timedelta(hours=24),
+        ).exclude(user__shopify_customer_id='').count()
+        recent_sync_errors = list(
+            failed_syncs.exclude(last_error='')
+            .select_related('user')
+            .order_by('-updated_at')[:5]
+        )
 
         # --- Recent events ---
         recent_events = UsageEvent.objects.select_related('user')[:15]
@@ -213,6 +285,9 @@ class AnalyticsDashboardAdmin(admin.ModelAdmin):
             'title': 'Usage Analytics Dashboard',
             'total_users': total_users,
             'users_with_shopify': users_with_shopify,
+            'new_users_7d': new_users_7d,
+            'new_users_30d': new_users_30d,
+            'stickiness': stickiness,
             'active_today': active_today,
             'active_7d': active_7d,
             'active_30d': active_30d,
@@ -228,6 +303,12 @@ class AnalyticsDashboardAdmin(admin.ModelAdmin):
             'total_untappd': total_untappd,
             'total_redemptions': total_redemptions,
             'revenue': revenue,
+            'funnels': funnels,
+            'top_screens': top_screens,
+            'failed_sync_count': failed_syncs.count(),
+            'stuck_sync_count': stuck_syncs,
+            'stale_sync_count': stale_syncs,
+            'recent_sync_errors': recent_sync_errors,
             'recent_events': recent_events,
             'top_users': top_users,
         }

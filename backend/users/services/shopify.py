@@ -523,26 +523,48 @@ class ShopifyService:
             'deposit': metafields.get('deposit') or '',
         }
 
-    def get_app_variant_sales(self, days: int = 30) -> Optional[dict]:
-        """
-        Sum app-shop sales: order lines on an App variant (option Editie=App).
+    # Every discount code the app mints carries one of these prefixes, so a
+    # code on an order attributes that order to the app feature that made it.
+    APP_CODE_PREFIXES = {
+        'SIX-': 'sixpack',     # sixpack generator packs
+        'HOB-': 'loyalty',     # loyalty reward redemptions
+        'BDAY-': 'birthday',   # birthday gift codes
+    }
 
-        The App variant is only purchasable through the PWA, so these lines
-        are exactly the app-shop's orders — no attribution guesswork needed.
-        Scans paid orders newest-first (bounded at 2500; if the window holds
-        more, only the oldest tail is dropped); returns None when the order
-        query fails, so callers can distinguish 'no sales' from 'no data'.
+    def get_app_sales_report(self, days: int = 30) -> Optional[dict]:
+        """
+        One scan of recent paid orders that attributes all app-driven money:
+
+        - app_shop: order lines on an App variant (option Editie=App). The App
+          variant is only purchasable through the PWA, so these lines are
+          exactly the app-shop's sales. Revenue is the discounted line total
+          (gross of order-level discount codes).
+        - sixpack: orders redeeming a SIX- code or tagged
+          attributes[source]=app-sixpack. Revenue is the order subtotal
+          actually paid (after discounts, before shipping).
+        - codes: per app feature (sixpack/loyalty/birthday), how many orders
+          used one of its codes, the revenue on those orders and the € the
+          codes discounted — i.e. what each program cost and touched.
+
+        Scans newest-first (bounded at 2500 orders; `truncated` flags when the
+        window held more, dropping only the oldest tail). Returns None when
+        the order query fails, so callers can distinguish 'no sales' from
+        'no data'.
         """
         from datetime import datetime, timedelta, timezone as dt_timezone
 
         since = (datetime.now(dt_timezone.utc) - timedelta(days=days)).strftime('%Y-%m-%d')
         query = """
-        query appVariantSales($cursor: String, $q: String!) {
+        query appSalesReport($cursor: String, $q: String!) {
             orders(first: 250, after: $cursor, query: $q, sortKey: CREATED_AT, reverse: true) {
                 pageInfo { hasNextPage endCursor }
                 edges {
                     node {
                         name
+                        customAttributes { key value }
+                        discountCodes
+                        currentSubtotalPriceSet { shopMoney { amount } }
+                        totalDiscountsSet { shopMoney { amount } }
                         lineItems(first: 50) {
                             edges {
                                 node {
@@ -558,9 +580,13 @@ class ShopifyService:
         }
         """
 
-        units = 0
-        revenue = 0.0
-        order_names = set()
+        app_shop = {'units': 0, 'revenue': 0.0, 'orders': set()}
+        sixpack = {'orders': set(), 'revenue': 0.0}
+        codes = {
+            feature: {'orders': 0, 'revenue': 0.0, 'discounted': 0.0}
+            for feature in self.APP_CODE_PREFIXES.values()
+        }
+        truncated = True
         cursor = None
         for _page in range(10):  # bounded: 2500 most recent orders max
             data = self._graphql_request(
@@ -572,6 +598,16 @@ class ShopifyService:
             conn = data.get('orders') or {}
             for edge in conn.get('edges') or []:
                 node = edge['node']
+                name = node.get('name')
+                subtotal = float(((node.get('currentSubtotalPriceSet') or {})
+                                  .get('shopMoney') or {}).get('amount') or 0)
+                discounts = float(((node.get('totalDiscountsSet') or {})
+                                   .get('shopMoney') or {}).get('amount') or 0)
+                attrs = {
+                    a['key']: a['value']
+                    for a in node.get('customAttributes') or []
+                }
+
                 for li_edge in (node.get('lineItems') or {}).get('edges') or []:
                     li = li_edge['node']
                     options = {
@@ -579,36 +615,49 @@ class ShopifyService:
                         for o in (li.get('variant') or {}).get('selectedOptions') or []
                     }
                     if options.get('Editie') == 'App':
-                        units += li.get('quantity') or 0
+                        app_shop['units'] += li.get('quantity') or 0
                         amount = ((li.get('discountedTotalSet') or {})
                                   .get('shopMoney') or {}).get('amount')
-                        revenue += float(amount or 0)
-                        order_names.add(node.get('name'))
+                        app_shop['revenue'] += float(amount or 0)
+                        app_shop['orders'].add(name)
+
+                order_features = set()
+                for code in node.get('discountCodes') or []:
+                    for prefix, feature in self.APP_CODE_PREFIXES.items():
+                        if code.upper().startswith(prefix):
+                            order_features.add(feature)
+                for feature in order_features:
+                    codes[feature]['orders'] += 1
+                    codes[feature]['revenue'] += subtotal
+                    codes[feature]['discounted'] += discounts
+
+                if 'sixpack' in order_features or attrs.get('source') == 'app-sixpack':
+                    sixpack['orders'].add(name)
+                    sixpack['revenue'] += subtotal
+
             page_info = conn.get('pageInfo') or {}
             if not page_info.get('hasNextPage'):
+                truncated = False
                 break
             cursor = page_info.get('endCursor')
 
-        return {'units': units, 'revenue': round(revenue, 2), 'orders': len(order_names)}
+        for feature in codes.values():
+            feature['revenue'] = round(feature['revenue'], 2)
+            feature['discounted'] = round(feature['discounted'], 2)
 
-    def get_discount_code_usage(self, code: str) -> Optional[int]:
-        """Usage count of a discount code (0 = minted but never redeemed)."""
-        query = """
-        query discountUsage($code: String!) {
-            codeDiscountNodeByCode(code: $code) {
-                codeDiscount {
-                    ... on DiscountCodeBasic { asyncUsageCount }
-                }
-            }
+        return {
+            'app_shop': {
+                'units': app_shop['units'],
+                'revenue': round(app_shop['revenue'], 2),
+                'orders': len(app_shop['orders']),
+            },
+            'sixpack': {
+                'orders': len(sixpack['orders']),
+                'revenue': round(sixpack['revenue'], 2),
+            },
+            'codes': codes,
+            'truncated': truncated,
         }
-        """
-        data = self._graphql_request(query, {"code": code})
-        if not data:
-            return None
-        node = data.get('codeDiscountNodeByCode')
-        if not node:
-            return None
-        return (node.get('codeDiscount') or {}).get('asyncUsageCount') or 0
 
     def create_basic_discount(
         self,

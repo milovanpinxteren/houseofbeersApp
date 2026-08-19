@@ -80,7 +80,7 @@
         transition: width 0.3s;
     }
     .dashboard .bar-chart-row .count {
-        width: 50px;
+        width: 90px;
         text-align: right;
         font-weight: bold;
         font-size: 14px;
@@ -199,6 +199,58 @@
         color: #417690;
         margin-left: 8px;
     }
+    .dashboard .stat-card.error .number { color: #dc3545; }
+    .dashboard .stat-card.ok .number { color: #28a745; }
+
+    .dashboard .funnel-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 0;
+        border-bottom: 1px solid #eee;
+        font-size: 13px;
+        flex-wrap: wrap;
+    }
+    .dashboard .funnel-row:last-child { border-bottom: none; }
+    .dashboard .funnel-row .funnel-name {
+        width: 110px;
+        font-weight: 600;
+        color: #333;
+        flex-shrink: 0;
+    }
+    .dashboard .funnel-step {
+        background: #e8f4f8;
+        border-radius: 6px;
+        padding: 6px 12px;
+        text-align: center;
+    }
+    .dashboard .funnel-step .step-number {
+        font-size: 18px;
+        font-weight: bold;
+        color: #417690;
+        line-height: 1.1;
+    }
+    .dashboard .funnel-step .step-label {
+        font-size: 11px;
+        color: #666;
+    }
+    .dashboard .funnel-arrow { color: #999; font-size: 16px; }
+    .dashboard .funnel-note {
+        font-size: 12px;
+        color: #999;
+        font-style: italic;
+    }
+    .dashboard .error-table td.error-msg {
+        font-family: monospace;
+        font-size: 11px;
+        color: #dc3545;
+        word-break: break-all;
+    }
+    .dashboard .sub-count {
+        font-size: 11px;
+        color: #999;
+        font-weight: normal;
+    }
 </style>
 
 <div class="dashboard">
@@ -226,9 +278,48 @@
             <div class="label">Active (30 days)</div>
         </div>
         <div class="stat-card">
-            <div class="number">{{ total_events }}</div>
-            <div class="label">Total Events</div>
+            <div class="number">{{ new_users_7d }} / {{ new_users_30d }}</div>
+            <div class="label">New Users (7d / 30d)</div>
         </div>
+        <div class="stat-card">
+            <div class="number">{{ stickiness }}%</div>
+            <div class="label">Stickiness (today / 30d actives)</div>
+        </div>
+    </div>
+
+    <!-- System health -->
+    <div class="section">
+        <h2>System Health</h2>
+        <div class="stats-grid" style="margin-bottom: 0;">
+            <div class="stat-card {% if failed_sync_count %}error{% else %}ok{% endif %}">
+                <div class="number">{{ failed_sync_count }}</div>
+                <div class="label">Failed Point Syncs</div>
+            </div>
+            <div class="stat-card {% if stuck_sync_count %}error{% else %}ok{% endif %}">
+                <div class="number">{{ stuck_sync_count }}</div>
+                <div class="label">Stuck Syncs (&gt;10 min in progress)</div>
+            </div>
+            <div class="stat-card {% if stale_sync_count %}warn{% else %}ok{% endif %}">
+                <div class="number">{{ stale_sync_count }}</div>
+                <div class="label">Linked Users Not Synced &gt;24h</div>
+            </div>
+        </div>
+        {% if recent_sync_errors %}
+        <table class="recent-table error-table" style="margin-top: 16px;">
+            <thead>
+                <tr><th>User</th><th>Last Error</th><th>When</th></tr>
+            </thead>
+            <tbody>
+                {% for state in recent_sync_errors %}
+                <tr>
+                    <td>{{ state.user.email }}</td>
+                    <td class="error-msg">{{ state.last_error|truncatechars:120 }}</td>
+                    <td>{{ state.updated_at|timesince }} ago</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
     </div>
 
     <!-- Feature adoption -->
@@ -267,14 +358,57 @@
             </div>
             {% endif %}
             <div class="stat-card highlight">
-                <div class="number">&euro;{{ revenue.sixpack.revenue }}</div>
-                <div class="label">Sixpack Revenue{% if not revenue.sixpack.usage_known %} (partial){% endif %}</div>
+                <div class="number">&euro;{{ revenue.sixpack.revenue|default_if_none:"n/a" }}</div>
+                <div class="label">Sixpack Revenue (paid)</div>
             </div>
             <div class="stat-card">
-                <div class="number">{{ revenue.sixpack.redeemed }} / {{ revenue.sixpack.minted }}</div>
+                <div class="number">{{ revenue.sixpack.redeemed|default_if_none:"?" }} / {{ revenue.sixpack.minted }}</div>
                 <div class="label">Sixpacks Bought / Minted</div>
             </div>
         </div>
+        {% if revenue.codes %}
+        <div class="stats-grid" style="margin: 16px 0 0 0;">
+            <div class="stat-card">
+                <div class="number">&euro;{{ revenue.codes.loyalty.revenue }}</div>
+                <div class="label">Revenue on Loyalty-Code Orders ({{ revenue.codes.loyalty.orders }} orders)</div>
+            </div>
+            <div class="stat-card warn">
+                <div class="number">&euro;{{ revenue.codes.loyalty.discounted }}</div>
+                <div class="label">Loyalty Rewards Cost (discounts given)</div>
+            </div>
+            <div class="stat-card">
+                <div class="number">&euro;{{ revenue.codes.birthday.revenue }}</div>
+                <div class="label">Revenue on Birthday-Code Orders ({{ revenue.codes.birthday.orders }} orders)</div>
+            </div>
+            <div class="stat-card warn">
+                <div class="number">&euro;{{ revenue.codes.birthday.discounted }}</div>
+                <div class="label">Birthday Gifts Cost (discounts given)</div>
+            </div>
+        </div>
+        {% endif %}
+        {% if revenue.truncated %}
+        <p style="color: #dc3545; font-size: 12px; margin: 12px 0 0 0;">
+            &#9888; Order scan hit its 2500-order bound — the oldest part of the window is not counted.
+        </p>
+        {% endif %}
+    </div>
+
+    <!-- Conversion funnels -->
+    <div class="section">
+        <h2>Conversion Funnels (Last 30 Days)</h2>
+        {% for funnel in funnels %}
+        <div class="funnel-row">
+            <div class="funnel-name">{{ funnel.name }}</div>
+            {% for step in funnel.steps %}
+            {% if not forloop.first %}<div class="funnel-arrow">&rarr;</div>{% endif %}
+            <div class="funnel-step">
+                <div class="step-number">{{ step.count|default_if_none:"?" }}</div>
+                <div class="step-label">{{ step.label }}{% if step.users %} &middot; {{ step.users }} users{% endif %}</div>
+            </div>
+            {% if step.note %}<div class="funnel-note">{{ step.note }}</div>{% endif %}
+            {% endfor %}
+        </div>
+        {% endfor %}
     </div>
 
     <!-- Daily activity chart -->
@@ -331,7 +465,7 @@
                 <div class="bar-container">
                     <div class="bar" style="width: {{ event.bar_width }}%;"></div>
                 </div>
-                <div class="count">{{ event.count }}</div>
+                <div class="count">{{ event.count }} <span class="sub-count">{{ event.users }}u</span></div>
             </div>
             {% empty %}
             <p style="color: #999; font-style: italic;">No events recorded yet.</p>
@@ -341,6 +475,22 @@
 
     <!-- Bottom row -->
     <div class="two-col">
+        <!-- Top screens -->
+        <div class="section">
+            <h2>Top Screens (Last 30 Days)</h2>
+            {% for screen in top_screens %}
+            <div class="bar-chart-row">
+                <div class="label" title="{{ screen.screen }}">{{ screen.screen }}</div>
+                <div class="bar-container">
+                    <div class="bar" style="width: {{ screen.bar_width }}%;"></div>
+                </div>
+                <div class="count">{{ screen.count }} <span class="sub-count">{{ screen.users }}u</span></div>
+            </div>
+            {% empty %}
+            <p style="color: #999; font-style: italic;">No screen views recorded yet.</p>
+            {% endfor %}
+        </div>
+
         <!-- Top users -->
         <div class="section">
             <h2>Most Active Users (Last 30 Days)</h2>
