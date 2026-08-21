@@ -22,6 +22,8 @@ import { getEvents, joinEvent, Event } from '../../src/api/events';
 import { getLoyaltySummary, LoyaltySummary } from '../../src/api/loyalty';
 import IOSInstallPrompt from '../../src/components/IOSInstallPrompt';
 
+const WHATSAPP_COMMUNITY_URL = 'https://chat.whatsapp.com/Fxm21pECUyD0dbvJpidnXe';
+
 const notificationIcons: Record<string, keyof typeof Ionicons.glyphMap> = {
   announcement: 'megaphone',
   promotion: 'pricetag',
@@ -278,6 +280,17 @@ export default function HomeScreen() {
               <Text style={styles.navSubtitle}>{t('home.communityHint')}</Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+          </Card>
+
+          <Card onPress={() => Linking.openURL(WHATSAPP_COMMUNITY_URL)} style={styles.navCard}>
+            <View style={styles.navIconWrap}>
+              <Ionicons name="logo-whatsapp" size={24} color={colors.primary} />
+            </View>
+            <View style={styles.navText}>
+              <Text style={styles.navTitle}>{t('home.whatsapp')}</Text>
+              <Text style={styles.navSubtitle}>{t('home.whatsappHint')}</Text>
+            </View>
+            <Ionicons name="open-outline" size={18} color={colors.textMuted} />
           </Card>
         </>
       )}

@@ -170,6 +170,8 @@ export default {
     yourPoints: 'Your points',
     pointsHint: 'View rewards and your history',
     communityHint: 'Chat with fellow beerhunters',
+    whatsapp: 'WhatsApp community',
+    whatsappHint: 'Join the group for sales and news',
   },
 
   // iOS Install Prompt

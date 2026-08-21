@@ -169,6 +169,8 @@ export default {
     yourPoints: 'Jouw punten',
     pointsHint: 'Bekijk beloningen en je geschiedenis',
     communityHint: 'Praat mee met andere beerhunters',
+    whatsapp: 'WhatsApp-community',
+    whatsappHint: 'Word lid van de groep voor sales en nieuws',
   },
 
   // iOS Install Prompt
