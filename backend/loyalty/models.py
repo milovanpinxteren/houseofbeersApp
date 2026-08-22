@@ -577,3 +577,6 @@ class NotificationRead(models.Model):
 
     def __str__(self):
         return f"{self.user.email} read {self.notification.title}"
+
+
+from .models_campaigns import *  # noqa

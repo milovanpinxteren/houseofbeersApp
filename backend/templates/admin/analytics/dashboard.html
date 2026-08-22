@@ -443,6 +443,14 @@
                 <div class="number">&euro;{{ revenue.codes.birthday.discounted }}</div>
                 <div class="label">Birthday Gifts Cost (discounts given)</div>
             </div>
+            <div class="stat-card">
+                <div class="number">&euro;{{ revenue.codes.raffle.revenue|default:'0.0' }}</div>
+                <div class="label">Revenue on Raffle-Prize Orders ({{ revenue.codes.raffle.orders|default:0 }} orders)</div>
+            </div>
+            <div class="stat-card warn">
+                <div class="number">&euro;{{ revenue.codes.raffle.discounted|default:'0.0' }}</div>
+                <div class="label">Raffle Prizes Cost (discounts given)</div>
+            </div>
         </div>
         {% if revenue.truncated %}
         <p style="color: #dc3545; font-size: 12px; margin: 12px 0 0 0;">

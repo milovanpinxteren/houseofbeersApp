@@ -1,0 +1,292 @@
+{% extends "loyalty/studio/base.html" %}
+{% load static %}
+
+{% block studio_crumb %} &rsaquo; {% if campaign %}{{ campaign.name }}{% else %}Nieuwe campagne{% endif %}{% endblock %}
+
+{% block studio_content %}
+<div class="page-head">
+  <div>
+    <h1>{% if campaign %}{{ campaign.name }} bewerken{% else %}Nieuwe campagne{% endif %}</h1>
+    <p class="page-sub">Stel de voorwaarden en de actie in; de preview laat daarna zien wie er kwalificeert.</p>
+  </div>
+  <div class="actions">
+    {% if campaign %}
+    <a class="btn secondary" href="{% url 'studio:campaign_preview' campaign.pk %}">Naar preview</a>
+    {% endif %}
+    <a class="btn secondary" href="{% url 'studio:campaign_list' %}">Terug naar overzicht</a>
+  </div>
+</div>
+
+{% if is_active_campaign %}
+<div class="banner warn">
+  <strong>Let op:</strong> deze campagne is <strong>actief</strong>. Wijzigingen gelden direct
+  voor echte gebruikers en bestellingen die al verwerkt zijn worden niet opnieuw beoordeeld.
+</div>
+{% endif %}
+
+{% if errors %}
+<div class="banner error">
+  <strong>Het formulier kan nog niet opgeslagen worden:</strong>
+  <ul>
+    {% for error in errors %}<li>{{ error }}</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<form method="post" id="builder-form"
+      data-sentence-url="{% url 'studio:rule_sentence' %}"
+      data-search-url="{% url 'studio:product_search' %}">
+  {% csrf_token %}
+
+  <div class="panel">
+    <h2>Basis</h2>
+    <div class="field">
+      <label for="id_name">Naam</label>
+      <input type="text" id="id_name" name="name" value="{{ form.name }}" maxlength="200">
+    </div>
+    <div class="field">
+      <label for="id_description">Interne omschrijving (optioneel)</label>
+      <textarea id="id_description" name="description">{{ form.description }}</textarea>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="id_window_start">Actieperiode van</label>
+        <input type="datetime-local" id="id_window_start" name="window_start" value="{{ form.window_start }}">
+      </div>
+      <div class="field">
+        <label for="id_window_end">tot en met</label>
+        <input type="datetime-local" id="id_window_end" name="window_end" value="{{ form.window_end }}">
+      </div>
+    </div>
+    <p class="hint" style="color: var(--hob-muted); font-size: 12px;">
+      Bestellingen met een besteldatum binnen deze periode tellen mee — ook bestellingen
+      uit het verleden (de backfill scant de hele periode).
+    </p>
+  </div>
+
+  <div class="panel">
+    <h2>Actie</h2>
+    <div class="field">
+      <label for="id_action_type">Wat krijgt de klant?</label>
+      <select id="id_action_type" name="action_type">
+        <option value="">— kies —</option>
+        <option value="points" {% if form.action_type == 'points' %}selected{% endif %}>Punten</option>
+        <option value="discount_code" {% if form.action_type == 'discount_code' %}selected{% endif %}>Kortingscode</option>
+        <option value="raffle" {% if form.action_type == 'raffle' %}selected{% endif %}>Lot in een loting</option>
+      </select>
+    </div>
+
+    <div data-action-section="points" hidden>
+      <div class="field-row">
+        <div class="field">
+          <label for="id_points_amount">Aantal punten</label>
+          <input type="number" id="id_points_amount" name="points_amount" min="1" value="{{ form.points_amount }}">
+        </div>
+        <div class="field">
+          <label for="id_points_mode">Toekenning</label>
+          <select id="id_points_mode" name="points_mode">
+            {% for value, label in points_mode_choices %}
+            <option value="{{ value }}" {% if form.points_mode == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div data-action-section="raffle" hidden>
+      <div class="field-row">
+        <div class="field">
+          <label for="id_prize_name">Prijs</label>
+          <input type="text" id="id_prize_name" name="prize_name" value="{{ form.prize_name }}" maxlength="200" placeholder="bijv. Magnum fles Westvleteren">
+        </div>
+        <div class="field">
+          <label for="id_num_winners">Aantal winnaars</label>
+          <input type="number" id="id_num_winners" name="num_winners" min="1" value="{{ form.num_winners }}">
+        </div>
+      </div>
+      <div class="field">
+        <label for="id_prize_description">Prijsomschrijving (zichtbaar in de app)</label>
+        <textarea id="id_prize_description" name="prize_description">{{ form.prize_description }}</textarea>
+      </div>
+      <div class="field">
+        <label for="id_prize_image_url">Afbeelding-URL van de prijs (optioneel)</label>
+        <input type="url" id="id_prize_image_url" name="prize_image_url" value="{{ form.prize_image_url }}">
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="id_draw_at">Trekking op (leeg = handmatig trekken)</label>
+          <input type="datetime-local" id="id_draw_at" name="draw_at" value="{{ form.draw_at }}">
+        </div>
+        <div class="field">
+          <label for="id_entry_mode">Loten per deelnemer</label>
+          <select id="id_entry_mode" name="entry_mode">
+            {% for value, label in entry_mode_choices %}
+            <option value="{{ value }}" {% if form.entry_mode == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="id_fulfillment_type">Prijsafhandeling</label>
+          <select id="id_fulfillment_type" name="fulfillment_type">
+            {% for value, label in fulfillment_type_choices %}
+            <option value="{{ value }}" {% if form.fulfillment_type == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="field checkbox">
+        <input type="checkbox" id="id_send_reminder" name="send_reminder" {% if form.send_reminder %}checked{% endif %}>
+        <label for="id_send_reminder">Herinnering sturen ± 3 uur voor de trekking</label>
+      </div>
+    </div>
+
+    <div data-discount-section hidden>
+      <h2 style="margin-top: 18px;">Kortingscode-instellingen</h2>
+      <div class="field-row">
+        <div class="field">
+          <label for="id_discount_type">Kortingstype</label>
+          <select id="id_discount_type" name="discount_type">
+            <option value="">— kies —</option>
+            {% for value, label in discount_type_choices %}
+            <option value="{{ value }}" {% if form.discount_type == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="id_discount_value">Waarde (&euro; of %)</label>
+          <input type="number" step="0.01" min="0" id="id_discount_value" name="discount_value" value="{{ form.discount_value }}">
+        </div>
+        <div class="field">
+          <label for="id_discount_validity_days">Geldigheid (dagen)</label>
+          <input type="number" min="1" id="id_discount_validity_days" name="discount_validity_days" value="{{ form.discount_validity_days }}">
+        </div>
+      </div>
+      <div class="field">
+        <label for="id_discount_product_gid">Shopify product-ID of GID (alleen bij gratis product)</label>
+        <input type="text" id="id_discount_product_gid" name="discount_product_gid" value="{{ form.discount_product_gid }}" placeholder="123456789 of gid://shopify/Product/123456789">
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Producten die meetellen</h2>
+    <p class="hint" style="color: var(--hob-muted); font-size: 12px; margin-top: 0;">
+      Geen regels = elke betaalde bestelling in de periode telt. Zoek een product of voeg
+      handmatig een regel toe (SKU, product-ID, titel, tag of collectie).
+    </p>
+
+    <div class="field">
+      <label for="id_product_search">Zoek in de winkel</label>
+      <input type="search" id="id_product_search" placeholder="Typ een producttitel, of plak één of meer product-ID’s…" autocomplete="off">
+      <div class="search-status" id="search-status" hidden></div>
+      <div class="search-results" id="search-results" hidden></div>
+    </div>
+
+    <div id="matcher-rows"></div>
+    <button type="button" class="btn secondary" id="add-matcher">+ Regel toevoegen</button>
+    <input type="hidden" name="product_matchers" id="id_product_matchers" value="{{ form.product_matchers }}">
+  </div>
+
+  <details class="more" {% if form.min_distinct_products != '1' or form.min_total_quantity != '1' or form.min_order_value or form.min_total_spend or form.min_order_count %}open{% endif %}>
+    <summary>Meer voorwaarden (aantallen &amp; bedragen)</summary>
+    <div class="field-row">
+      <div class="field">
+        <label for="id_min_distinct_products">Min. verschillende producten (k-van-n)</label>
+        <input type="number" min="1" id="id_min_distinct_products" name="min_distinct_products" value="{{ form.min_distinct_products }}">
+        <div class="hint">Bijv. 2 bij 3 productregels = "koop er minstens 2 van de 3". Telt op over meerdere bestellingen.</div>
+      </div>
+      <div class="field">
+        <label for="id_min_total_quantity">Min. totaal aantal items</label>
+        <input type="number" min="1" id="id_min_total_quantity" name="min_total_quantity" value="{{ form.min_total_quantity }}">
+      </div>
+      <div class="field">
+        <label for="id_min_order_count">Min. aantal bestellingen</label>
+        <input type="number" min="1" id="id_min_order_count" name="min_order_count" value="{{ form.min_order_count }}">
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="id_min_order_value">Min. waarde van één bestelling (&euro;)</label>
+        <input type="number" step="0.01" min="0" id="id_min_order_value" name="min_order_value" value="{{ form.min_order_value }}">
+      </div>
+      <div class="field">
+        <label for="id_min_total_spend">Min. totale besteding in de periode (&euro;)</label>
+        <input type="number" step="0.01" min="0" id="id_min_total_spend" name="min_total_spend" value="{{ form.min_total_spend }}">
+      </div>
+    </div>
+  </details>
+
+  <details class="more" {% if form.first_order_only or form.only_after_registration or form.requires_untappd or form.min_points_balance or form.registered_after %}open{% endif %}>
+    <summary>Klantvoorwaarden</summary>
+    <div class="field checkbox">
+      <input type="checkbox" id="id_first_order_only" name="first_order_only" {% if form.first_order_only %}checked{% endif %}>
+      <label for="id_first_order_only">Alleen de allereerste bestelling van de klant telt</label>
+    </div>
+    <div class="field checkbox">
+      <input type="checkbox" id="id_only_after_registration" name="only_after_registration" {% if form.only_after_registration %}checked{% endif %}>
+      <label for="id_only_after_registration">Alleen bestellingen ná registratie in de app</label>
+    </div>
+    <div class="field checkbox">
+      <input type="checkbox" id="id_requires_untappd" name="requires_untappd" {% if form.requires_untappd %}checked{% endif %}>
+      <label for="id_requires_untappd">Gekoppeld Untappd-account vereist</label>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="id_min_points_balance">Min. huidig puntensaldo</label>
+        <input type="number" id="id_min_points_balance" name="min_points_balance" value="{{ form.min_points_balance }}">
+      </div>
+      <div class="field">
+        <label for="id_registered_after">Geregistreerd na</label>
+        <input type="datetime-local" id="id_registered_after" name="registered_after" value="{{ form.registered_after }}">
+      </div>
+    </div>
+  </details>
+
+  <div class="panel">
+    <h2>Regelzin voor klanten</h2>
+    <div class="sentence-box muted" id="sentence-preview">Vul de periode en actie in om de zin te zien…</div>
+    <div class="field">
+      <label for="id_rule_sentence">Eigen tekst (leeg laten = automatisch gegenereerd)</label>
+      <textarea id="id_rule_sentence" name="rule_sentence">{{ form.rule_sentence }}</textarea>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Notificatie bij kwalificatie</h2>
+    <div class="field checkbox">
+      <input type="checkbox" id="id_notify_on_qualify" name="notify_on_qualify" {% if form.notify_on_qualify %}checked{% endif %}>
+      <label for="id_notify_on_qualify">Stuur een notificatie zodra iemand kwalificeert</label>
+    </div>
+    <div class="field-row">
+      <div style="flex: 1; min-width: 260px;">
+        <div class="field">
+          <label for="id_qualify_title">Titel (leeg = standaardtekst)</label>
+          <input type="text" id="id_qualify_title" name="qualify_title" value="{{ form.qualify_title }}" maxlength="200">
+        </div>
+        <div class="field">
+          <label for="id_qualify_body">Bericht (leeg = standaardtekst)</label>
+          <textarea id="id_qualify_body" name="qualify_body">{{ form.qualify_body }}</textarea>
+        </div>
+      </div>
+      <div style="flex: 1; min-width: 260px;">
+        <div class="field"><label>Zo ziet de push eruit</label></div>
+        <div class="push-mock">
+          <div class="app-icon">HB</div>
+          <div>
+            <div class="push-app">House of Beers</div>
+            <div class="push-title" id="push-mock-title">…</div>
+            <div class="push-body" id="push-mock-body">…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <button type="submit" class="btn">{% if campaign %}Opslaan{% else %}Campagne aanmaken{% endif %}</button>
+    <a class="btn secondary" href="{% url 'studio:campaign_list' %}">Annuleren</a>
+  </div>
+</form>
+
+<script src="{% static 'loyalty/studio/builder.js' %}"></script>
+{% endblock %}

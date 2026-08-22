@@ -1,0 +1,65 @@
+{% extends "loyalty/studio/base.html" %}
+
+{% block studio_content %}
+<div class="page-head">
+  <div>
+    <h1>Campagne Studio</h1>
+    <p class="page-sub">Acties, kortingen en lotingen voor de app — bouwen, testen, live volgen.</p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="{% url 'studio:campaign_create' %}">+ Nieuwe campagne</a>
+  </div>
+</div>
+
+{% if rows %}
+<div class="campaign-grid">
+  {% for row in rows %}
+  <div class="campaign-card">
+    <div class="card-top">
+      <h3>{{ row.campaign.name }}</h3>
+      <span class="chip {{ row.campaign.status }}">{{ row.status_label }}</span>
+    </div>
+    <div class="meta">
+      {{ row.action_label }}{% if row.raffle %} — {{ row.raffle.prize_name }}{% endif %}<br>
+      {{ row.campaign.window_start|date:"j M Y H:i" }} &ndash; {{ row.campaign.window_end|date:"j M Y H:i" }}
+    </div>
+    <div class="mini-stats">
+      <div class="mini-stat">
+        <div class="n">{{ row.qualified }}</div>
+        <div class="l">Gekwalificeerd</div>
+      </div>
+      {% if row.campaign.action_type == 'raffle' %}
+      <div class="mini-stat">
+        <div class="n">{{ row.entries }}</div>
+        <div class="l">Deelnemers</div>
+      </div>
+      <div class="mini-stat">
+        <div class="n">{{ row.winners }}</div>
+        <div class="l">Winnaars</div>
+      </div>
+      {% endif %}
+    </div>
+    <div class="card-actions">
+      {% if row.campaign.status == 'draft' or row.campaign.status == 'previewed' %}
+      <a class="btn" href="{% url 'studio:campaign_preview' row.campaign.pk %}">Preview &amp; activeren</a>
+      {% else %}
+      <a class="btn" href="{% url 'studio:campaign_monitor' row.campaign.pk %}">Monitor</a>
+      {% endif %}
+      {% if row.editable %}
+      <a class="btn secondary" href="{% url 'studio:campaign_edit' row.campaign.pk %}">Bewerken</a>
+      {% endif %}
+      {% if row.campaign.status != 'archived' %}
+      <form class="inline" method="post" action="{% url 'studio:archive' row.campaign.pk %}"
+            onsubmit="return confirm('Weet je zeker dat je \'{{ row.campaign.name|escapejs }}\' wilt archiveren?');">
+        {% csrf_token %}
+        <button type="submit" class="btn secondary">Archiveren</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty">Nog geen campagnes. Maak de eerste met "Nieuwe campagne".</div>
+{% endif %}
+{% endblock %}

@@ -42,6 +42,9 @@ KIND_POLICY = {
     'announcement': EMAIL_FALLBACK,
     'recommendations': EMAIL_NEVER,
     'transactional': EMAIL_ALWAYS,
+    # Draw results/reminders: push first, email only when push missed. A
+    # winner's prize code overrides this per-message with email_policy='always'.
+    'raffle': EMAIL_FALLBACK,
 }
 
 # Unknown kinds behave like an announcement: push, email only if push failed.
@@ -57,6 +60,7 @@ KIND_CATEGORY = {
     'announcement': 'announcements',
     'recommendations': 'recommendations',
     'transactional': None,
+    'raffle': 'raffle',
 }
 
 DEFAULT_KIND_CATEGORY = 'announcements'

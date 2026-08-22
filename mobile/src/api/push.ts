@@ -29,10 +29,11 @@ export interface NotificationPreferences {
   birthday: boolean;
   announcements: boolean;
   recommendations: boolean;
+  raffle: boolean;
 }
 
 /** Per-category opt-outs the settings UI exposes. */
-export type NotificationCategory = 'birthday' | 'announcements' | 'recommendations';
+export type NotificationCategory = 'birthday' | 'announcements' | 'recommendations' | 'raffle';
 
 export async function getVapidPublicKey(): Promise<string> {
   const response = await apiFetch<VapidKeyResponse>('/notifications/vapid-public-key/');

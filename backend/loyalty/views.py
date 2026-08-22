@@ -206,6 +206,93 @@ class SyncStatusView(APIView):
         })
 
 
+class RafflesListView(APIView):
+    """
+    Campaign raffles for the Home/Loyalty cards. FROZEN shape - see
+    serialize_raffle. Open raffles of active campaigns are visible to every
+    authenticated user (non-entrants get a teaser with entered=false). Drawn
+    raffles are the caller's personal archive (the Loyalty codes tab): every
+    raffle they entered, newest first, capped so the payload stays bounded
+    and a winner's code stays reachable for as long as it is valid.
+    """
+    permission_classes = [IsAuthenticated]
+
+    DRAWN_HISTORY_LIMIT = 20
+
+    def get(self, request):
+        from .models import CampaignRaffle
+        from .serializers import serialize_raffle
+
+        open_raffles = list(
+            CampaignRaffle.objects.filter(status='open', campaign__status='active')
+            .select_related('campaign')
+            .prefetch_related('entries__user', 'winners__user')
+        )
+        drawn_raffles = list(
+            CampaignRaffle.objects.filter(status='drawn', entries__user=request.user)
+            .select_related('campaign')
+            .prefetch_related('entries__user', 'winners__user')
+            .order_by('-drawn_at')[:self.DRAWN_HISTORY_LIMIT]
+        )
+        raffles = open_raffles + drawn_raffles
+
+        # Open raffles first (soonest draw first, manual-draw ones last),
+        # then drawn raffles newest first.
+        def sort_key(r):
+            if r.status == 'open':
+                return (0, r.draw_at.timestamp() if r.draw_at else float('inf'))
+            return (1, -(r.drawn_at.timestamp() if r.drawn_at else 0))
+
+        raffles.sort(key=sort_key)
+
+        results = []
+        for raffle in raffles:
+            entry = next(
+                (e for e in raffle.entries.all() if e.user_id == request.user.id),
+                None,
+            )
+            results.append(serialize_raffle(raffle, request.user, entry))
+        return Response({'raffles': results})
+
+
+class RaffleSeenView(APIView):
+    """Marks the caller's entry as seen (opened the raffle card).
+
+    Always an empty 204 - the mobile client depends on that - and a no-op
+    when the caller has no entry or the timestamp is already set.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, raffle_id):
+        from django.utils import timezone
+        from .models import RaffleEntry
+
+        entry = RaffleEntry.objects.filter(
+            raffle_id=raffle_id, user=request.user,
+        ).first()
+        if entry and entry.seen_at is None:
+            entry.seen_at = timezone.now()
+            entry.save(update_fields=['seen_at'])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class RaffleResultSeenView(APIView):
+    """Marks the caller's entry as having watched the reveal. Empty 204."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, raffle_id):
+        from django.utils import timezone
+        from .models import RaffleEntry
+
+        entry = RaffleEntry.objects.filter(
+            raffle_id=raffle_id, user=request.user,
+        ).first()
+        if entry and entry.result_seen_at is None:
+            entry.result_seen_at = timezone.now()
+            entry.save(update_fields=['result_seen_at'])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class NotificationsListView(APIView):
     """List active notifications for the current user."""
     permission_classes = [IsAuthenticated]

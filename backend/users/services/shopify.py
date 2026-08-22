@@ -84,10 +84,16 @@ class ShopifyService:
             return data.get('orders', [])
         return []
 
-    def _paginated_request(self, endpoint: str, data_key: str = 'orders') -> list:
+    def _paginated_request(self, endpoint: str, data_key: str = 'orders',
+                           raise_on_error: bool = False) -> list:
         """
         Fetch all pages from a paginated Shopify REST endpoint.
         Follows Link header with rel="next" for cursor-based pagination.
+
+        raise_on_error=False (the sync paths' historical behavior) returns
+        whatever was fetched before a failure; raise_on_error=True re-raises,
+        for callers that must distinguish "no results" from "Shopify down"
+        (campaign backfill, tag/collection snapshots).
         """
         all_results = []
         url = f"{self.base_url}/{endpoint}"
@@ -112,6 +118,8 @@ class ShopifyService:
                             break
             except requests.exceptions.RequestException as e:
                 logger.error(f"Paginated request error: {e}")
+                if raise_on_error:
+                    raise
                 break
 
         return all_results
@@ -180,6 +188,52 @@ class ShopifyService:
 
         logger.info(f"Fetched {len(products)} active in-stock products from Shopify")
         return products
+
+    def get_shop_orders_in_window(self, start, end) -> list:
+        """
+        Get ALL paid shop orders created inside [start, end], newest-first,
+        paginating through all pages. Used by the campaign backfill scan.
+        Raises on a Shopify failure — a backfill/preview must report failure,
+        not silently conclude "no orders".
+        """
+        return self._paginated_request(
+            f'orders.json?limit=250&status=any&financial_status=paid'
+            f'&order=created_at+desc'
+            f'&created_at_min={start.isoformat()}&created_at_max={end.isoformat()}',
+            raise_on_error=True,
+        )
+
+    def get_product_ids_by_tag(self, tag: str) -> list:
+        """
+        Get ids of all products carrying `tag` (case-insensitive).
+        Fetches only id+tags fields, paginated, to keep the scan light.
+        Raises on a Shopify failure so snapshot refreshes keep the previous
+        snapshot instead of overwriting it with an empty list.
+        """
+        products = self._paginated_request(
+            'products.json?limit=250&fields=id,tags',
+            data_key='products',
+            raise_on_error=True,
+        )
+        wanted = tag.strip().lower()
+        matched = []
+        for product in products:
+            # REST API returns tags as a comma-separated string
+            tags = [t.strip().lower() for t in (product.get('tags') or '').split(',')]
+            if wanted in tags:
+                matched.append(product.get('id'))
+        logger.info(f"Found {len(matched)} products with tag '{tag}'")
+        return matched
+
+    def get_collection_product_ids(self, collection_id) -> list:
+        """Get ids of all products in a collection (custom or smart).
+        Raises on a Shopify failure (see get_product_ids_by_tag)."""
+        products = self._paginated_request(
+            f'collections/{collection_id}/products.json?limit=250&fields=id',
+            data_key='products',
+            raise_on_error=True,
+        )
+        return [product.get('id') for product in products]
 
     def get_customer_orders_since(self, customer_id: str, since_date) -> list:
         """
@@ -527,8 +581,9 @@ class ShopifyService:
     # code on an order attributes that order to the app feature that made it.
     APP_CODE_PREFIXES = {
         'SIX-': 'sixpack',     # sixpack generator packs
-        'HOB-': 'loyalty',     # loyalty reward redemptions
+        'HOB-': 'loyalty',     # loyalty reward redemptions + campaign qualification codes
         'BDAY-': 'birthday',   # birthday gift codes
+        'WIN-': 'raffle',      # campaign raffle prize codes
     }
 
     def get_app_sales_report(self, start_date: str, end_date: str) -> Optional[dict]:
@@ -878,6 +933,122 @@ class ShopifyService:
             product_ids=[product_id],
             applies_once_per_customer=applies_once_per_customer,
         )
+
+    def get_discount_code_usage(self, code: str) -> Optional[int]:
+        """
+        How many times a discount code has been used, via
+        codeDiscountNodeByCode. Returns None when the lookup fails or the code
+        does not exist (callers must treat None as "unknown", not "unused").
+
+        asyncUsageCount is Shopify's eventually-consistent usage counter; for
+        our usage_limit=1 codes any value > 0 means redeemed.
+        """
+        query = """
+        query codeUsage($code: String!) {
+            codeDiscountNodeByCode(code: $code) {
+                codeDiscount {
+                    ... on DiscountCodeBasic { asyncUsageCount }
+                    ... on DiscountCodeFreeShipping { asyncUsageCount }
+                    ... on DiscountCodeBxgy { asyncUsageCount }
+                }
+            }
+        }
+        """
+        data = self._graphql_request(query, {"code": code})
+        if not data:
+            return None
+        node = data.get("codeDiscountNodeByCode")
+        if not node:
+            return None
+        usage = (node.get("codeDiscount") or {}).get("asyncUsageCount")
+        return int(usage) if usage is not None else None
+
+    def search_products(self, query: str, limit: int = 10) -> Optional[list]:
+        """
+        Live product search by title (active products only), via GraphQL —
+        the REST products.json title filter only does exact matches.
+
+        Returns a list of {'id', 'gid', 'title', 'sku', 'price', 'image_url',
+        'tags'} dicts (first variant's sku/price), or None when the Shopify
+        call fails so callers can distinguish 'no matches' from 'no answer'.
+        Used by the Campagne Studio's product picker.
+        """
+        graphql = """
+        query searchProducts($query: String!, $first: Int!) {
+          products(first: $first, query: $query) {
+            edges {
+              node {
+                id
+                title
+                tags
+                featuredImage { url }
+                variants(first: 1) { edges { node { sku price } } }
+              }
+            }
+          }
+        }
+        """
+        # Strip characters that would break out of the Shopify query string.
+        safe = query.replace('\\', '').replace('"', '').replace("'", '')
+        data = self._graphql_request(
+            graphql,
+            {'query': f'status:active AND title:*{safe}*', 'first': limit},
+        )
+        if data is None:
+            return None
+
+        return [
+            self._product_node_to_dict(edge.get('node') or {})
+            for edge in ((data.get('products') or {}).get('edges') or [])
+        ]
+
+    @staticmethod
+    def _product_node_to_dict(node):
+        """GraphQL product node -> the picker dict shape (see search_products)."""
+        gid = node.get('id') or ''
+        variant_edges = ((node.get('variants') or {}).get('edges') or [])
+        variant = (variant_edges[0].get('node') if variant_edges else None) or {}
+        image = node.get('featuredImage') or {}
+        return {
+            'id': gid.rsplit('/', 1)[-1],
+            'gid': gid,
+            'title': node.get('title') or '',
+            'sku': variant.get('sku') or '',
+            'price': variant.get('price'),
+            'image_url': image.get('url') or '',
+            'tags': node.get('tags') or [],
+        }
+
+    def get_products_by_ids(self, product_ids: list) -> Optional[list]:
+        """
+        Fetch products by numeric id (any status) via GraphQL nodes, in the
+        same dict shape as search_products. Ids Shopify doesn't know are
+        simply absent from the result. Returns None when the call fails so
+        callers can distinguish 'not found' from 'no answer'. Used by the
+        Campagne Studio picker when an admin pastes product ids.
+        """
+        graphql = """
+        query productsByIds($ids: [ID!]!) {
+          nodes(ids: $ids) {
+            ... on Product {
+              id
+              title
+              tags
+              featuredImage { url }
+              variants(first: 1) { edges { node { sku price } } }
+            }
+          }
+        }
+        """
+        gids = [f'gid://shopify/Product/{pid}' for pid in product_ids]
+        data = self._graphql_request(graphql, {'ids': gids})
+        if data is None:
+            return None
+        return [
+            self._product_node_to_dict(node)
+            for node in (data.get('nodes') or [])
+            if node and node.get('id')
+        ]
 
     def get_product_image(self, product_gid: str) -> Optional[str]:
         """

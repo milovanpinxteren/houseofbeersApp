@@ -11,6 +11,9 @@ from .views import (
     SyncStatusView,
     NotificationsListView,
     NotificationDismissView,
+    RafflesListView,
+    RaffleSeenView,
+    RaffleResultSeenView,
 )
 
 urlpatterns = [
@@ -23,6 +26,9 @@ urlpatterns = [
     path("redemptions/", RedemptionsListView.as_view(), name="redemptions_list"),
     path("sync/", SyncPointsView.as_view(), name="sync_points"),
     path("sync/status/", SyncStatusView.as_view(), name="sync_status"),
+    path("raffles/", RafflesListView.as_view(), name="raffles_list"),
+    path("raffles/<int:raffle_id>/seen/", RaffleSeenView.as_view(), name="raffle_seen"),
+    path("raffles/<int:raffle_id>/result-seen/", RaffleResultSeenView.as_view(), name="raffle_result_seen"),
     path("notifications/", NotificationsListView.as_view(), name="notifications_list"),
     path("notifications/<int:notification_id>/dismiss/", NotificationDismissView.as_view(), name="notification_dismiss"),
 ]

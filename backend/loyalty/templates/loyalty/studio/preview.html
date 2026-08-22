@@ -1,0 +1,182 @@
+{% extends "loyalty/studio/base.html" %}
+{% load static %}
+
+{% block studio_crumb %} &rsaquo; {{ campaign.name }}{% endblock %}
+
+{% block studio_content %}
+<div class="page-head">
+  <div>
+    <h1>{{ campaign.name }}</h1>
+    <p class="page-sub">
+      <span class="chip {{ campaign.status }}">{{ status_label }}</span>
+      &nbsp;{{ action_label }}{% if raffle %} — {{ raffle.prize_name }}{% endif %}
+      &nbsp;·&nbsp; {{ campaign.window_start|date:"j M Y H:i" }} &ndash; {{ campaign.window_end|date:"j M Y H:i" }}
+    </p>
+  </div>
+  <div class="actions">
+    {% if campaign.status != 'completed' and campaign.status != 'archived' %}
+    <a class="btn secondary" href="{% url 'studio:campaign_edit' campaign.pk %}">Bewerken</a>
+    {% endif %}
+    <a class="btn secondary" href="{% url 'studio:campaign_monitor' campaign.pk %}">Monitor</a>
+  </div>
+</div>
+
+{% if campaign.rule_sentence %}
+<div class="sentence-box">{{ campaign.rule_sentence }}</div>
+{% endif %}
+
+{% if stale and campaign.status != 'active' and campaign.status != 'completed' and campaign.status != 'archived' %}
+<div class="banner warn">
+  <strong>Preview verouderd.</strong> De voorwaarden zijn gewijzigd na de laatste preview.
+  Draai een nieuwe preview voordat je kunt activeren.
+</div>
+{% endif %}
+
+{% if campaign.status == 'active' %}
+<div class="banner info">
+  Deze campagne is <strong>actief</strong> — bekijk de voortgang in de
+  <a href="{% url 'studio:campaign_monitor' campaign.pk %}" style="color: inherit; text-decoration: underline;">Monitor</a>.
+</div>
+{% endif %}
+
+<div class="two-col">
+  <div class="panel">
+    <h2>Voorwaarden</h2>
+    <table class="data">
+      {% for label, value in condition_rows %}
+      <tr><th style="width: 45%;">{{ label }}</th><td>{{ value }}</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <div class="panel {% if can_activate %}accent{% endif %}">
+    <h2>Activeren</h2>
+    {% if campaign.status == 'active' or campaign.status == 'completed' or campaign.status == 'archived' %}
+      <p style="color: var(--hob-muted);">Deze campagne is al {{ status_label|lower }}.</p>
+      {% if campaign.status == 'active' %}
+      <form class="inline" method="post" action="{% url 'studio:deactivate' campaign.pk %}"
+            onsubmit="return confirm('Campagne deactiveren? Er komen dan geen nieuwe kwalificaties meer bij.');">
+        {% csrf_token %}
+        <button type="submit" class="btn danger">Deactiveren</button>
+      </form>
+      {% endif %}
+    {% elif can_activate %}
+      <p>De preview is actueel. Activeren start een <strong>live backfill</strong> over de hele
+      actieperiode: iedereen die (al) voldoet krijgt de actie én een <strong>echte notificatie</strong>.</p>
+      <form class="inline" method="post" action="{% url 'studio:activate' campaign.pk %}"
+            onsubmit="return confirm('Weet je het zeker? Activeren stuurt echte notificaties naar klanten die kwalificeren.');">
+        {% csrf_token %}
+        <button type="submit" class="btn">Activeer campagne</button>
+      </form>
+    {% else %}
+      <p style="color: var(--hob-muted);">Activeren kan nog niet:</p>
+      <ul style="color: var(--hob-warn); margin: 0 0 0 18px; padding: 0;">
+        {% for blocker in activation_blockers %}<li>{{ blocker }}</li>{% endfor %}
+      </ul>
+    {% endif %}
+
+    {% if campaign.status != 'archived' %}
+    <div style="margin-top: 16px;">
+      <form class="inline" method="post" action="{% url 'studio:archive' campaign.pk %}"
+            onsubmit="return confirm('Campagne archiveren?');">
+        {% csrf_token %}
+        <button type="submit" class="btn secondary">Archiveren</button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="panel" id="preview-panel"
+     data-status-url="{% url 'studio:preview_status' campaign.pk %}"
+     {% if preview_running %}data-running="1" data-preview-id="{{ latest_preview.id }}"{% endif %}>
+  <h2>Preview (proefdraai, verandert niets)</h2>
+
+  {% if preview_running %}
+  <p class="spinner-line">Preview draait — alle bestellingen in de periode worden gescand.
+    Deze pagina ververst vanzelf.</p>
+  {% else %}
+  <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px;">
+    <form class="inline" method="post" action="{% url 'studio:run_preview' campaign.pk %}">
+      {% csrf_token %}
+      <button type="submit" class="btn">{% if latest_done_preview %}Nieuwe preview draaien{% else %}Preview draaien{% endif %}</button>
+    </form>
+    {% if latest_done_preview %}
+    <form class="inline" method="post" action="{% url 'studio:test_send' campaign.pk %}">
+      {% csrf_token %}
+      <button type="submit" class="btn secondary">Stuur test naar mij</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if latest_preview and latest_preview.status == 'failed' %}
+  <div class="banner error">
+    Laatste preview mislukt: {{ latest_preview.error|default:"onbekende fout" }}
+  </div>
+  {% endif %}
+
+  {% if latest_done_preview %}
+  {% with result=latest_done_preview.result %}
+  <p style="color: var(--hob-muted); font-size: 12px;">
+    Resultaat van {{ latest_done_preview.finished_at|date:"j M Y H:i" }}
+    {% if stale %}<strong style="color: var(--hob-warn);"> — verouderd, voorwaarden zijn sindsdien gewijzigd</strong>{% endif %}
+  </p>
+  <div class="stat-row">
+    <div class="stat"><div class="n">{{ result.qualified_count }}</div><div class="l">Kwalificeren</div></div>
+    <div class="stat"><div class="n">{{ result.near_miss_count }}</div><div class="l">Bijna (1 tekort)</div></div>
+    <div class="stat"><div class="n">{{ result.orders_scanned }}</div><div class="l">Bestellingen gescand</div></div>
+  </div>
+
+  <div class="two-col">
+    <div>
+      <h2>Kwalificerende gebruikers</h2>
+      <div class="table-scroll">
+      <table class="data">
+        <thead><tr><th>E-mail</th><th>Naam</th><th>{% if raffle %}Loten{% else %}&nbsp;{% endif %}</th><th>Producten</th></tr></thead>
+        <tbody>
+          {% for user in result.users %}
+          <tr>
+            <td>{{ user.email }}</td>
+            <td>{{ user.first_name }}</td>
+            <td>{% if raffle %}{{ user.tickets }}{% endif %}</td>
+            <td>{{ user.matched|join:", " }}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="4" style="color: var(--hob-muted); font-style: italic;">Nog niemand kwalificeert in deze periode.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    </div>
+    <div>
+      <h2>Bijna-kwalificaties</h2>
+      <div class="table-scroll">
+      <table class="data">
+        <thead><tr><th>E-mail</th><th>Naam</th><th>Producten</th></tr></thead>
+        <tbody>
+          {% for user in result.near_miss_users %}
+          <tr>
+            <td>{{ user.email }}</td>
+            <td>{{ user.first_name }}</td>
+            <td>{{ user.matched|join:", " }}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="3" style="color: var(--hob-muted); font-style: italic;">Geen bijna-kwalificaties.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    </div>
+  </div>
+  {% endwith %}
+  {% elif not preview_running %}
+  <p style="color: var(--hob-muted); font-style: italic;">
+    Nog geen preview gedraaid. De preview scant alle betaalde bestellingen in de actieperiode
+    en laat zien wie er zou kwalificeren — zonder iets toe te kennen of te versturen.
+  </p>
+  {% endif %}
+</div>
+
+<script src="{% static 'loyalty/studio/preview.js' %}"></script>
+{% endblock %}

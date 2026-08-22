@@ -17,6 +17,7 @@ const FALLBACK: Record<string, string> = {
   'random-beer': '/(tabs)/ontdek',
   sixpack: '/(tabs)/ontdek',
   'app-shop': '/(tabs)/ontdek',
+  'raffle/[id]': '/(tabs)/loyalty',
 };
 
 export default function ProfileStackLayout() {
@@ -35,6 +36,7 @@ export default function ProfileStackLayout() {
       <Stack.Screen name="sixpack" options={{ title: t('sixpack.title') }} />
       <Stack.Screen name="orders" options={{ title: t('profile.orders') }} />
       <Stack.Screen name="connect-untappd" options={{ title: t('screenTitles.connectUntappd') }} />
+      <Stack.Screen name="raffle/[id]" options={{ title: t('raffle.screenTitle') }} />
     </Stack>
   );
 }

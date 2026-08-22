@@ -214,6 +214,8 @@ export default {
     categoryAnnouncementsHint: 'Nieuwe bieren, events en nieuws',
     categoryRecommendations: 'Bieraanbevelingen',
     categoryRecommendationsHint: 'Persoonlijke tips op basis van jouw smaak',
+    categoryRaffle: 'Verlotingen & acties',
+    categoryRaffleHint: 'Trekkingen, herinneringen en actie-updates',
     emailFallbackNote: 'Belangrijke berichten, zoals je verjaardagscadeau, sturen we altijd ook per e-mail.',
     prefsUnavailable: 'Je meldingsinstellingen konden niet worden geladen. Probeer het later opnieuw.',
     saveError: 'Deze instelling kon niet worden opgeslagen. Probeer het opnieuw.',
@@ -603,5 +605,47 @@ export default {
     // Verloting animatie
     drawingFor: 'Trekking voor',
     tapToDismiss: 'Tik om te sluiten',
+  },
+
+  // Loyalty-campagne verlotingen
+  raffle: {
+    sectionTitle: 'Verlotingen',
+    historyTitle: 'Eerdere trekkingen',
+    screenTitle: 'Verloting',
+    badge: 'Verloting',
+    notFound: 'Verloting niet gevonden',
+    // Open + doet mee
+    entered: '🎟️ Je doet mee!',
+    enteredBody: 'Je hebt {{tickets}} in de trekking voor {{prize}}.',
+    oneTicket: '1 lot',
+    manyTickets: '{{count}} loten',
+    drawAt: 'Trekking: {{date}}',
+    drawManual: 'De trekking volgt binnenkort',
+    entrants: '{{count}} deelnemers',
+    matchedProducts: 'Jouw loten kwamen van',
+    goodLuck: 'Veel succes! 🍀',
+    // Open + doet nog niet mee (teaser)
+    teaserTitle: 'Win {{prize}}',
+    teaserHint: 'Zo doe je mee',
+    howToEnter: 'Zo doe je mee',
+    // Getrokken, nog niet bekeken
+    drawDone: 'De trekking is geweest!',
+    drawDoneHint: 'Wie heeft {{prize}} gewonnen? Bekijk de trekking en ontdek het.',
+    viewDraw: 'Bekijk de trekking',
+    // Getrokken + bekeken (compact)
+    wonBy: 'Gewonnen door {{names}}',
+    viewCode: 'Bekijk je prijscode',
+    // Onthullingsanimatie
+    drawingFor: 'Trekking: {{prize}}',
+    youWon: 'Jij hebt gewonnen!',
+    youWonBody: 'Gefeliciteerd — {{prize}} is van jou. Proost! 🍻',
+    yourCode: 'Jouw code',
+    tapToCopy: 'Tik om te kopiëren',
+    copiedToClipboard: 'Gekopieerd!',
+    codeExpires: 'Geldig tot {{date}}',
+    manualPrizeNote: 'We nemen contact met je op over je prijs.',
+    lostTitle: 'Helaas, dit keer niet…',
+    lostBody: 'Jouw lot viel er dit keer niet uit. Gefeliciteerd aan {{names}} — volgende verloting nieuwe kansen! 🍻',
+    replay: 'Speel opnieuw af',
   },
 };

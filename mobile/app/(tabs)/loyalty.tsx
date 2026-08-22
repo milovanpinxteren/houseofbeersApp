@@ -42,6 +42,7 @@ import {
 } from '../../src/api/loyalty';
 import { colors, spacing, borderRadius, fonts, type } from '../../src/theme/colors';
 import { useToast } from '../../src/components/ui';
+import { RaffleSection } from '../../src/components/RaffleCard';
 
 type TabType = 'rewards' | 'history' | 'redemptions';
 
@@ -54,6 +55,7 @@ export default function LoyaltyScreen() {
   const [collapsedCategories, setCollapsedCategories] = useState<Set<number>>(new Set());
   const [transactions, setTransactions] = useState<PointsTransaction[]>([]);
   const [redemptions, setRedemptions] = useState<Redemption[]>([]);
+  const [raffleHistoryCount, setRaffleHistoryCount] = useState(0);
   const [rules, setRules] = useState<PointsRule[]>([]);
   const [showEarnInfo, setShowEarnInfo] = useState(false);
   const [expandedTxns, setExpandedTxns] = useState<Set<number>>(new Set());
@@ -66,6 +68,8 @@ export default function LoyaltyScreen() {
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [imageOverlay, setImageOverlay] = useState<string | null>(null);
   const [initialCollapseSet, setInitialCollapseSet] = useState(false);
+  // Bumped on pull-to-refresh so the raffle section refetches along with the rest.
+  const [raffleRefresh, setRaffleRefresh] = useState(0);
 
   const loadData = useCallback(async () => {
     try {
@@ -103,6 +107,7 @@ export default function LoyaltyScreen() {
 
   function handleRefresh() {
     setIsRefreshing(true);
+    setRaffleRefresh((k) => k + 1);
     loadData();
   }
 
@@ -317,6 +322,13 @@ export default function LoyaltyScreen() {
           </View>
         )}
       </View>
+
+      {/* Raffles — renders nothing when there are none */}
+      <RaffleSection
+        language={language}
+        refreshSignal={raffleRefresh}
+        style={styles.raffleSection}
+      />
 
       {/* How to earn points */}
       {rules.length > 0 && (
@@ -586,10 +598,14 @@ export default function LoyaltyScreen() {
 
         {activeTab === 'redemptions' && (
           redemptions.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Ionicons name="ticket-outline" size={48} color={colors.textMuted} />
-              <Text style={styles.emptyText}>{t('loyalty.noCodes')}</Text>
-            </View>
+            // With draw history below, "no codes" would read oddly next to a
+            // won prize code — the history rows carry the tab on their own.
+            raffleHistoryCount > 0 ? null : (
+              <View style={styles.emptyState}>
+                <Ionicons name="ticket-outline" size={48} color={colors.textMuted} />
+                <Text style={styles.emptyText}>{t('loyalty.noCodes')}</Text>
+              </View>
+            )
           ) : (
             redemptions.map((redemption) => (
               <View key={redemption.id} style={styles.redemptionCard}>
@@ -636,6 +652,18 @@ export default function LoyaltyScreen() {
               </View>
             ))
           )
+        )}
+
+        {/* Past draws live with the codes: the raffle archive. Renders
+            nothing when the user has no watched draws. */}
+        {activeTab === 'redemptions' && (
+          <RaffleSection
+            variant="history"
+            language={language}
+            refreshSignal={raffleRefresh}
+            style={styles.raffleHistory}
+            onCount={setRaffleHistoryCount}
+          />
         )}
       </View>
 
@@ -754,6 +782,13 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontStyle: 'italic',
     marginTop: spacing.xs,
+  },
+  raffleSection: {
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  raffleHistory: {
+    marginTop: spacing.md,
   },
   earnCard: {
     backgroundColor: colors.surface,

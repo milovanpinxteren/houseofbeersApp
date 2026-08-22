@@ -4,7 +4,9 @@ from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from .models import (PointsRule, RewardCategory, Reward, PointsBalance, PointsTransaction, Redemption,
                      ProcessedOrder, SyncState, Notification, NotificationRead,
-                     BirthdayRewardConfig, BirthdayReward)
+                     BirthdayRewardConfig, BirthdayReward,
+                     Campaign, CampaignAward, CampaignPreview, CampaignRaffle,
+                     CampaignRaffleWinner, RaffleEntry)
 
 logger = logging.getLogger(__name__)
 
@@ -548,6 +550,108 @@ class NotificationReadAdmin(admin.ModelAdmin):
     list_filter = ['read_at']
     search_fields = ['user__email', 'notification__title']
     readonly_fields = ['user', 'notification', 'read_at']
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+# ============ Campaigns & raffles (escape hatch) ============
+# Day-to-day management happens in the Campagne Studio
+# (/admin/campaign-studio/); these plain admins are a mostly read-only
+# escape hatch for inspection and emergency edits.
+
+def _studio_link(url, text='Open in Campagne Studio'):
+    return format_html('<a href="{}">{}</a>', url, text)
+
+
+@admin.register(Campaign)
+class CampaignAdmin(admin.ModelAdmin):
+    list_display = ['name', 'status', 'action_type', 'window_start', 'window_end',
+                    'preview_stale', 'studio_link']
+    list_filter = ['status', 'action_type', 'preview_stale']
+    search_fields = ['name', 'description']
+    readonly_fields = ['created_at', 'updated_at', 'resolved_product_ids',
+                       'resolved_at', 'studio_link']
+    ordering = ['-created_at']
+
+    def studio_link(self, obj):
+        return _studio_link(f'/admin/campaign-studio/{obj.pk}/')
+    studio_link.short_description = 'Studio'
+
+
+@admin.register(CampaignRaffle)
+class CampaignRaffleAdmin(admin.ModelAdmin):
+    list_display = ['prize_name', 'campaign', 'status', 'num_winners', 'draw_at',
+                    'entry_mode', 'fulfillment_type', 'studio_link']
+    list_filter = ['status', 'entry_mode', 'fulfillment_type']
+    search_fields = ['prize_name', 'campaign__name']
+    readonly_fields = ['campaign', 'status', 'drawn_at', 'reminder_sent_at']
+
+    def studio_link(self, obj):
+        return _studio_link(f'/admin/campaign-studio/{obj.campaign_id}/monitor/')
+    studio_link.short_description = 'Studio'
+
+
+@admin.register(RaffleEntry)
+class RaffleEntryAdmin(admin.ModelAdmin):
+    list_display = ['user', 'raffle', 'ticket_count', 'seen_at', 'result_seen_at',
+                    'created_at']
+    list_filter = ['raffle']
+    search_fields = ['user__email', 'raffle__prize_name']
+    readonly_fields = ['raffle', 'user', 'ticket_count', 'matched_products',
+                       'seen_at', 'result_seen_at', 'created_at']
+    ordering = ['-created_at']
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(CampaignRaffleWinner)
+class CampaignRaffleWinnerAdmin(admin.ModelAdmin):
+    list_display = ['user', 'raffle', 'fulfillment_status', 'prize_code',
+                    'redeemed_at', 'drawn_at']
+    list_filter = ['fulfillment_status', 'raffle']
+    search_fields = ['user__email', 'prize_code', 'raffle__prize_name']
+    readonly_fields = ['raffle', 'user', 'prize_code', 'shopify_discount_id',
+                       'code_expires_at', 'result_delivery_id', 'drawn_at']
+    ordering = ['-drawn_at']
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(CampaignAward)
+class CampaignAwardAdmin(admin.ModelAdmin):
+    list_display = ['user', 'campaign', 'points_awarded', 'discount_code',
+                    'created_at']
+    list_filter = ['campaign']
+    search_fields = ['user__email', 'campaign__name', 'discount_code']
+    readonly_fields = ['campaign', 'user', 'points_awarded', 'points_transaction',
+                       'discount_code', 'shopify_discount_id',
+                       'notified_delivery_id', 'created_at']
+    ordering = ['-created_at']
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(CampaignPreview)
+class CampaignPreviewAdmin(admin.ModelAdmin):
+    list_display = ['campaign', 'status', 'created_at', 'finished_at']
+    list_filter = ['status']
+    search_fields = ['campaign__name']
+    readonly_fields = ['campaign', 'status', 'error', 'result', 'created_at',
+                       'finished_at']
+    ordering = ['-created_at']
 
     def has_add_permission(self, request):
         return False

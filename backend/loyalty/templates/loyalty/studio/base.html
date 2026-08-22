@@ -1,0 +1,23 @@
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{% block title %}{{ title }} | Campagne Studio{% endblock %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'loyalty/studio/studio.css' %}">
+{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">Home</a>
+  &rsaquo; <a href="{% url 'studio:campaign_list' %}">Campagne Studio</a>
+  {% block studio_crumb %}{% endblock %}
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="studio">
+{% block studio_content %}{% endblock %}
+</div>
+{% endblock %}

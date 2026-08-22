@@ -14,7 +14,8 @@ REVENUE_RUNNING_TTL = 10 * 60
 
 def revenue_cache_key(start_date, end_date) -> str:
     """Cache key for the Shopify revenue report of an inclusive date range."""
-    return f'analytics:revenue:v4:{start_date}:{end_date}'
+    # v5: report shape gained the 'raffle' code category (WIN- prizes).
+    return f'analytics:revenue:v5:{start_date}:{end_date}'
 
 
 @shared_task

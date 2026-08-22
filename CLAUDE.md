@@ -18,7 +18,7 @@ A loyalty and community app for houseofbeers.nl. This is a new project built fro
 /backend
   /config              → Django settings, urls, wsgi, celery
   /users               → User model, auth, Shopify service
-  /loyalty             → Points, rewards, notifications, sync tasks
+  /loyalty             → Points, rewards, notifications, campaigns & raffles, Campagne Studio, sync tasks
   /recommendations     → Beer recommendations, taste profiles, favorites
   /templates           → Password reset web page
 
@@ -274,13 +274,22 @@ remains only as historical reference.
 - [x] Fetches `custom.estimated_delivery_date` product metafield from Shopify
 - [x] Batch GraphQL queries for efficient metafield retrieval
 
+### Phase 11: Loyalty Campaigns & Raffles ✅
+- [x] Admin-defined campaigns: structured conditions → action (points / discount code / raffle entry) → notifications, alongside the PointsRule engine (see Loyalty Campaigns & Raffles section)
+- [x] Cumulative cross-order condition evaluation (k-of-n products, window aggregates, customer conditions)
+- [x] Two evaluation paths: per-order sync hook + shop-wide backfill (retroactive windows)
+- [x] Raffles: weighted atomic draw, Shopify prize codes (`WIN-`) or manual fulfillment, redemption detection
+- [x] Notification stages via the notifications outbox (`raffle` kind): qualify, ~3h pre-draw reminder, win/lose result
+- [x] Campagne Studio at `/admin/campaign-studio/`: builder with live NL rule sentence + Shopify product search, async preview with near-misses, funnel monitor, CSV export
+- [x] Mobile: RaffleSection cards on Home + Loyalty, replayable draw-reveal animation, `/raffle/{id}` push deep link, full funnel tracking (entered → notified → opened → watched → redeemed)
+
 ---
 
 ## Current App Structure
 
 ### Backend Apps
 - `users/` - User model, authentication, Shopify service, account deletion
-- `loyalty/` - Points rules, rewards, balances, transactions, redemptions, notifications, Celery sync tasks
+- `loyalty/` - Points rules, rewards, balances, transactions, redemptions, notifications, campaigns & raffles, Campagne Studio, Celery sync tasks
 - `recommendations/` - Beer recommendations, Untappd integration, favorites, taste profiles
 
 ### Mobile Tabs (redesigned Aug 2026)
@@ -361,6 +370,9 @@ function MyComponent() {
 | GET | `/api/loyalty/redemptions/` | User's redemptions |
 | POST | `/api/loyalty/sync/` | Sync points (intermediate sync) |
 | GET | `/api/loyalty/sync/status/` | Check sync status |
+| GET | `/api/loyalty/raffles/` | Campaign raffles for the Home/Loyalty cards (FROZEN shape, see Campaigns section) |
+| POST | `/api/loyalty/raffles/<id>/seen/` | Mark raffle card opened (empty 204; no-op without entry) |
+| POST | `/api/loyalty/raffles/<id>/result-seen/` | Mark draw reveal watched (empty 204) |
 | GET | `/api/loyalty/notifications/` | Active notifications |
 | POST | `/api/loyalty/notifications/<id>/dismiss/` | Dismiss notification |
 
@@ -382,6 +394,7 @@ function MyComponent() {
 | URL | Description |
 |-----|-------------|
 | `/admin/` | Django admin panel |
+| `/admin/campaign-studio/` | Campagne Studio (staff-only campaign builder/preview/monitor) |
 | `/reset-password/` | Password reset form |
 
 ---
@@ -528,8 +541,8 @@ Three-tier sync system for keeping loyalty points in sync with Shopify orders. A
 | | Partial | Intermediate | Full |
 |---|---|---|---|
 | **What** | New orders since last sync | All orders, process unprocessed | Check-and-correct all orders |
-| **Schedule** | Every 3 hours (all users) | Nightly 3 AM (all users) | Manual only |
-| **Triggered by** | Celery beat | Celery beat, user taps "Sync" | Django admin action, CLI |
+| **Schedule** | Manual/CLI only (beat entry removed 2026-08-10, ~2,000 Shopify calls/day for ~24 orders) | Nightly 3 AM (all users) | Manual only |
+| **Triggered by** | CLI | Celery beat, user taps "Sync" | Django admin action, CLI |
 | **Runs in** | Celery worker (async) | Celery worker (async) / synchronous (user tap) | Celery worker (async) |
 | **Shopify calls/user** | 1 | 1-3 (paginated) | 1-3 (paginated) |
 | **Deletes anything** | No | No | No |
@@ -560,6 +573,103 @@ Three-tier sync system for keeping loyalty points in sync with Shopify orders. A
 
 ---
 
+## Loyalty Campaigns & Raffles
+
+Admin-defined **campaigns**: structured purchase/customer conditions → one action (points, discount code, or raffle entry) → notifications. Campaigns sit ALONGSIDE the `PointsRule` engine — they never replace or modify it; they piggyback on the same order stream. Conditions are evaluated **cumulatively across all of a user's paid orders inside the campaign window**, so "buy 2 of these 3 beers" works across separate orders. Built and operated entirely from the Campagne Studio (below); the plain Django admin has read-only-ish ModelAdmins as an escape hatch (`backend/loyalty/admin.py`).
+
+### Model Family
+
+All in `backend/loyalty/models_campaigns.py`, star-imported at the end of `loyalty/models.py` (so `from loyalty.models import Campaign` works):
+
+- **`Campaign`** — window, conditions, action config (`action_type`: points/discount_code/raffle), notification config, `rule_sentence` (auto-generated NL summary, editable, shown to customers), `status`, `preview_stale`, tag/collection snapshot (`resolved_product_ids`, `resolved_at`)
+- **`CampaignProgress`** (unique campaign+user) — cumulative state in a `data` JSON: `spend`, `order_count`, `matcher_qty` (per-matcher quantities; key `'*'` when there are no matchers), `matched_order_ids`, `matched_products`, `max_order_value`, `first_order_ok`, and `processed_order_ids` — the **idempotency guard**: an order id already present is skipped entirely. `qualified_at` set once when thresholds first met.
+- **`CampaignAward`** (unique campaign+user) — audit + idempotency of the fired action: `points_awarded` (cumulative for per_item), FK to the `PointsTransaction`, `discount_code`/`shopify_discount_id`, `notified_delivery_id` (plain int, NOT a FK — loyalty and notifications stay decoupled)
+- **`CampaignRaffle`** (OneToOne `campaign.raffle`) — prize fields, `num_winners`, `draw_at` (null = manual draw only), `entry_mode` (`single` | `per_order` | `per_item`), `fulfillment_type` (`shopify_code` uses the campaign's `discount_*` fields as prize config | `manual`), `status` open/drawn, `send_reminder`/`reminder_sent_at`
+- **`RaffleEntry`** (unique raffle+user) — `ticket_count`, `matched_products` (display strings), `seen_at` (opened the card) and `result_seen_at` (watched the reveal) — the funnel timestamps
+- **`CampaignRaffleWinner`** (unique raffle+user) — `prize_code`, `code_expires_at`, `fulfillment_status` (pending/code_issued/manual_pending/fulfilled), `redeemed_at`, `result_delivery_id` (int, not FK)
+- **`CampaignPreview`** — async dry-run results for the Studio (`status`, `result` JSON with qualified + near-miss users)
+
+### Condition Semantics
+
+ALL configured conditions must hold; blank/null = condition not used.
+
+- **`product_matchers`**: JSON list `[{"type": "sku"|"product_id"|"title"|"tag"|"collection", "value": "..."}]` (optional `label` for display only). Empty list = every paid order in the window counts. `title` matches case-insensitive substring.
+- **k-of-n**: `min_distinct_products` = number of distinct matchers satisfied across the whole window. Each matcher is ONE slot — a tag/collection matcher is satisfied when any product in its resolved set is bought. `min_total_quantity` = total matched item quantity across the window.
+- **Window aggregates**: `min_order_value` (at least one order with total ≥), `min_total_spend` (cumulative spend of ALL paid window orders, not just matched), `min_order_count`.
+- **Customer conditions**: `first_order_only` (first-ever order in the window — judged against `ProcessedOrder`, so pre-app history is invisible, same as the first_order PointsRule), `only_after_registration`, `requires_untappd` (linked `UntappdProfile`), `min_points_balance` (at evaluation time), `registered_after`.
+- **Snapshot**: tag/collection matchers are resolved to product-id lists via Shopify (`resolve_product_matchers()`) and stored on the campaign (`{matcher_index: [product_id, ...]}`). Refreshed nightly by `refresh_campaign_snapshots`; a failed Shopify call keeps that matcher's previous snapshot instead of wiping it.
+- **Near miss** (preview only): every condition satisfied except exactly 1 short on `min_distinct_products`, `min_total_quantity`, or `min_order_count`.
+
+### Two Evaluation Paths
+
+1. **Sync hook**: `process_all_orders_for_user()` in `points.py` calls `apply_order_to_campaigns(user, order)` for EVERY paid order (even 0-point ones), inside try/except — a campaign bug must never break the points sync. Applies the order to each `active` campaign whose window contains the order's `created_at`; atomic per campaign+user, idempotent via `processed_order_ids`.
+2. **Shop-wide backfill**: `run_backfill(campaign, dry_run)` — ONE paginated scan via `ShopifyService.get_shop_orders_in_window(start, end)`; only orders whose `customer.id` matches an app user's `shopify_customer_id` count. Orders are applied oldest-first so progress and the qualification moment are chronological. `dry_run=True` produces the `CampaignPreview.result` shape without writing anything; a live run feeds each order through the same per-order logic as the sync hook. Runs on activation (covers retroactive windows: `window_start` before activation is fine).
+
+**Qualification** fires exactly once (`CampaignAward`'s unique constraint is the guard, `fire_qualification()`): points → `earned` `PointsTransaction` with `rule=None` and breakdown `[{"campaign_id", "campaign_name", "points"}]` (points_mode `per_item` awards incrementally as later qualifying orders arrive); discount_code → single-use `HOB-XXXXXXXX` code via `services/discounts.py:create_discount_code()` (extracted from the old Reward path — reward redemptions now go through the same helper); raffle → `RaffleEntry` with tickets per `entry_mode`, recomputed on later orders while the raffle is open.
+
+### Campaign Lifecycle
+
+`draft` → `previewed` (a successful preview promotes it) → `active` (Studio activation; dispatches the live backfill) → `completed` → `archived`. Completion happens three ways: a raffle campaign completes when its raffle is drawn; a non-raffle campaign completes nightly once past `window_end` (`refresh_campaign_snapshots`); the Studio "deactivate" button completes immediately. Completed/archived campaigns are not editable.
+
+**`preview_stale` gating**: `Campaign.save()` sets `preview_stale=True` whenever any field in `Campaign.CONDITION_FIELDS` changes while draft/previewed; queryset `.update()` deliberately bypasses this (the preview task uses it to clear the flag). Activation requires status `previewed` AND `preview_stale=False` AND (for raffles) an existing `CampaignRaffle` — so you always activate against a preview of the actual conditions.
+
+### Raffle Draw Semantics
+
+`draw_raffle(raffle)` in `services/raffles.py` (mirrors `events/models.py:Raffle.draw_winners`):
+
+- `select_for_update` on the raffle row; returns `None` if already drawn (double-draw/retry safe).
+- **Weighted sampling WITHOUT replacement** by `ticket_count` — a user wins at most once, more tickets = better odds. `num_to_draw = min(num_winners, entrant_count)`. Winners created individually so draw order = pk order.
+- Raffle `status='drawn'` and campaign `status='completed'` flip **inside the locked transaction**; fulfillment and notifications run **after commit** (network I/O must never undo or re-run the draw).
+- Fulfillment: `shopify_code` → `WIN-XXXXXXXX` single-use code per winner from the campaign's `discount_*` fields → `code_issued`; a failed mint leaves the winner `pending` (visible in the Studio monitor as needing attention). `manual` → `manual_pending`; the monitor's "afgehandeld" toggle sets `fulfilled`. (Code prefixes: `WIN-` raffle prizes, `HOB-` campaign qualification + reward codes, `BDAY-`/`SIX-` taken elsewhere — distinct prefixes keep order attribution clean.)
+- Redemption detection: `check_winner_redemptions()` asks Shopify for usage (`get_discount_code_usage`, codeDiscountNodeByCode) and stamps `redeemed_at`. Best effort — one hiccup skips that winner, never the run.
+
+### Notification Stages & Dedupe Keys
+
+All via the notifications outbox (`notifications.services.send_notification`), kind `raffle` for raffle campaigns / `announcement` otherwise. The `raffle` kind (migration `notifications/0007_raffle_kind.py`) has push + email-fallback policy and its own `NotificationPreference.raffle` category. Sends never raise into campaign/draw logic.
+
+| Stage | dedupe_key | Notes |
+|-------|------------|-------|
+| Qualify | `campaign:{cid}:{uid}:qualified` | Title/body from `qualify_title`/`qualify_body`, NL defaults built from rule_sentence/prize; url `/raffle/{rid}` (raffle) or `/loyalty` |
+| Reminder | `campaign:{cid}:{uid}:reminder` | ~3h before `draw_at` (`REMINDER_WINDOW`), once per raffle via `reminder_sent_at` |
+| Result | `campaign:{cid}:{uid}:result` | Winners: `email_policy='always'` when a code is attached (the code must reach an inbox); losers get a soft NL body. Same url |
+| Studio test | `campaign:{cid}:test:{uid}:{preview_id}` | Sent only to the logged-in admin; excluded from the funnel |
+
+**Funnel tracking**: entered (`RaffleEntry` / `qualified_at`) → notified (`NotificationDelivery` filtered on dedupe-key prefix `campaign:{cid}:`, `:test:` excluded; delivery ids also stored on `CampaignAward.notified_delivery_id` / `CampaignRaffleWinner.result_delivery_id`) → opened (`seen_at`) → watched draw (`result_seen_at`) → redeemed/fulfilled (`redeemed_at` or `fulfillment_status='fulfilled'`).
+
+### Campagne Studio
+
+Staff-only custom admin at **`/admin/campaign-studio/`** (`loyalty/studio_views.py` + `studio_urls.py`, one include in `config/urls.py`; templates `loyalty/templates/loyalty/studio/`, dark HoB styling scoped under a `.studio` root). Mirrors the analytics dashboard pattern: Celery dispatch with a synchronous fallback when no broker is running (local dev), status polled client-side. Dutch-first UI.
+
+- **List** (`/`): all campaigns with status chips and funnel mini-stats (qualified/entries/winners).
+- **Builder** (`new/`, `<pk>/edit/`): guided form; live Shopify product search (`product-search/` → `ShopifyService.search_products()`); live NL rule-sentence preview (POST `sentence/` shares the form parser); raffle section (prize, winners, draw time, entry mode, fulfillment). Blank `rule_sentence` gets auto-generated via `build_rule_sentence()`. Changing the action away from `raffle` is blocked once tickets exist.
+- **Preview** (`<pk>/`): "run preview" creates a `CampaignPreview` and dispatches `campaign_backfill(id, preview_id=...)`; polls `preview/status/`; shows qualified list, tickets, near-misses, orders scanned. "Stuur test naar mij" sends the qualify notification to the admin only. Activation lives here, gated as described above; deactivate/archive too.
+- **Monitor** (`<pk>/monitor/`): funnel, per-user rows, winner rows with prize codes, "Trek nu" (dispatches `draw_campaign_raffle`), "Check redemptions", manual-fulfill toggle, entrants CSV export (`<pk>/entrants.csv`).
+
+### Mobile
+
+- **API layer** `mobile/src/api/raffles.ts`: `getRaffles()`, `markRaffleSeen(id)`, `markRaffleResultSeen(id)`. The response shape is **FROZEN** (typed in that file, produced by `serialize_raffle` in `backend/loyalty/serializers.py`) — do not rename fields. `GET /api/loyalty/raffles/` returns open raffles of active campaigns to EVERY authenticated user (non-entrants get a teaser, `entered: false`) plus the caller's drawn-raffle archive: every drawn raffle they entered, newest first, capped at `RafflesListView.DRAWN_HISTORY_LIMIT` (20) — no time cutoff, so prize codes stay reachable while valid. Post-draw it adds `entrant_first_names` (shuffled, for the animation), `winner_first_names`/`public_winner_names` (draw order), `did_win`, and `my_code`/`my_code_expires_at` for a winning caller.
+- **204 contract**: the seen endpoints return an empty 204; `apiFetch` always calls `response.json()`, which throws `SyntaxError` on the empty body — `postNoContent()` treats that as success. Keep the backend responses empty.
+- **Cards**: `RaffleSection` + `RaffleCard` in `mobile/src/components/RaffleCard.tsx`. Two variants keep Home clean when draws pile up: `variant='active'` (default; Home `app/(tabs)/index.tsx` + Loyalty top `app/(tabs)/loyalty.tsx`) shows open raffles and drawn-but-reveal-not-watched — once the user watches the reveal the card leaves Home; `variant='history'` (inside the Loyalty "Codes" tab, below redemption codes) is the archive: watched past draws as a vertical compact list under "Eerdere trekkingen", with code access for wins. Fetches on focus and on the host's pull-to-refresh (`refreshSignal`); renders NOTHING when its filtered list is empty (the normal state); active renders one card or a horizontal rail, sorted most-actionable-first (unseen draw → open+entered → teaser). Four card states: open+entered (tickets + draw time), open+not entered (rule-sentence teaser), drawn+not result_seen (prominent "Bekijk de trekking"), drawn+seen (compact winners line, code access for winners).
+- **Reveal**: screen `mobile/app/(tabs)/(profile)/raffle/[id].tsx` (shared sub-stack, tab bar stays visible) renders `mobile/src/components/RaffleReveal.tsx` — the name-cycling animation ported from the livestream raffle overlay (decelerating shuffle → spring winner reveal → personal result with copyable code), with a replay button. Calls `markRaffleSeen` on first open pre-draw and `markRaffleResultSeen` when the reveal finishes.
+- **Deep link**: push notifications link to `/raffle/{id}`; `mobile/app/raffle/[id].tsx` redirects into the `(profile)` sub-stack (same pattern as the old `/favorites` redirect).
+- **i18n**: all strings under the `raffle.` namespace in both `en.ts` and `nl.ts`.
+
+### Key Files
+
+- `backend/loyalty/models_campaigns.py` — the model family above
+- `backend/loyalty/services/campaigns.py` — `apply_order_to_campaigns()`, `fire_qualification()`, `run_backfill()`, `build_rule_sentence()`, `resolve_product_matchers()`
+- `backend/loyalty/services/raffles.py` — `draw_raffle()`, `send_raffle_reminders()`, `check_winner_redemptions()`
+- `backend/loyalty/services/discounts.py` — shared `create_discount_code()` (campaigns, raffle prizes, AND reward redemptions)
+- `backend/loyalty/tasks.py` — `campaign_backfill`, `refresh_campaign_snapshots`, `draw_campaign_raffle`, `campaign_raffle_scheduler`, `check_winner_redemptions`
+- `backend/loyalty/views.py` + `serializers.py` — `RafflesListView`, seen endpoints, `serialize_raffle()`
+- `backend/loyalty/studio_views.py` + `studio_urls.py` — Campagne Studio
+- `backend/users/services/shopify.py` — `get_shop_orders_in_window()`, `get_product_ids_by_tag()`, `get_collection_product_ids()`, `search_products()`, `get_discount_code_usage()`
+- `backend/notifications/` — `raffle` kind + preference category (migration 0007)
+- `mobile/src/api/raffles.ts`, `mobile/src/components/RaffleCard.tsx`, `RaffleReveal.tsx`, `mobile/app/(tabs)/(profile)/raffle/[id].tsx`, `mobile/app/raffle/[id].tsx`
+- Tests: `backend/loyalty/test_campaigns.py`, `test_raffles.py`, `test_studio.py`, `test_campaign_e2e.py`
+
+---
+
 ## Celery & Redis
 
 ### Infrastructure
@@ -576,12 +686,16 @@ release: python manage.py migrate --noinput
 ```
 
 ### Beat Schedule
+Loyalty entries (other apps — birthday scan, notifications, recommendations — register their own entries in `settings.py` too):
+
 | Task | Schedule | Description |
 |------|----------|-------------|
-| `loyalty.tasks.periodic_partial_sync` | Every 3 hours | Partial sync for all users with Shopify accounts |
 | `loyalty.tasks.periodic_intermediate_sync` | Daily at 3:00 AM | Intermediate sync for all users |
+| `loyalty.tasks.refresh_campaign_snapshots` | Daily at 3:30 AM | Re-resolve campaign tag/collection snapshots; complete non-raffle campaigns past `window_end` (after the 3:00 sync so completion sees that night's final progress) |
+| `loyalty.tasks.campaign_raffle_scheduler` | Every 5 minutes | Draw open raffles past `draw_at`; send ~3h pre-draw reminders |
+| `loyalty.tasks.check_winner_redemptions` | Daily at 4:00 AM | Mark raffle prize codes redeemed once Shopify reports usage |
 
-Both periodic tasks dispatch individual per-user tasks staggered 2 seconds apart to respect Shopify rate limits.
+`periodic_partial_sync` no longer has a beat entry (removed 2026-08-10 — too many Shopify calls). The intermediate sync dispatches individual per-user tasks staggered 2 seconds apart to respect Shopify rate limits.
 
 ### Tasks
 | Task | Description | Retry |
@@ -589,8 +703,13 @@ Both periodic tasks dispatch individual per-user tasks staggered 2 seconds apart
 | `partial_sync_user_points(user_id)` | Partial sync for one user | 3x, 60s delay |
 | `intermediate_sync_user_points(user_id)` | Intermediate sync for one user | 3x, 60s delay |
 | `full_sync_user_points(user_id)` | Full check-and-correct for one user | 2x, 120s delay |
-| `periodic_partial_sync()` | Dispatches partial sync per user | — |
+| `periodic_partial_sync()` | Dispatches partial sync per user (no beat entry) | — |
 | `periodic_intermediate_sync()` | Dispatches intermediate sync per user | — |
+| `campaign_backfill(campaign_id, preview_id=None)` | Shop-wide scan for one campaign; with `preview_id` a dry-run whose result lands in that CampaignPreview | 2x, 120s (live run only) |
+| `refresh_campaign_snapshots()` | Nightly snapshot refresh + completes ended non-raffle campaigns | — |
+| `draw_campaign_raffle(raffle_id)` | Draw one campaign raffle (scheduler or Studio "Trek nu"); already-drawn = logged no-op | 2x, 60s delay |
+| `campaign_raffle_scheduler()` | Draws due raffles inline + sends reminders | — |
+| `check_winner_redemptions()` | Stamps `redeemed_at` on used prize codes | — |
 
 ---
 

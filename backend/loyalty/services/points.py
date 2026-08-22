@@ -205,6 +205,17 @@ class LoyaltyService:
             elif points is None:
                 skipped_count += 1
 
+            # Campaigns piggyback on the same order stream (idempotent per
+            # campaign); a campaign bug must never break the points sync.
+            try:
+                from loyalty.services.campaigns import apply_order_to_campaigns
+                apply_order_to_campaigns(user, order)
+            except Exception as e:
+                logger.error(
+                    f"Campaign processing failed for order {order.get('name')}: {e}",
+                    exc_info=True,
+                )
+
         return {
             'total_awarded': total_awarded,
             'processed_count': processed_count,
@@ -421,54 +432,14 @@ class LoyaltyService:
         Create a Shopify discount code for a reward.
         Supports all reward types: fixed_discount, percentage_discount, free_shipping, free_product.
         """
-        from users.services import ShopifyService
+        from loyalty.services.discounts import create_discount_code, reward_discount_config
 
-        try:
-            shopify_service = ShopifyService()
-            title = f"Loyalty Reward - {reward.name}"
-            result = None
-
-            if reward.reward_type == 'fixed_discount' and reward.discount_amount:
-                result = shopify_service.create_basic_discount(
-                    code=code,
-                    title=title,
-                    discount_type='fixed_amount',
-                    value=float(reward.discount_amount),
-                    usage_limit=1,
-                )
-
-            elif reward.reward_type == 'percentage_discount' and reward.discount_percentage:
-                result = shopify_service.create_basic_discount(
-                    code=code,
-                    title=title,
-                    discount_type='percentage',
-                    value=float(reward.discount_percentage),
-                    usage_limit=1,
-                )
-
-            elif reward.reward_type == 'free_shipping':
-                result = shopify_service.create_free_shipping_discount(
-                    code=code,
-                    title=title,
-                    usage_limit=1,
-                )
-
-            elif reward.reward_type == 'free_product' and reward.shopify_product_id:
-                result = shopify_service.create_free_product_discount(
-                    code=code,
-                    title=title,
-                    product_id=reward.shopify_product_id,
-                    usage_limit=1,
-                )
-
-            else:
-                logger.warning(f"Cannot create Shopify discount for reward type: {reward.reward_type}")
-                return None
-
-            return result
-        except Exception as e:
-            logger.error(f"Failed to create Shopify discount: {e}")
+        config = reward_discount_config(reward)
+        if config is None:
+            logger.warning(f"Cannot create Shopify discount for reward type: {reward.reward_type}")
             return None
+
+        return create_discount_code(user, config, code)
 
     @transaction.atomic
     def redeem_reward(self, user, reward_id: int) -> Dict[str, Any]:

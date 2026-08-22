@@ -142,6 +142,11 @@ export default function NotificationSettings() {
       label: t('notifications.categoryRecommendations'),
       hint: t('notifications.categoryRecommendationsHint'),
     },
+    {
+      key: 'raffle',
+      label: t('notifications.categoryRaffle'),
+      hint: t('notifications.categoryRaffleHint'),
+    },
   ];
 
   function statusSubtitle(): string {

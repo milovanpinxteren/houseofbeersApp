@@ -72,6 +72,7 @@ class NotificationPreference(models.Model):
     birthday = models.BooleanField(default=True)
     announcements = models.BooleanField(default=True)
     recommendations = models.BooleanField(default=True)
+    raffle = models.BooleanField(default=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -106,6 +107,7 @@ class NotificationDelivery(models.Model):
         ('announcement', 'Announcement'),
         ('recommendations', 'Recommendations'),
         ('transactional', 'Transactional'),
+        ('raffle', 'Raffle'),
     ]
 
     # Per-message override of the per-kind email policy. Blank means "use the
@@ -175,6 +177,7 @@ class NotificationKindSetting(models.Model):
         ('announcement', 'Announcement'),
         ('recommendations', 'Beer recommendations'),
         ('transactional', 'Transactional (orders, rewards)'),
+        ('raffle', 'Raffle (campaigns & draws)'),
     ]
 
     kind = models.CharField(max_length=50, unique=True, choices=KIND_CHOICES)

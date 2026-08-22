@@ -294,6 +294,194 @@ def birthday_scan():
     return {'issued': issued, 'skipped': skipped, 'failed': failed}
 
 
+@shared_task(bind=True, max_retries=2, default_retry_delay=120)
+def campaign_backfill(self, campaign_id, preview_id=None):
+    """
+    Shop-wide order scan for one campaign. With preview_id: dry-run whose
+    result lands in that CampaignPreview (Studio preview flow); without:
+    live run that writes progress/awards/entries.
+    """
+    from loyalty.models import Campaign, CampaignPreview
+    from loyalty.services.campaigns import run_backfill
+
+    try:
+        campaign = Campaign.objects.get(id=campaign_id)
+    except Campaign.DoesNotExist:
+        logger.error(f"Campaign {campaign_id} not found for backfill")
+        return
+
+    if preview_id:
+        try:
+            preview = CampaignPreview.objects.get(id=preview_id)
+        except CampaignPreview.DoesNotExist:
+            logger.error(f"CampaignPreview {preview_id} not found")
+            return
+
+        preview.status = 'running'
+        preview.save(update_fields=['status'])
+        try:
+            result = run_backfill(campaign, dry_run=True)
+        except Exception as e:
+            preview.status = 'failed'
+            preview.error = str(e)
+            preview.finished_at = timezone.now()
+            preview.save(update_fields=['status', 'error', 'finished_at'])
+            logger.error(f"Preview failed for campaign {campaign_id}: {e}", exc_info=True)
+            return
+
+        preview.status = 'done'
+        preview.result = result
+        preview.finished_at = timezone.now()
+        preview.save(update_fields=['status', 'result', 'finished_at'])
+
+        # A fresh preview unlocks activation in the Studio. Queryset .update()
+        # deliberately bypasses Campaign.save()'s stale-marking.
+        updates = {'preview_stale': False}
+        if campaign.status == 'draft':
+            updates['status'] = 'previewed'
+        Campaign.objects.filter(pk=campaign.pk).update(**updates)
+        return result
+
+    try:
+        result = run_backfill(campaign, dry_run=False)
+    except Exception as e:
+        # Shopify down mid-scan: retry the whole run — processed_order_ids
+        # makes re-applying already-seen orders a no-op.
+        logger.error(f"Live backfill failed for campaign {campaign_id}: {e}", exc_info=True)
+        raise self.retry(exc=e)
+    logger.info(
+        f"Campaign backfill completed for {campaign.name}: "
+        f"{result.get('orders_scanned', 0)} orders scanned, "
+        f"{result.get('qualified_count', 0)} qualified"
+    )
+    return result
+
+
+@shared_task
+def refresh_campaign_snapshots():
+    """
+    Nightly: re-resolve tag/collection matcher snapshots for active campaigns
+    and complete non-raffle campaigns past their window_end (raffle campaigns
+    complete when their raffle is drawn).
+    """
+    from loyalty.models import Campaign
+    from loyalty.services.campaigns import resolve_product_matchers
+
+    now = timezone.now()
+    completed = 0
+    refreshed = 0
+    failed = 0
+
+    for campaign in Campaign.objects.filter(status='active'):
+        if campaign.action_type != 'raffle' and campaign.window_end < now:
+            campaign.status = 'completed'
+            campaign.save(update_fields=['status', 'updated_at'])
+            completed += 1
+            continue
+        try:
+            resolve_product_matchers(campaign)
+            refreshed += 1
+        except Exception as e:
+            failed += 1
+            logger.error(
+                f"Snapshot refresh failed for campaign {campaign.id}: {e}",
+                exc_info=True,
+            )
+
+    logger.info(
+        f"Campaign snapshot refresh: {refreshed} refreshed, "
+        f"{completed} completed, {failed} failed"
+    )
+    return {'refreshed': refreshed, 'completed': completed, 'failed': failed}
+
+
+@shared_task(bind=True, max_retries=2, default_retry_delay=60)
+def draw_campaign_raffle(self, raffle_id):
+    """
+    Draw one campaign raffle (scheduled by campaign_raffle_scheduler or
+    dispatched from the Studio's "Trek nu" button). Safe to retry/dispatch
+    twice: an already-drawn raffle is a logged no-op.
+    """
+    from loyalty.models import CampaignRaffle
+    from loyalty.services.raffles import draw_raffle
+
+    try:
+        raffle = CampaignRaffle.objects.get(id=raffle_id)
+    except CampaignRaffle.DoesNotExist:
+        logger.error(f"CampaignRaffle {raffle_id} not found for draw")
+        return
+
+    try:
+        winners = draw_raffle(raffle)
+    except Exception as e:
+        logger.error(f"Draw failed for raffle {raffle_id}: {e}", exc_info=True)
+        raise self.retry(exc=e)
+
+    if winners is None:
+        logger.info(f"Raffle {raffle_id} already drawn, skipping")
+        return {'already_drawn': True}
+    return {'winners': len(winners)}
+
+
+@shared_task
+def campaign_raffle_scheduler():
+    """
+    Every 5 minutes: draw open raffles whose draw_at has passed and send
+    reminders for raffles drawing within the reminder window. Draws run
+    inline (we're already in a worker); one raffle's failure never blocks
+    another's.
+    """
+    from loyalty.models import CampaignRaffle
+    from loyalty.services.raffles import draw_raffle, send_raffle_reminders
+
+    now = timezone.now()
+    due = CampaignRaffle.objects.filter(
+        status='open', draw_at__isnull=False, draw_at__lte=now,
+    )
+
+    drawn = 0
+    failed = 0
+    for raffle in due:
+        try:
+            if draw_raffle(raffle) is not None:
+                drawn += 1
+        except Exception as e:
+            failed += 1
+            logger.error(
+                f"Scheduled draw failed for raffle {raffle.id}: {e}",
+                exc_info=True,
+            )
+
+    try:
+        reminded = send_raffle_reminders()
+    except Exception as e:
+        reminded = 0
+        logger.error(f"Raffle reminders failed: {e}", exc_info=True)
+
+    if drawn or failed or reminded:
+        logger.info(
+            f"Raffle scheduler: {drawn} drawn, {failed} failed, "
+            f"{reminded} raffle(s) reminded"
+        )
+    return {'drawn': drawn, 'failed': failed, 'reminded': reminded}
+
+
+@shared_task
+def check_winner_redemptions():
+    """
+    Daily (and on demand from the Studio's "Check redemptions" button):
+    mark issued prize codes as redeemed once Shopify reports usage.
+    """
+    from loyalty.services.raffles import check_winner_redemptions as check
+
+    result = check()
+    logger.info(
+        f"Raffle redemption check: {result['checked']} checked, "
+        f"{result['redeemed']} newly redeemed"
+    )
+    return result
+
+
 @shared_task
 def periodic_partial_sync():
     """Every 3 hours: partial sync (new orders only) for all active users."""

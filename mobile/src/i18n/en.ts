@@ -215,6 +215,8 @@ export default {
     categoryAnnouncementsHint: 'New arrivals, events and news',
     categoryRecommendations: 'Beer recommendations',
     categoryRecommendationsHint: 'Personal picks based on your taste',
+    categoryRaffle: 'Raffles & campaigns',
+    categoryRaffleHint: 'Draw results, reminders and campaign updates',
     emailFallbackNote: 'Important messages such as your birthday gift are always sent by email as well.',
     prefsUnavailable: 'Notification settings could not be loaded. Please try again later.',
     saveError: 'That setting could not be saved. Please try again.',
@@ -604,5 +606,47 @@ export default {
     // Raffle animation
     drawingFor: 'Drawing for',
     tapToDismiss: 'Tap to dismiss',
+  },
+
+  // Loyalty campaign raffles
+  raffle: {
+    sectionTitle: 'Raffles',
+    historyTitle: 'Past draws',
+    screenTitle: 'Raffle',
+    badge: 'Raffle',
+    notFound: 'Raffle not found',
+    // Open + entered
+    entered: "🎟️ You're in!",
+    enteredBody: 'You have {{tickets}} in the draw for {{prize}}.',
+    oneTicket: '1 ticket',
+    manyTickets: '{{count}} tickets',
+    drawAt: 'Draw: {{date}}',
+    drawManual: 'The draw will happen soon',
+    entrants: '{{count}} entrants',
+    matchedProducts: 'Your tickets came from',
+    goodLuck: 'Good luck! 🍀',
+    // Open + not entered (teaser)
+    teaserTitle: 'Win {{prize}}',
+    teaserHint: 'See how to enter',
+    howToEnter: 'How to enter',
+    // Drawn, reveal not watched
+    drawDone: 'The draw has happened!',
+    drawDoneHint: 'Who won {{prize}}? Watch the draw to find out.',
+    viewDraw: 'Watch the draw',
+    // Drawn + seen (compact)
+    wonBy: 'Won by {{names}}',
+    viewCode: 'View your prize code',
+    // Reveal animation
+    drawingFor: 'Drawing: {{prize}}',
+    youWon: 'You won!',
+    youWonBody: 'Congratulations — {{prize}} is yours. Cheers! 🍻',
+    yourCode: 'Your code',
+    tapToCopy: 'Tap to copy',
+    copiedToClipboard: 'Copied!',
+    codeExpires: 'Valid until {{date}}',
+    manualPrizeNote: "We'll get in touch with you about your prize.",
+    lostTitle: 'Not this time…',
+    lostBody: 'Your ticket didn\'t come up this time. Congrats to {{names}} — better luck next raffle! 🍻',
+    replay: 'Replay',
   },
 };

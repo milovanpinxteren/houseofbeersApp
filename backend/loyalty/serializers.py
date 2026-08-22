@@ -1,3 +1,5 @@
+import random
+
 from rest_framework import serializers
 from .models import PointsRule, RewardCategory, Reward, PointsBalance, PointsTransaction, Redemption, Notification
 
@@ -92,3 +94,59 @@ class NotificationSerializer(serializers.ModelSerializer):
         if not request or not request.user.is_authenticated:
             return False
         return obj.read_by.filter(user=request.user).exists()
+
+
+def _raffle_first_name(user):
+    return user.first_name or user.email.split('@')[0]
+
+
+def serialize_raffle(raffle, user, entry):
+    """
+    One raffle as the FROZEN /api/loyalty/raffles/ shape (see
+    CAMPAIGN_CONTRACT.md - the mobile app depends on it field-for-field).
+    Expects `entries__user` and `winners__user` to be prefetched; `entry` is
+    the caller's RaffleEntry or None (teaser card for non-entrants).
+    """
+    campaign = raffle.campaign
+    data = {
+        'id': raffle.id,
+        'campaign_id': campaign.id,
+        'title': campaign.name,
+        'rule_sentence': campaign.rule_sentence,
+        'prize_name': raffle.prize_name,
+        'prize_description': raffle.prize_description,
+        'prize_image_url': raffle.prize_image_url,
+        'draw_at': raffle.draw_at,
+        'status': raffle.status,
+        'entered': entry is not None,
+        'ticket_count': entry.ticket_count if entry else 0,
+        'matched_products': entry.matched_products if entry else [],
+        'seen': bool(entry and entry.seen_at),
+        'result_seen': bool(entry and entry.result_seen_at),
+        'entrant_count': len(raffle.entries.all()),
+        'entrant_first_names': None,
+        'winner_first_names': None,
+        'did_win': None,
+        'my_code': None,
+        'my_code_expires_at': None,
+        'public_winner_names': None,
+    }
+
+    if raffle.status == 'drawn':
+        # Shuffled so the reveal animation can cycle names without leaking
+        # entry order; winners stay in draw order (creation pk order).
+        entrant_names = [_raffle_first_name(e.user) for e in raffle.entries.all()]
+        random.shuffle(entrant_names)
+        winners = sorted(raffle.winners.all(), key=lambda w: w.pk)
+        winner_names = [_raffle_first_name(w.user) for w in winners]
+        my_win = next((w for w in winners if w.user_id == user.id), None)
+
+        data['entrant_first_names'] = entrant_names
+        data['winner_first_names'] = winner_names
+        data['public_winner_names'] = winner_names
+        data['did_win'] = my_win is not None
+        if my_win:
+            data['my_code'] = my_win.prize_code or None
+            data['my_code_expires_at'] = my_win.code_expires_at
+
+    return data

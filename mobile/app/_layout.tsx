@@ -52,6 +52,8 @@ export default function RootLayout() {
             <Stack.Screen name="index" options={{ headerShown: false, title: 'House of Beers' }} />
             <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
             <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+            {/* Instant redirect into the (profile) sub-stack; no header flash */}
+            <Stack.Screen name="raffle/[id]" options={{ headerShown: false }} />
             <Stack.Screen
               name="reset-password"
               options={{

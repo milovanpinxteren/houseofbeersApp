@@ -3,6 +3,8 @@ from django.urls import path, include
 from users.views import password_reset_page
 
 urlpatterns = [
+    # Before admin/ so the admin catch-all cannot shadow the studio.
+    path('admin/campaign-studio/', include('loyalty.studio_urls')),
     path('admin/', admin.site.urls),
     path('api/', include('users.urls')),
     path('api/loyalty/', include('loyalty.urls')),

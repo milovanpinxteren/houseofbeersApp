@@ -1,0 +1,176 @@
+{% extends "loyalty/studio/base.html" %}
+
+{% block studio_crumb %} &rsaquo; {{ campaign.name }} (monitor){% endblock %}
+
+{% block studio_content %}
+<div class="page-head">
+  <div>
+    <h1>{{ campaign.name }}</h1>
+    <p class="page-sub">
+      <span class="chip {{ campaign.status }}">{{ status_label }}</span>
+      &nbsp;{{ action_label }}{% if raffle %} — {{ raffle.prize_name }}
+        {% if raffle.draw_at %}· trekking {{ raffle.draw_at|date:"j M Y H:i" }}{% else %}· handmatige trekking{% endif %}
+      {% endif %}
+      &nbsp;·&nbsp; {{ campaign.window_start|date:"j M Y H:i" }} &ndash; {{ campaign.window_end|date:"j M Y H:i" }}
+    </p>
+  </div>
+  <div class="actions">
+    {% if editable %}
+    <a class="btn secondary" href="{% url 'studio:campaign_edit' campaign.pk %}">Bewerken</a>
+    <a class="btn secondary" href="{% url 'studio:campaign_preview' campaign.pk %}">Preview</a>
+    {% endif %}
+    <a class="btn secondary" href="{% url 'studio:entrants_csv' campaign.pk %}">Exporteer CSV</a>
+  </div>
+</div>
+
+{% if campaign.rule_sentence %}
+<div class="sentence-box">{{ campaign.rule_sentence }}</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Funnel</h2>
+  <div class="funnel">
+    {% for step in funnel %}
+    {% if not forloop.first %}<div class="funnel-arrow">&rarr;</div>{% endif %}
+    <div class="funnel-step">
+      <div class="n">{{ step.count|default_if_none:"–" }}</div>
+      <div class="funnel-label">{{ step.label }}</div>
+      {% if step.sub %}<div class="sub">{{ step.sub }}</div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px;">
+    {% if raffle %}
+      {% if can_draw %}
+      <form class="inline" method="post" action="{% url 'studio:draw_now' campaign.pk %}"
+            onsubmit="return confirm('Nu trekken? De winnaars worden direct bepaald en alle deelnemers krijgen een notificatie. Dit kan niet ongedaan gemaakt worden.');">
+        {% csrf_token %}
+        <button type="submit" class="btn" {% if not draw_available %}disabled title="Trekkings-taak nog niet beschikbaar"{% endif %}>
+          Trek nu
+        </button>
+      </form>
+      {% elif raffle.status == 'drawn' %}
+      <span class="chip completed">Getrokken op {{ raffle.drawn_at|date:"j M Y H:i" }}</span>
+      {% endif %}
+      <form class="inline" method="post" action="{% url 'studio:check_redemptions' campaign.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="btn secondary" {% if not redemptions_available %}disabled title="Verzilver-check nog niet beschikbaar"{% endif %}>
+          Check verzilveringen
+        </button>
+      </form>
+    {% endif %}
+    {% if campaign.status == 'active' %}
+    <form class="inline" method="post" action="{% url 'studio:deactivate' campaign.pk %}"
+          onsubmit="return confirm('Campagne deactiveren? Er komen dan geen nieuwe kwalificaties meer bij.');">
+      {% csrf_token %}
+      <button type="submit" class="btn danger">Deactiveren</button>
+    </form>
+    {% endif %}
+    {% if campaign.status != 'archived' %}
+    <form class="inline" method="post" action="{% url 'studio:archive' campaign.pk %}"
+          onsubmit="return confirm('Campagne archiveren?');">
+      {% csrf_token %}
+      <button type="submit" class="btn secondary">Archiveren</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if winners %}
+<div class="panel accent">
+  <h2>Winnaars</h2>
+  <div class="table-scroll">
+  <table class="data">
+    <thead>
+      <tr>
+        <th>Winnaar</th><th>Prijscode</th><th>Status</th><th>Verzilverd</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for winner in winners %}
+      <tr>
+        <td>{{ winner.user.email }}</td>
+        <td>{% if winner.prize_code %}<span class="code">{{ winner.prize_code }}</span>
+          {% if winner.code_expires_at %}<br><small style="color: var(--hob-muted);">geldig t/m {{ winner.code_expires_at|date:"j M Y" }}</small>{% endif %}
+          {% else %}<span class="no">—</span>{% endif %}</td>
+        <td>{{ winner.get_fulfillment_status_display }}</td>
+        <td>{% if winner.redeemed_at %}<span class="yes">✔ {{ winner.redeemed_at|date:"j M Y" }}
+            {% if winner.redeemed_order_name %}({{ winner.redeemed_order_name }}){% endif %}</span>
+          {% else %}<span class="no">nog niet</span>{% endif %}</td>
+        <td>
+          <form class="inline" method="post" action="{% url 'studio:toggle_fulfilled' campaign.pk winner.pk %}">
+            {% csrf_token %}
+            {% if winner.fulfillment_status == 'fulfilled' %}
+            <button type="submit" class="btn secondary">Weer openzetten</button>
+            {% else %}
+            <button type="submit" class="btn secondary">Afgehandeld</button>
+            {% endif %}
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>{% if raffle %}Deelnemers{% else %}Gekwalificeerde gebruikers{% endif %} ({{ rows|length }})</h2>
+  <div class="table-scroll">
+  <table class="data">
+    <thead>
+      <tr>
+        <th>E-mail</th>
+        <th>Naam</th>
+        {% if raffle %}<th>Loten</th>{% endif %}
+        <th>Producten</th>
+        <th>Genotificeerd</th>
+        {% if raffle %}
+        <th>Kaart geopend</th>
+        <th>Trekking bekeken</th>
+        <th>Resultaat</th>
+        {% else %}
+        <th>Toegekend</th>
+        {% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td>{{ row.email }}</td>
+        <td>{{ row.first_name }}</td>
+        {% if raffle %}<td>{{ row.tickets }}</td>{% endif %}
+        <td>{{ row.matched|join:", " }}</td>
+        <td>
+          {% if row.notified_push %}<span class="yes">push</span>{% endif %}
+          {% if row.notified_email %}<span class="yes">e-mail</span>{% endif %}
+          {% if not row.notified_push and not row.notified_email %}<span class="no">—</span>{% endif %}
+        </td>
+        {% if raffle %}
+        <td>{% if row.seen %}<span class="yes">✔</span>{% else %}<span class="no">—</span>{% endif %}</td>
+        <td>{% if row.result_seen %}<span class="yes">✔</span>{% else %}<span class="no">—</span>{% endif %}</td>
+        <td>{% if row.winner %}<span class="yes">gewonnen</span>{% elif raffle.status == 'drawn' %}<span class="no">niet gewonnen</span>{% else %}<span class="no">—</span>{% endif %}</td>
+        {% else %}
+        <td>
+          {% if row.award %}
+            {% if row.award.points_awarded %}<span class="yes">{{ row.award.points_awarded }} punten</span>{% endif %}
+            {% if row.award.discount_code %}<span class="code">{{ row.award.discount_code }}</span>{% endif %}
+            {% if not row.award.points_awarded and not row.award.discount_code %}<span class="no">—</span>{% endif %}
+          {% else %}<span class="no">—</span>{% endif %}
+        </td>
+        {% endif %}
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="8" style="color: var(--hob-muted); font-style: italic;">
+          Nog geen {% if raffle %}deelnemers{% else %}kwalificaties{% endif %}.
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endblock %}

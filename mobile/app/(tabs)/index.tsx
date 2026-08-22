@@ -21,6 +21,7 @@ import {
 import { getEvents, joinEvent, Event } from '../../src/api/events';
 import { getLoyaltySummary, LoyaltySummary } from '../../src/api/loyalty';
 import IOSInstallPrompt from '../../src/components/IOSInstallPrompt';
+import { RaffleSection } from '../../src/components/RaffleCard';
 
 const WHATSAPP_COMMUNITY_URL = 'https://chat.whatsapp.com/Fxm21pECUyD0dbvJpidnXe';
 
@@ -40,6 +41,8 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [events, setEvents] = useState<Event[]>([]);
   const [loyalty, setLoyalty] = useState<LoyaltySummary | null>(null);
+  // Bumped on pull-to-refresh so the raffle section refetches along with the rest.
+  const [raffleRefresh, setRaffleRefresh] = useState(0);
 
   const fetchData = useCallback(async () => {
     try {
@@ -72,6 +75,7 @@ export default function HomeScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    setRaffleRefresh((k) => k + 1);
     await fetchData();
     setRefreshing(false);
   }, [fetchData]);
@@ -173,6 +177,9 @@ export default function HomeScreen() {
               {notifications.map(renderNotification)}
             </>
           )}
+
+          {/* Raffles — renders nothing when there are none */}
+          <RaffleSection language={language} refreshSignal={raffleRefresh} />
 
           {/* Events */}
           {events.length > 0 && (

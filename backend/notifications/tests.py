@@ -1041,7 +1041,8 @@ class KindSettingTests(TestCase):
         kinds = set(NotificationKindSetting.objects.values_list('kind', flat=True))
         self.assertEqual(
             kinds,
-            {'birthday_gift', 'announcement', 'recommendations', 'transactional'},
+            {'birthday_gift', 'announcement', 'recommendations',
+             'transactional', 'raffle'},
         )
 
     def test_seeded_defaults_match_the_code_defaults(self):

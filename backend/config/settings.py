@@ -235,6 +235,13 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'loyalty.tasks.periodic_intermediate_sync',
         'schedule': crontab(hour=3, minute=0),  # 3:00 AM Amsterdam time
     },
+    # Re-resolves campaign tag/collection product snapshots and completes
+    # non-raffle campaigns whose window has ended. After the 3:00 order sync
+    # so completion sees that night's final progress.
+    'refresh-campaign-snapshots': {
+        'task': 'loyalty.tasks.refresh_campaign_snapshots',
+        'schedule': crontab(hour=3, minute=30),
+    },
     # Runs hourly but only acts at BirthdayRewardConfig.send_hour, so the
     # send hour is admin-tunable without touching this schedule. Also catches
     # up on birthdays missed while the worker was down.
@@ -263,6 +270,19 @@ CELERY_BEAT_SCHEDULE = {
     'process-scheduled-broadcasts': {
         'task': 'notifications.tasks.process_scheduled_broadcasts',
         'schedule': 5 * 60,
+    },
+    # Draws campaign raffles whose draw_at has passed and sends the ~3h
+    # pre-draw reminders. Every 5 minutes, so a draw is never much later
+    # than the announced time.
+    'campaign-raffle-scheduler': {
+        'task': 'loyalty.tasks.campaign_raffle_scheduler',
+        'schedule': crontab(minute='*/5'),
+    },
+    # Marks raffle prize codes as redeemed once Shopify reports usage.
+    # After the nightly syncs, before the subscription prune.
+    'check-raffle-redemptions': {
+        'task': 'loyalty.tasks.check_winner_redemptions',
+        'schedule': crontab(hour=4, minute=0),
     },
 }
 
