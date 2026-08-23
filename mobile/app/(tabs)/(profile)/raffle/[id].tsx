@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -19,6 +19,37 @@ import {
   markRaffleResultSeen,
   Raffle,
 } from '../../../../src/api/raffles';
+
+/** Live countdown to the draw: D/H/M tiles, seconds ticking under a day. */
+function DrawCountdown({ target }: { target: string }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const iv = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const diff = Math.floor((new Date(target).getTime() - now) / 1000);
+  if (diff <= 0) {
+    return <Text style={styles.anyMoment}>{t('raffle.drawAnyMoment')}</Text>;
+  }
+  const days = Math.floor(diff / 86400);
+  const cells: Array<[number, string]> = [
+    ...(days > 0 ? ([[days, t('raffle.days')]] as Array<[number, string]>) : []),
+    [Math.floor((diff % 86400) / 3600), t('raffle.hours')],
+    [Math.floor((diff % 3600) / 60), t('raffle.minutes')],
+    ...(days === 0 ? ([[diff % 60, t('raffle.seconds')]] as Array<[number, string]>) : []),
+  ];
+  return (
+    <View style={styles.countdownRow}>
+      {cells.map(([value, label], index) => (
+        <View key={index} style={styles.countdownTile}>
+          <Text style={styles.countdownValue}>{String(value).padStart(2, '0')}</Text>
+          <Text style={styles.countdownLabel}>{label}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
 
 export default function RaffleScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -138,16 +169,20 @@ export default function RaffleScreen() {
               onComplete={handleRevealComplete}
             />
           </View>
-          {raffle.prize_image_url ? (
-            <Image
-              source={{ uri: raffle.prize_image_url }}
-              style={styles.prizeImage}
-              resizeMode="cover"
-            />
-          ) : null}
-          {raffle.prize_description ? (
-            <Text style={styles.prizeDescription}>{raffle.prize_description}</Text>
-          ) : null}
+          <Card style={styles.sectionCard}>
+            <Text style={styles.sectionLabel}>{t('raffle.prizeLabel')}</Text>
+            <Text style={styles.prizeName}>{raffle.prize_name}</Text>
+            {raffle.prize_image_url ? (
+              <Image
+                source={{ uri: raffle.prize_image_url }}
+                style={styles.prizeImage}
+                resizeMode="cover"
+              />
+            ) : null}
+            {raffle.prize_description ? (
+              <Text style={styles.prizeDescription}>{raffle.prize_description}</Text>
+            ) : null}
+          </Card>
         </>
       ) : (
         <>
@@ -206,22 +241,37 @@ export default function RaffleScreen() {
             </Card>
           ) : null}
 
-          <View style={styles.metaBox}>
-            <View style={styles.metaRow}>
-              <Ionicons name="time-outline" size={16} color={colors.textMuted} />
-              <Text style={styles.metaText}>
-                {raffle.draw_at
-                  ? t('raffle.drawAt', { date: formatDrawAt(raffle.draw_at) })
-                  : t('raffle.drawManual')}
-              </Text>
+          {raffle.draw_at ? (
+            <Card style={styles.sectionCard}>
+              <Text style={styles.sectionLabel}>{t('raffle.drawIn')}</Text>
+              <DrawCountdown target={raffle.draw_at} />
+              <View style={[styles.metaRow, styles.entrantsRow]}>
+                <Ionicons name="people-outline" size={16} color={colors.textMuted} />
+                <Text style={styles.metaText}>
+                  {t('raffle.entrants', { count: raffle.entrant_count })}
+                </Text>
+              </View>
+              <View style={styles.metaRow}>
+                <Ionicons name="time-outline" size={16} color={colors.textMuted} />
+                <Text style={styles.metaText}>
+                  {t('raffle.drawAt', { date: formatDrawAt(raffle.draw_at) })}
+                </Text>
+              </View>
+            </Card>
+          ) : (
+            <View style={styles.metaBox}>
+              <View style={styles.metaRow}>
+                <Ionicons name="time-outline" size={16} color={colors.textMuted} />
+                <Text style={styles.metaText}>{t('raffle.drawManual')}</Text>
+              </View>
+              <View style={styles.metaRow}>
+                <Ionicons name="people-outline" size={16} color={colors.textMuted} />
+                <Text style={styles.metaText}>
+                  {t('raffle.entrants', { count: raffle.entrant_count })}
+                </Text>
+              </View>
             </View>
-            <View style={styles.metaRow}>
-              <Ionicons name="people-outline" size={16} color={colors.textMuted} />
-              <Text style={styles.metaText}>
-                {t('raffle.entrants', { count: raffle.entrant_count })}
-              </Text>
-            </View>
-          </View>
+          )}
         </>
       )}
     </Screen>
@@ -361,5 +411,41 @@ const styles = StyleSheet.create({
   metaText: {
     fontSize: 13,
     color: colors.textMuted,
+  },
+  countdownRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  countdownTile: {
+    flex: 1,
+    backgroundColor: colors.surfaceLow,
+    borderRadius: borderRadius.md,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+  },
+  countdownValue: {
+    fontFamily: fonts.headingBold,
+    fontSize: 30,
+    color: colors.text,
+    letterSpacing: 1,
+  },
+  countdownLabel: {
+    fontFamily: fonts.heading,
+    fontSize: 10,
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  anyMoment: {
+    fontFamily: fonts.serifItalic,
+    fontSize: 15,
+    color: colors.primary,
+    marginTop: spacing.xs,
+  },
+  entrantsRow: {
+    marginTop: spacing.md,
+    marginBottom: spacing.xs,
   },
 });

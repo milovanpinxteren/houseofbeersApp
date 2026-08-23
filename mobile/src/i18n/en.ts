@@ -625,6 +625,13 @@ export default {
     entrants: '{{count}} entrants',
     matchedProducts: 'Your tickets came from',
     goodLuck: 'Good luck! 🍀',
+    drawIn: 'Draw in',
+    days: 'days',
+    hours: 'hrs',
+    minutes: 'min',
+    seconds: 'sec',
+    drawAnyMoment: 'The draw can start any moment…',
+    prizeLabel: 'The prize',
     // Open + not entered (teaser)
     teaserTitle: 'Win {{prize}}',
     teaserHint: 'See how to enter',
@@ -638,6 +645,8 @@ export default {
     viewCode: 'View your prize code',
     // Reveal animation
     drawingFor: 'Drawing: {{prize}}',
+    winner: 'Winner',
+    winners: 'Winners',
     youWon: 'You won!',
     youWonBody: 'Congratulations — {{prize}} is yours. Cheers! 🍻',
     yourCode: 'Your code',

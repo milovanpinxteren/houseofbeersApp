@@ -624,6 +624,13 @@ export default {
     entrants: '{{count}} deelnemers',
     matchedProducts: 'Jouw loten kwamen van',
     goodLuck: 'Veel succes! 🍀',
+    drawIn: 'Trekking over',
+    days: 'dagen',
+    hours: 'uur',
+    minutes: 'min',
+    seconds: 'sec',
+    drawAnyMoment: 'De trekking kan elk moment beginnen…',
+    prizeLabel: 'De prijs',
     // Open + doet nog niet mee (teaser)
     teaserTitle: 'Win {{prize}}',
     teaserHint: 'Zo doe je mee',
@@ -637,6 +644,8 @@ export default {
     viewCode: 'Bekijk je prijscode',
     // Onthullingsanimatie
     drawingFor: 'Trekking: {{prize}}',
+    winner: 'Winnaar',
+    winners: 'Winnaars',
     youWon: 'Jij hebt gewonnen!',
     youWonBody: 'Gefeliciteerd — {{prize}} is van jou. Proost! 🍻',
     yourCode: 'Jouw code',
