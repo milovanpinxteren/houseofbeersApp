@@ -9,6 +9,8 @@
 
   var sentenceUrl = form.dataset.sentenceUrl;
   var searchUrl = form.dataset.searchUrl;
+  var userSearchUrl = form.dataset.userSearchUrl;
+  var audienceCountUrl = form.dataset.audienceCountUrl;
   var csrfToken = form.querySelector('[name=csrfmiddlewaretoken]').value;
 
   var MATCHER_TYPES = [
@@ -29,6 +31,9 @@
   var actionSelect = document.getElementById('id_action_type');
   var fulfillmentSelect = document.getElementById('id_fulfillment_type');
 
+  var audienceModeSelect = document.getElementById('id_audience_mode');
+  var audienceModeHint = document.getElementById('audience-mode-hint');
+
   function updateSections() {
     var action = actionSelect.value;
     document.querySelectorAll('[data-action-section]').forEach(function (el) {
@@ -39,10 +44,28 @@
     document.querySelectorAll('[data-discount-section]').forEach(function (el) {
       el.hidden = !needsDiscount;
     });
+    var audienceOnly = audienceModeSelect.value === 'audience';
+    document.querySelectorAll('[data-orders-only]').forEach(function (el) {
+      el.hidden = audienceOnly;
+    });
+    var entryModeField = document.getElementById('id_entry_mode');
+    if (entryModeField) entryModeField.closest('.field').hidden = audienceOnly;
+    if (audienceModeHint) {
+      audienceModeHint.textContent = audienceOnly
+        ? 'Iedereen in de doelgroep doet automatisch mee zodra de campagne actief wordt. ' +
+          'Klanten die later aan de filters gaan voldoen worden ’s nachts toegevoegd.'
+        : 'Filters en handmatige selectie zijn hier een extra voorwaarde bovenop de ' +
+          'aankoopvoorwaarden. Alles leeg = iedereen kan meedoen.';
+    }
     updatePushMock();
   }
   actionSelect.addEventListener('change', function () { updateSections(); scheduleSentence(); });
   fulfillmentSelect.addEventListener('change', function () { updateSections(); scheduleSentence(); });
+  audienceModeSelect.addEventListener('change', function () {
+    updateSections();
+    scheduleSentence();
+    scheduleAudienceCount();
+  });
 
   // ---------- Matcher rows ----------
   var rowsContainer = document.getElementById('matcher-rows');
@@ -224,6 +247,154 @@
     }, 350);
   });
 
+  // ---------- Audience: manual user picker ----------
+  var userSearchInput = document.getElementById('id_user_search');
+  var userSearchResults = document.getElementById('user-search-results');
+  var userSearchStatus = document.getElementById('user-search-status');
+  var userChips = document.getElementById('manual-user-chips');
+  var manualUsersInput = document.getElementById('id_manual_users');
+  var userSearchTimer = null;
+
+  function readManualUsers() {
+    try {
+      var parsed = JSON.parse(manualUsersInput.value || '[]');
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function writeManualUsers(users) {
+    manualUsersInput.value = JSON.stringify(users);
+    renderUserChips(users);
+    scheduleAudienceCount();
+  }
+
+  function renderUserChips(users) {
+    userChips.innerHTML = '';
+    users.forEach(function (user) {
+      var chip = document.createElement('div');
+      chip.className = 'matcher-row';
+      var label = document.createElement('span');
+      label.className = 'matcher-label';
+      label.textContent = user.label;
+      chip.appendChild(label);
+      var remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'remove';
+      remove.textContent = 'Verwijderen';
+      remove.addEventListener('click', function () {
+        writeManualUsers(readManualUsers().filter(function (u) {
+          return u.id !== user.id;
+        }));
+      });
+      chip.appendChild(remove);
+      userChips.appendChild(chip);
+    });
+  }
+
+  function addManualUser(user) {
+    var users = readManualUsers();
+    if (users.some(function (u) { return u.id === user.id; })) return;
+    users.push({ id: user.id, label: user.email });
+    writeManualUsers(users);
+  }
+
+  userSearchInput.addEventListener('input', function () {
+    var query = userSearchInput.value.trim();
+    clearTimeout(userSearchTimer);
+    if (query.length < 2) {
+      userSearchResults.hidden = true;
+      userSearchStatus.hidden = true;
+      return;
+    }
+    userSearchTimer = setTimeout(function () {
+      userSearchStatus.textContent = 'Zoeken…';
+      userSearchStatus.hidden = false;
+      fetch(userSearchUrl + '?q=' + encodeURIComponent(query), {
+        credentials: 'same-origin',
+      })
+        .then(function (response) { return response.json(); })
+        .then(function (data) {
+          var users = data.users || [];
+          userSearchResults.innerHTML = '';
+          if (!users.length) {
+            userSearchStatus.textContent = 'Geen klanten gevonden.';
+            userSearchStatus.hidden = false;
+            userSearchResults.hidden = true;
+            return;
+          }
+          userSearchStatus.hidden = true;
+          users.forEach(function (user) {
+            var item = document.createElement('div');
+            item.className = 'result';
+            var title = document.createElement('div');
+            title.className = 'r-title';
+            title.textContent = user.email;
+            item.appendChild(title);
+            if (user.name) {
+              var meta = document.createElement('div');
+              meta.className = 'r-meta';
+              meta.textContent = user.name;
+              item.appendChild(meta);
+            }
+            item.addEventListener('click', function () {
+              addManualUser(user);
+              userSearchResults.hidden = true;
+              userSearchInput.value = '';
+            });
+            userSearchResults.appendChild(item);
+          });
+          userSearchResults.hidden = false;
+        })
+        .catch(function () {
+          userSearchStatus.textContent = 'Zoeken mislukt.';
+          userSearchStatus.hidden = false;
+        });
+    }, 350);
+  });
+
+  renderUserChips(readManualUsers());
+
+  // ---------- Audience: live count ----------
+  var audienceCountBox = document.getElementById('audience-count');
+  var audienceCountTimer = null;
+
+  function scheduleAudienceCount() {
+    clearTimeout(audienceCountTimer);
+    audienceCountTimer = setTimeout(fetchAudienceCount, 500);
+  }
+
+  function fetchAudienceCount() {
+    if (!audienceCountBox) return;
+    fetch(audienceCountUrl, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'X-CSRFToken': csrfToken },
+      body: new FormData(form),
+    })
+      .then(function (response) { return response.json(); })
+      .then(function (data) {
+        if (!data.restricted) {
+          audienceCountBox.textContent = audienceModeSelect.value === 'audience'
+            ? 'Nog geen doelgroep: kies een filter of selecteer klanten.'
+            : 'Geen doelgroepbeperking — iedereen kan meedoen.';
+        } else {
+          audienceCountBox.textContent = 'Doelgroep op dit moment: ' +
+            data.count + (data.count === 1 ? ' klant.' : ' klanten.');
+        }
+      })
+      .catch(function () { /* transient; next change retries */ });
+  }
+
+  ['id_aud_min_age', 'id_aud_birthday_month', 'id_aud_min_app_age_days',
+   'id_aud_min_lifetime_orders', 'id_aud_active_within_days'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', function () { scheduleAudienceCount(); scheduleSentence(); });
+    el.addEventListener('input', function () { scheduleAudienceCount(); scheduleSentence(); });
+  });
+
   // ---------- Live rule sentence ----------
   var sentenceBox = document.getElementById('sentence-preview');
   var sentenceTimer = null;
@@ -294,6 +465,7 @@
   updateSections();
   updatePushMock();
   scheduleSentence();
+  scheduleAudienceCount();
 
   // Keep the hidden matcher JSON current on submit.
   form.addEventListener('submit', syncHidden);

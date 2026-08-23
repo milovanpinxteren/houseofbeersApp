@@ -35,7 +35,9 @@
 
 <form method="post" id="builder-form"
       data-sentence-url="{% url 'studio:rule_sentence' %}"
-      data-search-url="{% url 'studio:product_search' %}">
+      data-search-url="{% url 'studio:product_search' %}"
+      data-user-search-url="{% url 'studio:user_search' %}"
+      data-audience-count-url="{% url 'studio:audience_count' %}">
   {% csrf_token %}
 
   <div class="panel">
@@ -169,6 +171,60 @@
   </div>
 
   <div class="panel">
+    <h2>Doelgroep</h2>
+    <div class="field">
+      <label for="id_audience_mode">Wie doet er mee?</label>
+      <select id="id_audience_mode" name="audience_mode">
+        <option value="orders" {% if form.audience_mode != 'audience' %}selected{% endif %}>Iedereen die aan de aankoopvoorwaarden voldoet</option>
+        <option value="audience" {% if form.audience_mode == 'audience' %}selected{% endif %}>Alleen geselecteerde klanten — geen aankoop nodig</option>
+      </select>
+      <div class="hint" id="audience-mode-hint"></div>
+    </div>
+
+    <div class="field-row">
+      <div class="field">
+        <label for="id_aud_min_age">Min. leeftijd (jaar)</label>
+        <input type="number" min="1" id="id_aud_min_age" name="aud_min_age" value="{{ form.aud_min_age }}">
+      </div>
+      <div class="field">
+        <label for="id_aud_birthday_month">Jarig in maand</label>
+        <select id="id_aud_birthday_month" name="aud_birthday_month">
+          <option value="">— geen filter —</option>
+          {% for value, label in month_choices %}
+          <option value="{{ value }}" {% if form.aud_birthday_month == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="id_aud_min_app_age_days">Heeft de app al minstens (dagen)</label>
+        <input type="number" min="1" id="id_aud_min_app_age_days" name="aud_min_app_age_days" value="{{ form.aud_min_app_age_days }}">
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="id_aud_min_lifetime_orders">Min. aantal bestellingen (ooit)</label>
+        <input type="number" min="1" id="id_aud_min_lifetime_orders" name="aud_min_lifetime_orders" value="{{ form.aud_min_lifetime_orders }}">
+        <div class="hint">Bestellingen die via de app-koppeling zijn geteld.</div>
+      </div>
+      <div class="field">
+        <label for="id_aud_active_within_days">Actief in de afgelopen (dagen)</label>
+        <input type="number" min="1" id="id_aud_active_within_days" name="aud_active_within_days" value="{{ form.aud_active_within_days }}">
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="id_user_search">Klanten handmatig toevoegen</label>
+      <input type="search" id="id_user_search" placeholder="Zoek op e-mail of naam…" autocomplete="off">
+      <div class="search-status" id="user-search-status" hidden></div>
+      <div class="search-results" id="user-search-results" hidden></div>
+    </div>
+    <div id="manual-user-chips" class="matcher-rows"></div>
+    <input type="hidden" name="manual_users" id="id_manual_users" value="{{ form.manual_users }}">
+
+    <div class="hint" id="audience-count" style="margin-top: 8px;"></div>
+  </div>
+
+  <div class="panel" data-orders-only>
     <h2>Producten die meetellen</h2>
     <p class="hint" style="color: var(--hob-muted); font-size: 12px; margin-top: 0;">
       Geen regels = elke betaalde bestelling in de periode telt. Zoek een product of voeg
@@ -187,7 +243,7 @@
     <input type="hidden" name="product_matchers" id="id_product_matchers" value="{{ form.product_matchers }}">
   </div>
 
-  <details class="more" {% if form.min_distinct_products != '1' or form.min_total_quantity != '1' or form.min_order_value or form.min_total_spend or form.min_order_count %}open{% endif %}>
+  <details class="more" data-orders-only {% if form.min_distinct_products != '1' or form.min_total_quantity != '1' or form.min_order_value or form.min_total_spend or form.min_order_count %}open{% endif %}>
     <summary>Meer voorwaarden (aantallen &amp; bedragen)</summary>
     <div class="field-row">
       <div class="field">
@@ -216,7 +272,7 @@
     </div>
   </details>
 
-  <details class="more" {% if form.first_order_only or form.only_after_registration or form.requires_untappd or form.min_points_balance or form.registered_after %}open{% endif %}>
+  <details class="more" data-orders-only {% if form.first_order_only or form.only_after_registration or form.requires_untappd or form.min_points_balance or form.registered_after %}open{% endif %}>
     <summary>Klantvoorwaarden</summary>
     <div class="field checkbox">
       <input type="checkbox" id="id_first_order_only" name="first_order_only" {% if form.first_order_only %}checked{% endif %}>

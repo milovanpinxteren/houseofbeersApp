@@ -70,12 +70,55 @@ def _nl_amount(value) -> str:
     return f"€{amount}"
 
 
+def _action_clause(campaign) -> str:
+    """Third-person-singular action clause ('krijgt 50 punten')."""
+    if campaign.action_type == 'points' and campaign.points_amount:
+        if campaign.points_mode == 'per_item':
+            return f"krijgt {campaign.points_amount} punten per gekocht item"
+        return f"krijgt {campaign.points_amount} punten"
+    if campaign.action_type == 'discount_code':
+        if campaign.discount_type == 'percentage' and campaign.discount_value:
+            pct = campaign.discount_value
+            pct_text = str(int(pct)) if pct == int(pct) else str(pct)
+            return f"ontvangt een kortingscode van {pct_text}%"
+        if campaign.discount_type == 'fixed_amount' and campaign.discount_value:
+            return f"ontvangt een kortingscode van {_nl_amount(campaign.discount_value)}"
+        if campaign.discount_type == 'free_shipping':
+            return "ontvangt gratis verzending"
+        if campaign.discount_type == 'free_product':
+            return "ontvangt een gratis product"
+        return "ontvangt een kortingscode"
+    if campaign.action_type == 'raffle':
+        action = "doet mee in de loting"
+        raffle = campaign.raffle if hasattr(campaign, 'raffle') else None
+        if raffle:
+            if raffle.prize_name:
+                action += f" voor {raffle.prize_name}"
+            if campaign.audience_mode != 'audience':
+                if raffle.entry_mode == 'per_item':
+                    action += " (1 lot per gekocht item)"
+                elif raffle.entry_mode == 'per_order':
+                    action += " (1 lot per bestelling)"
+        return action
+    return "doet mee"
+
+
 def build_rule_sentence(campaign) -> str:
     """
     Plain-language NL summary of the campaign, e.g. "Iedereen die tussen 1 en
     30 september minstens 2 van deze 3 bieren koopt, doet mee in de loting
-    (1 lot per gekocht item)."
+    (1 lot per gekocht item)." Audience-mode campaigns describe the selection
+    instead of purchase conditions.
     """
+    if campaign.audience_mode == 'audience':
+        from loyalty.services.audience import describe_filters
+
+        action = _action_clause(campaign)
+        clauses = describe_filters(campaign)
+        if clauses:
+            return f"Ieder lid dat {' en '.join(clauses)}, {action} — automatisch."
+        return f"Een geselecteerde groep leden {action} — automatisch."
+
     period = _nl_period(campaign.window_start, campaign.window_end)
 
     matchers = campaign.product_matchers or []
@@ -111,39 +154,18 @@ def build_rule_sentence(campaign) -> str:
         clauses.append("met een gekoppeld Untappd-account")
 
     condition = ' en '.join(clauses)
+    action = _action_clause(campaign)
 
-    if campaign.action_type == 'points' and campaign.points_amount:
-        if campaign.points_mode == 'per_item':
-            action = f"krijgt {campaign.points_amount} punten per gekocht item"
+    sentence = f"Iedereen die {period} {condition}, {action}."
+    from loyalty.services.audience import describe_filters, has_audience
+    if has_audience(campaign):
+        # Orders mode with an audience gate: mention the restriction.
+        parts = describe_filters(campaign)
+        if parts:
+            sentence += f" Alleen voor leden die {' en '.join(parts)}."
         else:
-            action = f"krijgt {campaign.points_amount} punten"
-    elif campaign.action_type == 'discount_code':
-        if campaign.discount_type == 'percentage' and campaign.discount_value:
-            pct = campaign.discount_value
-            pct_text = str(int(pct)) if pct == int(pct) else str(pct)
-            action = f"ontvangt een kortingscode van {pct_text}%"
-        elif campaign.discount_type == 'fixed_amount' and campaign.discount_value:
-            action = f"ontvangt een kortingscode van {_nl_amount(campaign.discount_value)}"
-        elif campaign.discount_type == 'free_shipping':
-            action = "ontvangt gratis verzending"
-        elif campaign.discount_type == 'free_product':
-            action = "ontvangt een gratis product"
-        else:
-            action = "ontvangt een kortingscode"
-    elif campaign.action_type == 'raffle':
-        action = "doet mee in de loting"
-        raffle = campaign.raffle if hasattr(campaign, 'raffle') else None
-        if raffle:
-            if raffle.prize_name:
-                action += f" voor {raffle.prize_name}"
-            if raffle.entry_mode == 'per_item':
-                action += " (1 lot per gekocht item)"
-            elif raffle.entry_mode == 'per_order':
-                action += " (1 lot per bestelling)"
-    else:
-        action = "doet mee"
-
-    return f"Iedereen die {period} {condition}, {action}."
+            sentence += " Alleen voor geselecteerde leden."
+    return sentence
 
 
 # ============ Matcher resolution ============
@@ -359,6 +381,13 @@ def _condition_checks(campaign, user, data: Dict[str, Any]) -> Dict[str, Dict[st
     if campaign.registered_after:
         checks['registered_after'] = {'ok': user.date_joined >= campaign.registered_after}
 
+    from loyalty.services.audience import has_audience, user_in_audience
+    if has_audience(campaign):
+        # In orders mode a configured audience is an extra gate; an audience
+        # miss is never a near-miss (you can't buy your way into a birthday
+        # month).
+        checks['audience'] = {'ok': user_in_audience(campaign, user)}
+
     return checks
 
 
@@ -407,6 +436,8 @@ def apply_order_to_campaigns(user, order: Dict[str, Any]):
 
     campaigns = Campaign.objects.filter(
         status='active',
+        # Audience-mode campaigns qualify by selection, not by orders.
+        audience_mode='orders',
         window_start__lte=order_date,
         window_end__gte=order_date,
     )
@@ -629,7 +660,13 @@ def run_backfill(campaign, dry_run: bool) -> Dict[str, Any]:
     dry_run returns the CampaignPreview.result shape without writing progress;
     a live run feeds each order through the same per-order application logic
     as the sync hook.
+
+    Audience-mode campaigns take the selection path instead: no Shopify scan,
+    the audience IS the qualified set.
     """
+    if campaign.audience_mode == 'audience':
+        return run_audience_backfill(campaign, dry_run)
+
     from users.models import User
     from users.services import ShopifyService
 
@@ -729,3 +766,82 @@ def run_backfill(campaign, dry_run: bool) -> Dict[str, Any]:
         'qualified_count': qualified_count,
         'orders_scanned': orders_scanned,
     }
+
+
+# ============ Audience backfill (audience_mode='audience') ============
+
+def run_audience_backfill(campaign, dry_run: bool) -> Dict[str, Any]:
+    """
+    Qualify the campaign's audience directly — no orders involved. DB-only,
+    so it is cheap enough to re-run nightly for active campaigns (new filter
+    matches get added); already-qualified members are skipped.
+    """
+    from users.models import User
+
+    from loyalty.services.audience import audience_user_ids
+
+    ids = audience_user_ids(campaign) or set()
+    users = list(User.objects.filter(id__in=ids).order_by('id'))
+
+    if dry_run:
+        rows = [{
+            'user_id': user.id,
+            'email': user.email,
+            'first_name': user.first_name or user.email.split('@')[0],
+            'tickets': 1,
+            'matched': [],
+        } for user in users]
+        return {
+            'qualified_count': len(rows),
+            'users': rows,
+            'near_miss_count': 0,
+            'near_miss_users': [],
+            'orders_scanned': 0,
+            'mode': 'audience',
+        }
+
+    newly_qualified = 0
+    for user in users:
+        try:
+            with transaction.atomic():
+                if _qualify_audience_member(campaign, user):
+                    newly_qualified += 1
+        except Exception as e:
+            logger.error(
+                f"Audience backfill: campaign {campaign.id} failed for "
+                f"user {user.email}: {e}",
+                exc_info=True,
+            )
+
+    from loyalty.models import CampaignProgress
+
+    qualified_count = CampaignProgress.objects.filter(
+        campaign=campaign, qualified_at__isnull=False
+    ).count()
+    logger.info(
+        f"Audience backfill for campaign {campaign.id} ({campaign.name}): "
+        f"{len(users)} in audience, {newly_qualified} newly qualified, "
+        f"{qualified_count} total"
+    )
+    return {
+        'qualified_count': qualified_count,
+        'orders_scanned': 0,
+        'newly_qualified': newly_qualified,
+    }
+
+
+def _qualify_audience_member(campaign, user) -> bool:
+    """Idempotently qualify one audience member. True if newly qualified."""
+    from loyalty.models import CampaignProgress
+
+    progress, _ = CampaignProgress.objects.select_for_update().get_or_create(
+        campaign=campaign, user=user
+    )
+    if progress.qualified_at is not None:
+        return False
+    if not progress.data:
+        progress.data = _empty_data()
+    progress.qualified_at = timezone.now()
+    progress.save(update_fields=['data', 'qualified_at', 'updated_at'])
+    fire_qualification(campaign, user, progress)
+    return True

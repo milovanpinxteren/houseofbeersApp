@@ -365,7 +365,9 @@ def refresh_campaign_snapshots():
     complete when their raffle is drawn).
     """
     from loyalty.models import Campaign
-    from loyalty.services.campaigns import resolve_product_matchers
+    from loyalty.services.campaigns import (
+        resolve_product_matchers, run_audience_backfill,
+    )
 
     now = timezone.now()
     completed = 0
@@ -379,7 +381,13 @@ def refresh_campaign_snapshots():
             completed += 1
             continue
         try:
-            resolve_product_matchers(campaign)
+            if campaign.audience_mode == 'audience':
+                # Users who started matching the audience filters since
+                # activation (registered, turned of age, hit an order count)
+                # get qualified here; existing members are a no-op.
+                run_audience_backfill(campaign, dry_run=False)
+            else:
+                resolve_product_matchers(campaign)
             refreshed += 1
         except Exception as e:
             failed += 1

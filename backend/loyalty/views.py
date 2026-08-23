@@ -228,6 +228,14 @@ class RafflesListView(APIView):
             .select_related('campaign')
             .prefetch_related('entries__user', 'winners__user')
         )
+        # Audience-selected raffles have no "how to enter" — showing a teaser
+        # to someone outside the selection would be a promise they can't act
+        # on, so only entrants see them.
+        open_raffles = [
+            r for r in open_raffles
+            if r.campaign.audience_mode != 'audience'
+            or any(e.user_id == request.user.id for e in r.entries.all())
+        ]
         drawn_raffles = list(
             CampaignRaffle.objects.filter(status='drawn', entries__user=request.user)
             .select_related('campaign')

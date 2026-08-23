@@ -42,6 +42,14 @@ logger = logging.getLogger(__name__)
 
 MATCHER_TYPES = ('sku', 'product_id', 'title', 'tag', 'collection')
 
+# (value, label) for the birthday-month audience filter; values are strings
+# because they round-trip through the form.
+MONTH_CHOICES = [
+    ('1', 'januari'), ('2', 'februari'), ('3', 'maart'), ('4', 'april'),
+    ('5', 'mei'), ('6', 'juni'), ('7', 'juli'), ('8', 'augustus'),
+    ('9', 'september'), ('10', 'oktober'), ('11', 'november'), ('12', 'december'),
+]
+
 
 def _extract_product_id(value):
     """Pull the numeric Shopify product id out of whatever an admin pastes.
@@ -251,10 +259,65 @@ def _parse_campaign_form(post):
     min_points_balance = _int('min_points_balance', 'Minimaal puntensaldo')
     registered_after = _parse_dt(post.get('registered_after'))
 
+    # --- Audience (doelgroep) ---
+    audience_mode = post.get('audience_mode') or 'orders'
+    if audience_mode not in dict(Campaign.AUDIENCE_MODE_CHOICES):
+        audience_mode = 'orders'
+
+    audience_filters = {}
+    aud_min_age = _int('aud_min_age', 'Minimale leeftijd (doelgroep)', minimum=1)
+    if aud_min_age:
+        audience_filters['min_age'] = aud_min_age
+    aud_birthday_month = _int('aud_birthday_month', 'Verjaardagsmaand (doelgroep)')
+    if aud_birthday_month:
+        if 1 <= aud_birthday_month <= 12:
+            audience_filters['birthday_month'] = aud_birthday_month
+        else:
+            errors.append('Kies een geldige verjaardagsmaand (1 t/m 12).')
+    aud_min_app_age_days = _int(
+        'aud_min_app_age_days', 'App-gebruiker sinds minstens (dagen)', minimum=1
+    )
+    if aud_min_app_age_days:
+        audience_filters['min_app_age_days'] = aud_min_app_age_days
+    aud_min_lifetime_orders = _int(
+        'aud_min_lifetime_orders', 'Minimaal aantal bestellingen (doelgroep)', minimum=1
+    )
+    if aud_min_lifetime_orders:
+        audience_filters['min_lifetime_orders'] = aud_min_lifetime_orders
+    aud_active_within_days = _int(
+        'aud_active_within_days', 'Actief in de afgelopen (dagen)', minimum=1
+    )
+    if aud_active_within_days:
+        audience_filters['active_within_days'] = aud_active_within_days
+
+    raw_manual = post.get('manual_users') or '[]'
+    manual_user_ids = []
+    try:
+        parsed_manual = json.loads(raw_manual)
+        if not isinstance(parsed_manual, list):
+            raise ValueError
+        for row in parsed_manual:
+            user_id = row.get('id') if isinstance(row, dict) else row
+            user_id = int(user_id)
+            if user_id not in manual_user_ids:
+                manual_user_ids.append(user_id)
+    except (ValueError, TypeError):
+        manual_user_ids = []
+        errors.append('De geselecteerde klanten konden niet gelezen worden.')
+
+    if audience_mode == 'audience' and not audience_filters and not manual_user_ids:
+        errors.append(
+            'Een doelgroep-campagne heeft minstens één doelgroepfilter of '
+            'een handmatige klantselectie nodig.'
+        )
+
     # --- Action config ---
     points_amount = _int('points_amount', 'Aantal punten', minimum=1)
     points_mode = post.get('points_mode') or 'fixed'
     if points_mode not in dict(Campaign.POINTS_MODE_CHOICES):
+        points_mode = 'fixed'
+    if audience_mode == 'audience':
+        # No purchases involved: per-item points would compute to 0.
         points_mode = 'fixed'
 
     discount_type = post.get('discount_type') or ''
@@ -292,6 +355,9 @@ def _parse_campaign_form(post):
         num_winners = _int('num_winners', 'Aantal winnaars', default=1, minimum=1)
         entry_mode = post.get('entry_mode') or 'single'
         if entry_mode not in dict(CampaignRaffle.ENTRY_MODE_CHOICES):
+            entry_mode = 'single'
+        if audience_mode == 'audience':
+            # Selection-based entry: everyone gets exactly one ticket.
             entry_mode = 'single'
         fulfillment_type = post.get('fulfillment_type') or 'manual'
         if fulfillment_type not in dict(CampaignRaffle.FULFILLMENT_TYPE_CHOICES):
@@ -344,6 +410,9 @@ def _parse_campaign_form(post):
         'requires_untappd': bool(post.get('requires_untappd')),
         'min_points_balance': min_points_balance,
         'registered_after': registered_after,
+        'audience_mode': audience_mode,
+        'audience_filters': audience_filters,
+        'manual_user_ids': manual_user_ids,
         'points_amount': points_amount,
         'points_mode': points_mode,
         'discount_type': discount_type,
@@ -358,6 +427,19 @@ def _parse_campaign_form(post):
     return data, raffle_data, errors
 
 
+def _manual_users_json(campaign):
+    """Hand-picked users as [{'id', 'label'}] JSON for the builder chips."""
+    ids = campaign.manual_user_ids or []
+    if not ids:
+        return '[]'
+    from users.models import User
+    labels = {u.id: u.email for u in User.objects.filter(id__in=ids)}
+    return json.dumps([
+        {'id': user_id, 'label': labels.get(user_id, f'gebruiker #{user_id}')}
+        for user_id in ids
+    ])
+
+
 def _form_values(campaign=None, raffle=None, post=None):
     """One flat dict of input-ready values for the builder template."""
     if post is not None:
@@ -370,11 +452,15 @@ def _form_values(campaign=None, raffle=None, post=None):
             'discount_product_gid', 'discount_validity_days', 'qualify_title',
             'qualify_body', 'rule_sentence', 'prize_name', 'prize_description',
             'prize_image_url', 'num_winners', 'draw_at', 'entry_mode',
-            'fulfillment_type',
+            'fulfillment_type', 'aud_min_age', 'aud_birthday_month',
+            'aud_min_app_age_days', 'aud_min_lifetime_orders',
+            'aud_active_within_days',
         )}
         for checkbox in ('first_order_only', 'only_after_registration',
                          'requires_untappd', 'notify_on_qualify', 'send_reminder'):
             values[checkbox] = bool(post.get(checkbox))
+        values['audience_mode'] = post.get('audience_mode') or 'orders'
+        values['manual_users'] = post.get('manual_users') or '[]'
         return values
 
     def _num(value):
@@ -396,6 +482,10 @@ def _form_values(campaign=None, raffle=None, post=None):
             'first_order_only': False, 'only_after_registration': False,
             'requires_untappd': False, 'notify_on_qualify': True,
             'send_reminder': True,
+            'audience_mode': 'orders', 'aud_min_age': '',
+            'aud_birthday_month': '', 'aud_min_app_age_days': '',
+            'aud_min_lifetime_orders': '', 'aud_active_within_days': '',
+            'manual_users': '[]',
         }
 
     values = {
@@ -425,6 +515,13 @@ def _form_values(campaign=None, raffle=None, post=None):
         'only_after_registration': campaign.only_after_registration,
         'requires_untappd': campaign.requires_untappd,
         'notify_on_qualify': campaign.notify_on_qualify,
+        'audience_mode': campaign.audience_mode,
+        'aud_min_age': _num((campaign.audience_filters or {}).get('min_age')),
+        'aud_birthday_month': _num((campaign.audience_filters or {}).get('birthday_month')),
+        'aud_min_app_age_days': _num((campaign.audience_filters or {}).get('min_app_age_days')),
+        'aud_min_lifetime_orders': _num((campaign.audience_filters or {}).get('min_lifetime_orders')),
+        'aud_active_within_days': _num((campaign.audience_filters or {}).get('active_within_days')),
+        'manual_users': _manual_users_json(campaign),
         'prize_name': raffle.prize_name if raffle else '',
         'prize_description': raffle.prize_description if raffle else '',
         'prize_image_url': raffle.prize_image_url if raffle else '',
@@ -439,7 +536,29 @@ def _form_values(campaign=None, raffle=None, post=None):
 
 def _condition_rows(campaign):
     """Readable NL list of the configured conditions, for preview/monitor."""
+    from loyalty.services.audience import describe_filters, has_audience
+
     rows = []
+
+    if campaign.audience_mode == 'audience':
+        rows.append(('Doelgroep', 'Geselecteerde leden — geen aankoop nodig'))
+        for description in describe_filters(campaign):
+            rows.append(('Doelgroepfilter', f'Ieder lid dat {description}'))
+        if campaign.manual_user_ids:
+            rows.append((
+                'Handmatig geselecteerd',
+                f'{len(campaign.manual_user_ids)} klanten',
+            ))
+        return rows
+
+    if has_audience(campaign):
+        for description in describe_filters(campaign):
+            rows.append(('Doelgroepfilter', f'Alleen leden die {description}'))
+        if campaign.manual_user_ids:
+            rows.append((
+                'Doelgroep',
+                f'Plus {len(campaign.manual_user_ids)} handmatig geselecteerde klanten',
+            ))
     for matcher in campaign.product_matchers or []:
         label = MATCHER_TYPE_LABELS.get(matcher.get('type'), matcher.get('type'))
         display = matcher.get('label') or matcher.get('value')
@@ -582,6 +701,7 @@ def campaign_builder(request, pk=None):
         'points_mode_choices': Campaign.POINTS_MODE_CHOICES,
         'entry_mode_choices': CampaignRaffle.ENTRY_MODE_CHOICES,
         'fulfillment_type_choices': CampaignRaffle.FULFILLMENT_TYPE_CHOICES,
+        'month_choices': MONTH_CHOICES,
     })
 
 
@@ -647,6 +767,53 @@ def product_search(request):
             {'products': [], 'error': 'Shopify-zoekopdracht mislukt.'}, status=502
         )
     return JsonResponse({'products': products})
+
+
+@staff_member_required
+@require_GET
+def user_search(request):
+    """Live app-user search for the audience picker (email or name)."""
+    query = (request.GET.get('q') or '').strip()
+    if len(query) < 2:
+        return JsonResponse({'users': []})
+
+    from django.db.models import Q
+
+    from users.models import User
+
+    users = User.objects.filter(is_active=True).filter(
+        Q(email__icontains=query)
+        | Q(first_name__icontains=query)
+        | Q(last_name__icontains=query)
+    ).order_by('email')[:15]
+    return JsonResponse({'users': [
+        {
+            'id': user.id,
+            'email': user.email,
+            'name': f'{user.first_name} {user.last_name}'.strip(),
+        }
+        for user in users
+    ]})
+
+
+@staff_member_required
+@require_POST
+def audience_count(request):
+    """Live audience size for the builder's Doelgroep section."""
+    data, _raffle_data, _errors = _parse_campaign_form(request.POST)
+
+    from loyalty.services.audience import audience_user_ids
+
+    probe = Campaign(
+        audience_mode=data['audience_mode'],
+        audience_filters=data['audience_filters'],
+        manual_user_ids=data['manual_user_ids'],
+    )
+    ids = audience_user_ids(probe)
+    return JsonResponse({
+        'restricted': ids is not None,
+        'count': None if ids is None else len(ids),
+    })
 
 
 # ============ Preview & activation ============

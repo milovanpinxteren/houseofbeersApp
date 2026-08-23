@@ -40,6 +40,10 @@ class Campaign(models.Model):
         ('free_shipping', 'Free shipping'),
         ('free_product', 'Free product'),
     ]
+    AUDIENCE_MODE_CHOICES = [
+        ('orders', 'Purchase conditions'),
+        ('audience', 'Selected audience (no purchase needed)'),
+    ]
 
     # Fields whose change invalidates an existing preview (see save()).
     CONDITION_FIELDS = [
@@ -49,7 +53,8 @@ class Campaign(models.Model):
         'only_after_registration', 'requires_untappd', 'min_points_balance',
         'registered_after', 'action_type', 'points_amount', 'points_mode',
         'discount_type', 'discount_value', 'discount_product_gid',
-        'discount_validity_days',
+        'discount_validity_days', 'audience_mode', 'audience_filters',
+        'manual_user_ids',
     ]
 
     name = models.CharField(max_length=200)
@@ -106,6 +111,24 @@ class Campaign(models.Model):
         help_text="Current points balance >= this at evaluation time"
     )
     registered_after = models.DateTimeField(null=True, blank=True)
+
+    # Audience selection. In 'orders' mode a configured audience acts as an
+    # extra gate on top of the purchase conditions; in 'audience' mode the
+    # audience itself qualifies (no purchase needed) — members are qualified
+    # on activation and new filter matches are added nightly.
+    audience_mode = models.CharField(
+        max_length=10, choices=AUDIENCE_MODE_CHOICES, default='orders'
+    )
+    audience_filters = models.JSONField(
+        default=dict, blank=True,
+        help_text='{"min_age": 21, "birthday_month": 9, "min_app_age_days": 30, '
+                  '"min_lifetime_orders": 3, "active_within_days": 90} — '
+                  'all configured filters must match (AND). See services/audience.py.'
+    )
+    manual_user_ids = models.JSONField(
+        default=list, blank=True,
+        help_text="Hand-picked user ids, added to the filter matches (OR)."
+    )
 
     # Snapshot of tag/collection matcher resolution:
     # {matcher_index: [product_id, ...]}

@@ -10,6 +10,8 @@ urlpatterns = [
     path('new/', studio_views.campaign_builder, name='campaign_create'),
     path('sentence/', studio_views.rule_sentence_preview, name='rule_sentence'),
     path('product-search/', studio_views.product_search, name='product_search'),
+    path('user-search/', studio_views.user_search, name='user_search'),
+    path('audience-count/', studio_views.audience_count, name='audience_count'),
 
     path('<int:pk>/edit/', studio_views.campaign_builder, name='campaign_edit'),
     path('<int:pk>/', studio_views.campaign_preview_page, name='campaign_preview'),

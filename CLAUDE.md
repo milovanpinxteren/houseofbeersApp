@@ -600,6 +600,15 @@ ALL configured conditions must hold; blank/null = condition not used.
 - **Snapshot**: tag/collection matchers are resolved to product-id lists via Shopify (`resolve_product_matchers()`) and stored on the campaign (`{matcher_index: [product_id, ...]}`). Refreshed nightly by `refresh_campaign_snapshots`; a failed Shopify call keeps that matcher's previous snapshot instead of wiping it.
 - **Near miss** (preview only): every condition satisfied except exactly 1 short on `min_distinct_products`, `min_total_quantity`, or `min_order_count`.
 
+### Audience Selection (2026-08-23)
+
+Campaigns can target a **doelgroep** besides (or instead of) purchase conditions. `Campaign.audience_mode`:
+
+- **`orders`** (default): purchase conditions drive qualification; a configured audience is an extra GATE (`checks['audience']` in `_condition_checks`, never a near-miss). No audience configured = everyone (pre-feature behavior).
+- **`audience`**: the audience itself qualifies — no purchase needed. The order hook skips these campaigns entirely; `run_backfill` routes to `run_audience_backfill` (DB-only, no Shopify): dry-run returns the preview shape (audience = qualified list, `orders_scanned: 0`), live run qualifies each member once (idempotent via `qualified_at`/`CampaignAward`). New filter matches are added nightly by `refresh_campaign_snapshots`. Raffle `entry_mode` and `points_mode` are forced to `single`/`fixed` (no purchases to count). Open audience raffles are hidden from non-entrants in `RafflesListView` (no teaser you can't act on).
+
+Audience = (users matching ALL `audience_filters`) ∪ (`manual_user_ids`), active users only. Filters (`loyalty/services/audience.py`, keys whitelisted in `FILTER_KEYS`): `min_age` & `birthday_month` (from `birthdate`; users without one never match), `min_app_age_days` (`date_joined`), `min_lifetime_orders` (ProcessedOrder count), `active_within_days` (`last_active_at`). Studio builder has a Doelgroep panel: mode select, filter inputs, live user search (`user-search/`) with chips, and a live audience count (`audience-count/`). Rule sentence: "Ieder lid dat in september jarig is, doet mee in de loting …" (audience mode) / "… Alleen voor leden die …" (orders-mode gate).
+
 ### Two Evaluation Paths
 
 1. **Sync hook**: `process_all_orders_for_user()` in `points.py` calls `apply_order_to_campaigns(user, order)` for EVERY paid order (even 0-point ones), inside try/except — a campaign bug must never break the points sync. Applies the order to each `active` campaign whose window contains the order's `created_at`; atomic per campaign+user, idempotent via `processed_order_ids`.
