@@ -206,6 +206,72 @@ class SyncStatusView(APIView):
         })
 
 
+class CampaignsListView(APIView):
+    """
+    Non-raffle campaigns for the in-app "Acties" cards.
+
+    Active campaigns show as a teaser (rule sentence = how to earn) or, once
+    the caller qualified, as the awarded state. Visibility mirrors the raffle
+    rules: audience-mode campaigns are only shown to members who qualified
+    (no teaser you can't act on), and an orders-mode campaign with an
+    audience gate is only teased to members of that audience. Completed
+    campaigns stay visible while the caller holds a discount code from them,
+    so codes remain reachable (capped, newest first).
+    """
+    permission_classes = [IsAuthenticated]
+
+    COMPLETED_CODE_LIMIT = 10
+
+    def get(self, request):
+        from .models import Campaign, CampaignAward, CampaignProgress
+        from .serializers import serialize_campaign
+        from .services.audience import has_audience, user_in_audience
+
+        active = list(
+            Campaign.objects.filter(status='active')
+            .exclude(action_type='raffle')
+            .order_by('window_end')
+        )
+        completed_with_code = list(
+            Campaign.objects.filter(
+                status__in=('completed', 'archived'),
+                awards__user=request.user,
+            ).exclude(action_type='raffle')
+            .exclude(awards__discount_code='')
+            .order_by('-window_end')[:self.COMPLETED_CODE_LIMIT]
+        )
+        campaigns = active + completed_with_code
+
+        progress_by_campaign = {
+            p.campaign_id: p for p in CampaignProgress.objects.filter(
+                campaign__in=campaigns, user=request.user,
+            )
+        }
+        awards_by_campaign = {
+            a.campaign_id: a for a in CampaignAward.objects.filter(
+                campaign__in=campaigns, user=request.user,
+            )
+        }
+
+        results = []
+        for campaign in campaigns:
+            progress = progress_by_campaign.get(campaign.id)
+            award = awards_by_campaign.get(campaign.id)
+            qualified = bool(progress and progress.qualified_at)
+            if not qualified:
+                if campaign.status != 'active':
+                    continue
+                if campaign.audience_mode == 'audience':
+                    # Selection-based: no teaser for non-members.
+                    continue
+                if has_audience(campaign) and not user_in_audience(campaign, request.user):
+                    # Orders mode with an audience gate: don't tease people
+                    # who can never qualify.
+                    continue
+            results.append(serialize_campaign(campaign, progress, award))
+        return Response({'campaigns': results})
+
+
 class RafflesListView(APIView):
     """
     Campaign raffles for the Home/Loyalty cards. FROZEN shape - see

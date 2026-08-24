@@ -313,6 +313,11 @@
       <input type="checkbox" id="id_notify_on_qualify" name="notify_on_qualify" {% if form.notify_on_qualify %}checked{% endif %}>
       <label for="id_notify_on_qualify">Stuur een notificatie zodra iemand kwalificeert</label>
     </div>
+    <div class="field checkbox">
+      <input type="checkbox" id="id_qualify_email_fallback" name="qualify_email_fallback" {% if form.qualify_email_fallback %}checked{% endif %}>
+      <label for="id_qualify_email_fallback">Stuur een e-mail aan leden zonder push-meldingen</label>
+    </div>
+    <p class="hint" style="margin-top: -6px;">Alleen leden die geen push kunnen ontvangen krijgen de e-mail — wie push heeft, krijgt geen extra mail. Standaard uit.</p>
     <div class="field-row">
       <div style="flex: 1; min-width: 260px;">
         <div class="field">

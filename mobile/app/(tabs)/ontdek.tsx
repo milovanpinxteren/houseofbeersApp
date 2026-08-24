@@ -18,6 +18,7 @@ import {
   removeFavorite,
 } from '../../src/api/recommendations';
 import { AppShopSection } from '../../src/components/AppShopSection';
+import { CampaignSection } from '../../src/components/CampaignCard';
 
 export default function OntdekScreen() {
   const router = useRouter();
@@ -28,6 +29,8 @@ export default function OntdekScreen() {
   const [appShop, setAppShop] = useState<AppShopProduct[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [togglingIds, setTogglingIds] = useState<Set<string>>(new Set());
+  // Bumped on pull-to-refresh so the campaign section refetches along with the rest.
+  const [campaignRefresh, setCampaignRefresh] = useState(0);
 
   const favoritesCount = favorites.length;
   const favoriteByBeerId = new Map(favorites.map((fav) => [fav.beer_id, fav]));
@@ -98,6 +101,7 @@ export default function OntdekScreen() {
 
   async function handleRefresh() {
     setRefreshing(true);
+    setCampaignRefresh((n) => n + 1);
     await loadData();
     setRefreshing(false);
   }
@@ -111,6 +115,9 @@ export default function OntdekScreen() {
         products={appShop}
         onViewAll={() => router.push('/(profile)/app-shop' as any)}
       />
+
+      {/* Campaigns ("Acties") — renders nothing when there are none */}
+      <CampaignSection language={language} refreshSignal={campaignRefresh} />
 
       <SectionHeader title={t('discover.forYou')} />
 

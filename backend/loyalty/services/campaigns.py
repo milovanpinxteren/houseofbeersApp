@@ -630,6 +630,19 @@ def _send_qualify_notification(campaign, user, award, url: str):
         # on the notifications app at import time.
         from notifications.services import send_notification
 
+        # A member without any active push subscription gets a push SKIP,
+        # which the kind's fallback policy does not treat as a failure — so
+        # they would receive nothing at all. When the campaign opts in,
+        # email exactly those members instead.
+        email_policy = None
+        if campaign.qualify_email_fallback:
+            from notifications.models import PushSubscription
+            has_push = PushSubscription.objects.filter(
+                user=user, is_active=True
+            ).exists()
+            if not has_push:
+                email_policy = 'always'
+
         delivery = send_notification(
             user,
             kind=kind,
@@ -637,6 +650,7 @@ def _send_qualify_notification(campaign, user, award, url: str):
             body=body,
             data={'url': url},
             dedupe_key=f'campaign:{campaign.id}:{user.id}:qualified',
+            email_policy=email_policy,
         )
         delivery_id = getattr(delivery, 'id', None)
         if delivery_id:

@@ -658,4 +658,15 @@ export default {
     lostBody: 'Your ticket didn\'t come up this time. Congrats to {{names}} — better luck next raffle! 🍻',
     replay: 'Replay',
   },
+  campaign: {
+    sectionTitle: 'Promotions',
+    badge: 'Promotion',
+    until: 'until {{date}}',
+    earnedPoints: '🎉 You earned {{points}} points!',
+    earnedCode: '🎉 You earned a discount code!',
+    qualifiedTitle: '✓ You are in!',
+    tapToCopy: 'Tap to copy',
+    copied: 'Copied!',
+    codeExpires: 'Valid until {{date}}',
+  },
 };

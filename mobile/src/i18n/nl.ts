@@ -657,4 +657,15 @@ export default {
     lostBody: 'Jouw lot viel er dit keer niet uit. Gefeliciteerd aan {{names}} — volgende verloting nieuwe kansen! 🍻',
     replay: 'Speel opnieuw af',
   },
+  campaign: {
+    sectionTitle: 'Acties',
+    badge: 'Actie',
+    until: 't/m {{date}}',
+    earnedPoints: '🎉 Je hebt {{points}} punten verdiend!',
+    earnedCode: '🎉 Je hebt een kortingscode verdiend!',
+    qualifiedTitle: '✓ Je doet mee!',
+    tapToCopy: 'Tik om te kopiëren',
+    copied: 'Gekopieerd!',
+    codeExpires: 'Geldig tot {{date}}',
+  },
 };

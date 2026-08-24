@@ -178,8 +178,9 @@ export default function HomeScreen() {
             </>
           )}
 
-          {/* Raffles — renders nothing when there are none */}
-          <RaffleSection language={language} refreshSignal={raffleRefresh} />
+          {/* Only the "your draw happened, watch the reveal" alert — Home
+              stays calm; open raffles live on Loyalty, acties on Ontdek */}
+          <RaffleSection language={language} refreshSignal={raffleRefresh} variant="alert" />
 
           {/* Events */}
           {events.length > 0 && (

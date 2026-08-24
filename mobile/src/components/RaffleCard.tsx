@@ -166,9 +166,11 @@ export function RaffleCard({
  * the host's pull-to-refresh). Renders NOTHING when there are no raffles —
  * the normal state.
  *
- * Two variants keep Home clean when draws pile up:
- * - 'active' (Home + Loyalty top): open raffles and a finished draw the user
- *   hasn't watched yet. Once the reveal is watched the card leaves here.
+ * Three variants keep the busier screens calm:
+ * - 'alert' (Home): ONLY a finished draw the user entered and hasn't watched
+ *   yet — the one thing that shouldn't be missed. Everything else is hidden.
+ * - 'active' (Loyalty top): open raffles and a finished unwatched draw.
+ *   Once the reveal is watched the card leaves here.
  * - 'history' (Loyalty codes tab): watched past draws as a compact vertical
  *   list — the archive, with code access for wins.
  */
@@ -182,7 +184,7 @@ export function RaffleSection({
   language: string;
   refreshSignal?: number;
   style?: StyleProp<ViewStyle>;
-  variant?: 'active' | 'history';
+  variant?: 'alert' | 'active' | 'history';
   /** Reports how many raffles this section shows (0 when hidden), so a host
       screen can adapt around it — e.g. the Loyalty codes tab hides its
       "no codes" empty state when the draw archive has rows. */
@@ -197,8 +199,13 @@ export function RaffleSection({
     try {
       const data = await getRaffles();
       const isHistory = (r: Raffle) => r.status === 'drawn' && r.result_seen;
+      // Drawn raffles only reach the payload for entrants, so "drawn and not
+      // watched" is exactly the personal must-see alert.
+      const isAlert = (r: Raffle) => r.status === 'drawn' && !r.result_seen;
       const mine = data.raffles.filter((r) =>
-        variant === 'history' ? isHistory(r) : !isHistory(r)
+        variant === 'history' ? isHistory(r)
+          : variant === 'alert' ? isAlert(r)
+          : !isHistory(r)
       );
       // Most actionable first: unseen draws, then open raffles, then recaps.
       // History keeps the API's newest-draw-first order (rank ties).

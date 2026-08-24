@@ -96,6 +96,35 @@ class NotificationSerializer(serializers.ModelSerializer):
         return obj.read_by.filter(user=request.user).exists()
 
 
+def serialize_campaign(campaign, progress, award):
+    """
+    One non-raffle campaign for /api/loyalty/campaigns/ — the in-app "Acties"
+    cards. `progress` and `award` are the caller's rows (or None): a card is
+    either a teaser (how to earn) or the qualified state (what you got).
+    """
+    qualified = bool(progress and progress.qualified_at)
+    discount_expires_at = None
+    if award and award.discount_code and campaign.discount_validity_days:
+        from datetime import timedelta
+        discount_expires_at = award.created_at + timedelta(
+            days=campaign.discount_validity_days
+        )
+    return {
+        'id': campaign.id,
+        'name': campaign.name,
+        'rule_sentence': campaign.rule_sentence,
+        'action_type': campaign.action_type,
+        'status': campaign.status,
+        'window_start': campaign.window_start,
+        'window_end': campaign.window_end,
+        'qualified': qualified,
+        'qualified_at': progress.qualified_at if qualified else None,
+        'points_awarded': award.points_awarded if award else 0,
+        'discount_code': (award.discount_code or None) if award else None,
+        'discount_expires_at': discount_expires_at,
+    }
+
+
 def _raffle_first_name(user):
     return user.first_name or user.email.split('@')[0]
 

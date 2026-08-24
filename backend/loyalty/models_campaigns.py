@@ -166,6 +166,12 @@ class Campaign(models.Model):
         blank=True,
         help_text="Blank = sensible NL default built from rule_sentence/prize"
     )
+    qualify_email_fallback = models.BooleanField(
+        default=False,
+        help_text="Email the qualify notification to members without an "
+                  "active push subscription (push-skip normally sends "
+                  "nothing at all). Off by default — be careful with email."
+    )
 
     preview_stale = models.BooleanField(
         default=True,

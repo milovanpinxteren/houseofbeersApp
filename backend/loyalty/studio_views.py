@@ -420,6 +420,7 @@ def _parse_campaign_form(post):
         'discount_product_gid': discount_product_gid,
         'discount_validity_days': discount_validity_days or 30,
         'notify_on_qualify': bool(post.get('notify_on_qualify')),
+        'qualify_email_fallback': bool(post.get('qualify_email_fallback')),
         'qualify_title': (post.get('qualify_title') or '').strip(),
         'qualify_body': (post.get('qualify_body') or '').strip(),
         'rule_sentence': (post.get('rule_sentence') or '').strip(),
@@ -457,7 +458,8 @@ def _form_values(campaign=None, raffle=None, post=None):
             'aud_active_within_days',
         )}
         for checkbox in ('first_order_only', 'only_after_registration',
-                         'requires_untappd', 'notify_on_qualify', 'send_reminder'):
+                         'requires_untappd', 'notify_on_qualify',
+                         'qualify_email_fallback', 'send_reminder'):
             values[checkbox] = bool(post.get(checkbox))
         values['audience_mode'] = post.get('audience_mode') or 'orders'
         values['manual_users'] = post.get('manual_users') or '[]'
@@ -481,7 +483,7 @@ def _form_values(campaign=None, raffle=None, post=None):
             'draw_at': '', 'entry_mode': 'single', 'fulfillment_type': 'manual',
             'first_order_only': False, 'only_after_registration': False,
             'requires_untappd': False, 'notify_on_qualify': True,
-            'send_reminder': True,
+            'qualify_email_fallback': False, 'send_reminder': True,
             'audience_mode': 'orders', 'aud_min_age': '',
             'aud_birthday_month': '', 'aud_min_app_age_days': '',
             'aud_min_lifetime_orders': '', 'aud_active_within_days': '',
@@ -515,6 +517,7 @@ def _form_values(campaign=None, raffle=None, post=None):
         'only_after_registration': campaign.only_after_registration,
         'requires_untappd': campaign.requires_untappd,
         'notify_on_qualify': campaign.notify_on_qualify,
+        'qualify_email_fallback': campaign.qualify_email_fallback,
         'audience_mode': campaign.audience_mode,
         'aud_min_age': _num((campaign.audience_filters or {}).get('min_age')),
         'aud_birthday_month': _num((campaign.audience_filters or {}).get('birthday_month')),
@@ -842,6 +845,11 @@ def campaign_preview_page(request, pk):
         )
     if campaign.action_type == 'raffle' and raffle is None:
         activation_blockers.append('Deze lotingscampagne heeft nog geen prijsconfiguratie.')
+    if campaign.window_end < timezone.now():
+        activation_blockers.append(
+            'De actieperiode is al voorbij. Verleng de einddatum om deze '
+            'campagne te kunnen activeren.'
+        )
 
     return render(request, 'loyalty/studio/preview.html', {
         'title': f'Preview — {campaign.name}',
@@ -983,6 +991,15 @@ def activate_campaign(request, pk):
         return redirect('studio:campaign_preview', pk=pk)
     if campaign.action_type == 'raffle' and _raffle_or_none(campaign) is None:
         messages.error(request, 'Deze lotingscampagne heeft nog geen prijsconfiguratie.')
+        return redirect('studio:campaign_preview', pk=pk)
+    if campaign.window_end < timezone.now():
+        # An ended window would qualify people (the audience backfill does
+        # not consult the window) and then be auto-completed the same night.
+        messages.error(
+            request,
+            'De actieperiode is al voorbij. Verleng de einddatum om deze '
+            'campagne te kunnen activeren.'
+        )
         return redirect('studio:campaign_preview', pk=pk)
 
     campaign.status = 'active'

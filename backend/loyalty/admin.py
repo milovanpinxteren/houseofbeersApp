@@ -1,5 +1,7 @@
 import logging
 from django.contrib import admin
+from django.http import HttpResponseRedirect
+from django.urls import reverse
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from .models import (PointsRule, RewardCategory, Reward, PointsBalance, PointsTransaction, Redemption,
@@ -636,6 +638,39 @@ class CampaignAwardAdmin(admin.ModelAdmin):
                        'discount_code', 'shopify_discount_id',
                        'notified_delivery_id', 'created_at']
     ordering = ['-created_at']
+
+
+# Proxy model so the Studio gets a clickable entry on the admin index under
+# Loyalty (same trick as analytics.DashboardProxy); its "changelist" is a
+# redirect to /admin/campaign-studio/.
+class CampagneStudio(Campaign):
+    class Meta:
+        proxy = True
+        verbose_name = 'Campagne Studio'
+        verbose_name_plural = 'Campagne Studio'
+
+
+@admin.register(CampagneStudio)
+class CampagneStudioAdmin(admin.ModelAdmin):
+    # The Studio views enforce staff_member_required themselves; every staff
+    # user should see and reach the entry regardless of model permissions.
+    def has_module_permission(self, request):
+        return request.user.is_staff
+
+    def has_view_permission(self, request, obj=None):
+        return request.user.is_staff
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def changelist_view(self, request, extra_context=None):
+        return HttpResponseRedirect(reverse('studio:campaign_list'))
 
     def has_add_permission(self, request):
         return False
