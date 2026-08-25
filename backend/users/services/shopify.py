@@ -260,6 +260,15 @@ class ShopifyService:
             user.shopify_linked_at = timezone.now()
             user.save(update_fields=['shopify_customer_id', 'shopify_linked_at'])
             logger.info(f"Linked user {user.email} to Shopify customer {customer['id']}")
+
+            # Points granted before this person joined (WhatsApp actions etc.)
+            # are parked as pending service grants keyed on the Shopify
+            # customer id — the link is the moment they become claimable.
+            try:
+                from loyalty.services.grants import claim_pending_grants
+                claim_pending_grants(user)
+            except Exception as e:
+                logger.error(f"Pending grant claim failed for {user.email}: {e}")
             return True
 
         logger.info(f"No Shopify customer found for {search_email}")

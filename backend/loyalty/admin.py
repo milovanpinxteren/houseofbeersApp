@@ -8,7 +8,7 @@ from .models import (PointsRule, RewardCategory, Reward, PointsBalance, PointsTr
                      ProcessedOrder, SyncState, Notification, NotificationRead,
                      BirthdayRewardConfig, BirthdayReward,
                      Campaign, CampaignAward, CampaignPreview, CampaignRaffle,
-                     CampaignRaffleWinner, RaffleEntry)
+                     CampaignRaffleWinner, RaffleEntry, ServiceGrant)
 
 logger = logging.getLogger(__name__)
 
@@ -686,6 +686,25 @@ class CampaignPreviewAdmin(admin.ModelAdmin):
     search_fields = ['campaign__name']
     readonly_fields = ['campaign', 'status', 'error', 'result', 'created_at',
                        'finished_at']
+    ordering = ['-created_at']
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(ServiceGrant)
+class ServiceGrantAdmin(admin.ModelAdmin):
+    """External grants (hob). Read-only: mutations go through the service
+    API so the audit trail and idempotency guarantees stay intact."""
+    list_display = ['dedupe_key', 'source', 'points', 'status', 'user',
+                    'reason', 'phone', 'created_at', 'granted_at']
+    list_filter = ['status', 'source']
+    search_fields = ['dedupe_key', 'reason', 'email', 'phone',
+                     'shopify_customer_id', 'user__email']
+    readonly_fields = [f.name for f in ServiceGrant._meta.fields]
     ordering = ['-created_at']
 
     def has_add_permission(self, request):

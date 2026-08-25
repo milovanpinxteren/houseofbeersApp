@@ -70,6 +70,14 @@ class RegisterView(generics.CreateAPIView):
         except Exception as e:
             logger.error(f"Shopify linking failed for {user.email}: {e}")
 
+        # Email-keyed pending grants must be claimable even when no Shopify
+        # customer was found (the link path above only claims after a link).
+        try:
+            from loyalty.services.grants import claim_pending_grants
+            claim_pending_grants(user)
+        except Exception as e:
+            logger.error(f"Pending grant claim failed for {user.email}: {e}")
+
         from analytics.tracker import track
         track('register', user=user)
 

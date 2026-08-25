@@ -580,3 +580,4 @@ class NotificationRead(models.Model):
 
 
 from .models_campaigns import *  # noqa
+from .models_grants import *  # noqa

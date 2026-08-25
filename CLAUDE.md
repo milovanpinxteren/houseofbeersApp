@@ -377,6 +377,47 @@ function MyComponent() {
 | GET | `/api/loyalty/notifications/` | Active notifications |
 | POST | `/api/loyalty/notifications/<id>/dismiss/` | Dismiss notification |
 
+### Service API (server-to-server, used by hob)
+
+Mounted at `/api/service/loyalty/` (`loyalty/service_api.py` + `service_urls.py`).
+NOT for the mobile app: plain Django views authenticated by an HMAC-SHA256
+signature over the raw body (`X-Signature: sha256=<hexdigest>`, shared secret
+`SERVICE_API_HMAC_SECRET` — empty secret disables the API with 503). All
+endpoints are POST with a JSON body. Caller: the houseofbeers_whatsapp app
+("hob"), which awards loyalty points announced in WhatsApp sale chats
+("En de 100 punten gaan naar +31 6 ...").
+
+| Endpoint | Does |
+|---|---|
+| `grant/` | Award points. Idempotent on `dedupe_key`. Identity: `shopify_customer_id` → `email` (case-insensitive); ambiguous matches fail loudly (400). No member match → grant stored `pending`. `phone` is audit-only (User has no phone field). |
+| `lookup/` | Membership check + pending points parked for an identity |
+| `status/` | One grant by `dedupe_key` (404 if unknown) or filtered list |
+| `revoke/` | Undo a grant; granted ones get a compensating negative transaction. Idempotent. |
+
+Key design decisions (`loyalty/models_grants.py`, `loyalty/services/grants.py`):
+
+- **`ServiceGrant`** model: one row per grant, `dedupe_key` unique (the
+  idempotency guard, same idiom as `ProcessedOrder`), status
+  `pending`/`granted`/`revoked`, decoupled `notified_delivery_id` int.
+  Read-only in Django admin.
+- **Points land as `earned` transactions** with `rule=None` and NO
+  `shopify_order_id` (same shape as campaign awards): rendered verbatim by
+  the mobile app (description fallback + `rule_name` in the breakdown for the
+  expander), never touched by full sync's check-and-correct, counted by
+  `repair_loyalty_history`'s earned recompute — zero mobile changes needed.
+  Never use `adjusted` (renders as generic "Adjustment by House of Beers")
+  and never set `shopify_order_id` on a grant row (repair would delete it).
+- **Pending grants are claimed** by `claim_pending_grants(user)` (matches
+  `shopify_customer_id` OR `email__iexact`), hooked into
+  `ShopifyService.link_customer_to_user` (covers register auto-link, manual
+  sync, bulk sync) AND `RegisterView.create` (email-only matches when no
+  Shopify customer exists). MAX_GRANT_POINTS = 100,000 sanity cap.
+- Grant notification via the outbox: kind `announcement`, dedupe
+  `grant:<dedupe_key>`, url `/loyalty`; `notify: false` suppresses.
+- Balance updates lock the `PointsBalance` row (`select_for_update`) — the
+  first writer in the codebase to do so.
+- Tests: `backend/loyalty/test_service_grants.py`.
+
 ### Recommendations
 | Method | Endpoint | Description |
 |--------|----------|-------------|

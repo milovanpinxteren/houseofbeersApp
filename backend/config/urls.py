@@ -8,6 +8,8 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('users.urls')),
     path('api/loyalty/', include('loyalty.urls')),
+    # Server-to-server surface (HMAC-signed, used by hob) — not for the app.
+    path('api/service/loyalty/', include('loyalty.service_urls')),
     path('api/recommendations/', include('recommendations.urls')),
     path('api/community/', include('community.urls')),
     path('api/events/', include('events.urls')),

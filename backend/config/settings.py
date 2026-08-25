@@ -183,6 +183,10 @@ RECOMMENDER_API_URL = config(
 )
 RECOMMENDER_API_KEY = config('RECOMMENDER_API_KEY', default='')
 
+# Service-to-service API (/api/service/...) — shared secret for HMAC-signed
+# requests from trusted internal callers (hob). Empty = API disabled.
+SERVICE_API_HMAC_SECRET = config('SERVICE_API_HMAC_SECRET', default='')
+
 # Email SMTP (Hostinger)
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = config('EMAIL_HOST', default='smtp.hostinger.com')
