@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Easing,
+  Linking,
   Platform,
   Pressable,
   StyleSheet,
@@ -161,6 +162,12 @@ interface RaffleRevealProps {
   /** Discount code for a winning caller (null for manual fulfillment). */
   myCode: string | null;
   myCodeExpiresAt?: string | null;
+  /**
+   * Storefront link that applies the prize code AND puts the prize product in
+   * the cart. Prize products are usually unlisted, so a bare code cannot be
+   * redeemed by browsing the shop — this link is the real redeem path.
+   */
+  myCodeCartUrl?: string | null;
   /** Start the animation on mount. When false, jump straight to the result. */
   autoPlay?: boolean;
   /** Localized date formatter for the code expiry line. */
@@ -181,6 +188,7 @@ export function RaffleReveal({
   didWin,
   myCode,
   myCodeExpiresAt,
+  myCodeCartUrl,
   autoPlay = true,
   formatDate,
   onComplete,
@@ -349,6 +357,12 @@ export function RaffleReveal({
     timeouts.current.push(setTimeout(() => mountedRef.current && setCopied(false), 2000));
   }
 
+  function openCart(url: string) {
+    Linking.openURL(url).catch((err) =>
+      console.log('[Raffle] Open cart error:', err)
+    );
+  }
+
   const showWinners = phase === 'revealing' || phase === 'result';
   const publicNames = winnerNames.join(', ');
 
@@ -463,6 +477,20 @@ export function RaffleReveal({
                       color={copied ? colors.success : colors.primary}
                     />
                   </Pressable>
+                  {myCodeCartUrl ? (
+                    <>
+                      <Button
+                        label={t('raffle.redeemCta')}
+                        icon="cart-outline"
+                        size="sm"
+                        onPress={() => openCart(myCodeCartUrl)}
+                        style={styles.redeemButton}
+                      />
+                      <Text style={styles.redeemHint}>
+                        {t('raffle.redeemHint')}
+                      </Text>
+                    </>
+                  ) : null}
                   {myCodeExpiresAt ? (
                     <Text style={styles.expiresText}>
                       {t('raffle.codeExpires', {
@@ -711,6 +739,15 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: colors.textMuted,
     marginTop: 2,
+  },
+  redeemButton: {
+    marginTop: spacing.sm,
+  },
+  redeemHint: {
+    fontSize: 11,
+    color: colors.textMuted,
+    marginTop: 6,
+    textAlign: 'center',
   },
   expiresText: {
     fontSize: 11,

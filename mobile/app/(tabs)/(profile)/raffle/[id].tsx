@@ -164,6 +164,7 @@ export default function RaffleScreen() {
               didWin={raffle.did_win === true}
               myCode={raffle.my_code}
               myCodeExpiresAt={raffle.my_code_expires_at}
+              myCodeCartUrl={raffle.my_code_cart_url}
               autoPlay={autoPlay !== false}
               formatDate={formatDate}
               onComplete={handleRevealComplete}

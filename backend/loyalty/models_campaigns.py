@@ -255,6 +255,11 @@ class CampaignAward(models.Model):
     )
     discount_code = models.CharField(max_length=255, blank=True)
     shopify_discount_id = models.CharField(max_length=255, blank=True)
+    cart_url = models.TextField(
+        blank=True,
+        help_text="Storefront link that applies the code (and adds the free "
+                  "product to the cart); resolved once when the code is minted"
+    )
     notified_delivery_id = models.IntegerField(
         null=True, blank=True,
         help_text="notifications.NotificationDelivery id (not a FK, apps stay decoupled)"
@@ -366,6 +371,11 @@ class CampaignRaffleWinner(models.Model):
     )
     prize_code = models.CharField(max_length=255, blank=True)
     shopify_discount_id = models.CharField(max_length=255, blank=True)
+    cart_url = models.TextField(
+        blank=True,
+        help_text="Storefront link that applies the prize code (and adds the "
+                  "prize product to the cart); resolved once at fulfillment"
+    )
     code_expires_at = models.DateTimeField(null=True, blank=True)
     fulfillment_status = models.CharField(
         max_length=20, choices=FULFILLMENT_STATUS_CHOICES, default='pending'

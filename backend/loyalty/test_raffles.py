@@ -30,7 +30,8 @@ FROZEN_FIELDS = {
     'draw_at', 'status', 'entered', 'ticket_count', 'matched_products',
     'seen', 'result_seen', 'entrant_count',
     'entrant_first_names', 'winner_first_names',
-    'did_win', 'my_code', 'my_code_expires_at', 'public_winner_names',
+    'did_win', 'my_code', 'my_code_expires_at', 'my_code_cart_url',
+    'public_winner_names',
 }
 
 

@@ -11,6 +11,9 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
+# Same storefront the recommendations cart permalinks target.
+SHOP_BASE_URL = 'https://houseofbeers.nl'
+
 
 class DiscountConfig:
     """
@@ -50,6 +53,49 @@ def reward_discount_config(reward) -> Optional[DiscountConfig]:
     return None
 
 
+def build_cart_url(config, code: str, shopify_service=None) -> str:
+    """
+    A one-tap "redeem this code" storefront link.
+
+    free_product codes are 100% off ONE specific product, so handing the user a
+    bare code is a trap: the discount only applies once that exact product sits
+    in the cart, and prize products are typically UNLISTED (not reachable by
+    browsing the shop at all). For those we return a cart permalink that both
+    puts the right variant in the cart AND applies the code — the same
+    /cart/<variant>:1?discount=<code> shape the sixpack checkout uses.
+
+    Every other discount type applies cart-wide, so /discount/<code> is enough:
+    Shopify stores the code on the session and drops the user in the shop.
+
+    Returns '' when no useful link can be built (never raises).
+    """
+    if not code:
+        return ''
+
+    discount_type = getattr(config, 'discount_type', '')
+    product_gid = getattr(config, 'discount_product_gid', '') or ''
+
+    if discount_type == 'free_product' and product_gid:
+        try:
+            if shopify_service is None:
+                from users.services import ShopifyService
+                shopify_service = ShopifyService()
+            variant_id = shopify_service.get_product_cart_variant_id(product_gid)
+        except Exception as e:
+            logger.error(f"Cart variant lookup failed for {product_gid}: {e}")
+            variant_id = None
+
+        if variant_id:
+            return f"{SHOP_BASE_URL}/cart/{variant_id}:1?discount={code}"
+        # Shopify did not answer: fall through to the generic link rather than
+        # leaving the user with no link at all.
+        logger.warning(
+            f"No cart variant for {product_gid}; falling back to /discount link"
+        )
+
+    return f"{SHOP_BASE_URL}/discount/{code}"
+
+
 def create_discount_code(user, config, code: str) -> Optional[Dict[str, Any]]:
     """
     Create a single-use Shopify discount code.
@@ -59,8 +105,9 @@ def create_discount_code(user, config, code: str) -> Optional[Dict[str, Any]]:
     discount_validity_days (None/0 = the code never expires) and optionally
     discount_title. A Campaign instance qualifies as-is.
 
-    Returns the ShopifyService result dict (with 'code' and, when the config
-    sets validity, 'expires_at' added) or None on any failure — never raises.
+    Returns the ShopifyService result dict (with 'code', 'cart_url' and, when
+    the config sets validity, 'expires_at' added) or None on any failure —
+    never raises.
     """
     from users.services import ShopifyService
 
@@ -110,6 +157,7 @@ def create_discount_code(user, config, code: str) -> Optional[Dict[str, Any]]:
         result = dict(result)
         result.setdefault('code', code)
         result['expires_at'] = ends_at
+        result['cart_url'] = build_cart_url(config, code, shopify_service)
         return result
     except Exception as e:
         logger.error(f"Failed to create Shopify discount: {e}")

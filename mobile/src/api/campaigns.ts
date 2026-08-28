@@ -17,6 +17,9 @@ export interface AppCampaign {
   points_awarded: number;
   discount_code: string | null;
   discount_expires_at: string | null;
+  // Storefront link that applies the code (and, for a free-product campaign,
+  // adds that product to the cart — it is normally unlisted in the webshop).
+  discount_cart_url: string | null;
 }
 
 export async function getCampaigns(): Promise<{ campaigns: AppCampaign[] }> {

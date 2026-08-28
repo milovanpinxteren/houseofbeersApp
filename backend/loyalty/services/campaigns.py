@@ -574,6 +574,7 @@ def fire_qualification(campaign, user, progress):
         if result:
             award.discount_code = code
             award.shopify_discount_id = str(result.get('discount_id', ''))
+            award.cart_url = result.get('cart_url') or ''
 
     elif campaign.action_type == 'raffle' and hasattr(campaign, 'raffle'):
         raffle = campaign.raffle

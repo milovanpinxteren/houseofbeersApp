@@ -122,11 +122,12 @@ def _fulfill_winners(raffle, winners):
         if result:
             winner.prize_code = result.get('code') or code
             winner.shopify_discount_id = str(result.get('discount_id', ''))
+            winner.cart_url = result.get('cart_url') or ''
             winner.code_expires_at = result.get('expires_at')
             winner.fulfillment_status = 'code_issued'
             winner.save(update_fields=[
-                'prize_code', 'shopify_discount_id', 'code_expires_at',
-                'fulfillment_status',
+                'prize_code', 'shopify_discount_id', 'cart_url',
+                'code_expires_at', 'fulfillment_status',
             ])
         else:
             # create_discount_code never raises; None = Shopify refused.

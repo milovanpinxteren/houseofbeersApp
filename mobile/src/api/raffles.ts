@@ -27,6 +27,9 @@ export interface Raffle {
   did_win: boolean | null;
   my_code: string | null;
   my_code_expires_at: string | null;
+  // Storefront link that applies the prize code and puts the prize product in
+  // the cart (prize products are normally unlisted in the webshop).
+  my_code_cart_url: string | null;
   public_winner_names: string[] | null;
 }
 

@@ -943,6 +943,38 @@ class ShopifyService:
             applies_once_per_customer=applies_once_per_customer,
         )
 
+    def get_product_cart_variant_id(self, product_gid: str) -> Optional[str]:
+        """
+        Numeric variant id to use in a /cart/<variant>:1 permalink for a
+        product GID. Prefers the first variant that is available for sale so a
+        cart link never lands on a sold-out variant; falls back to the first
+        variant. Returns None when the lookup fails or the product has none —
+        callers must treat None as "no cart link", never as an error.
+
+        Note: for app-only sale products variants[0] is the Sale variant, but
+        those are never used as campaign/prize products (the App variant is
+        addressed directly by /api/recommendations/app-shop/).
+        """
+        query = """
+        query cartVariant($id: ID!) {
+            product(id: $id) {
+                variants(first: 20) {
+                    nodes { id availableForSale }
+                }
+            }
+        }
+        """
+        data = self._graphql_request(query, {"id": product_gid})
+        if not data:
+            return None
+        product = data.get("product") or {}
+        nodes = (product.get("variants") or {}).get("nodes") or []
+        if not nodes:
+            return None
+        chosen = next((n for n in nodes if n.get("availableForSale")), nodes[0])
+        # gid://shopify/ProductVariant/123 -> 123 (cart permalinks want numeric)
+        return str(chosen.get("id", "")).rsplit("/", 1)[-1] or None
+
     def get_discount_code_usage(self, code: str) -> Optional[int]:
         """
         How many times a discount code has been used, via

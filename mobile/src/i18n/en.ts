@@ -653,6 +653,8 @@ export default {
     tapToCopy: 'Tap to copy',
     copiedToClipboard: 'Copied!',
     codeExpires: 'Valid until {{date}}',
+    redeemCta: 'Claim your prize',
+    redeemHint: 'We put your prize in the cart with the code applied.',
     manualPrizeNote: "We'll get in touch with you about your prize.",
     lostTitle: 'Not this time…',
     lostBody: 'Your ticket didn\'t come up this time. Congrats to {{names}} — better luck next raffle! 🍻',
@@ -668,5 +670,7 @@ export default {
     tapToCopy: 'Tap to copy',
     copied: 'Copied!',
     codeExpires: 'Valid until {{date}}',
+    redeemCta: 'Use this code',
+    redeemHint: 'We open the shop with your code already applied.',
   },
 };

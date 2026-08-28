@@ -652,6 +652,8 @@ export default {
     tapToCopy: 'Tik om te kopiëren',
     copiedToClipboard: 'Gekopieerd!',
     codeExpires: 'Geldig tot {{date}}',
+    redeemCta: 'Prijs verzilveren',
+    redeemHint: 'We zetten je prijs klaar in de winkelwagen met de code erop.',
     manualPrizeNote: 'We nemen contact met je op over je prijs.',
     lostTitle: 'Helaas, dit keer niet…',
     lostBody: 'Jouw lot viel er dit keer niet uit. Gefeliciteerd aan {{names}} — volgende verloting nieuwe kansen! 🍻',
@@ -667,5 +669,7 @@ export default {
     tapToCopy: 'Tik om te kopiëren',
     copied: 'Gekopieerd!',
     codeExpires: 'Geldig tot {{date}}',
+    redeemCta: 'Korting verzilveren',
+    redeemHint: 'We openen de winkel met je code al toegepast.',
   },
 };

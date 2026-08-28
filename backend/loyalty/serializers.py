@@ -122,6 +122,9 @@ def serialize_campaign(campaign, progress, award):
         'points_awarded': award.points_awarded if award else 0,
         'discount_code': (award.discount_code or None) if award else None,
         'discount_expires_at': discount_expires_at,
+        # One-tap redeem link: applies the code and, for a free-product
+        # campaign, puts that product in the cart (it is usually unlisted).
+        'discount_cart_url': (award.cart_url or None) if award else None,
     }
 
 
@@ -158,6 +161,7 @@ def serialize_raffle(raffle, user, entry):
         'did_win': None,
         'my_code': None,
         'my_code_expires_at': None,
+        'my_code_cart_url': None,
         'public_winner_names': None,
     }
 
@@ -177,5 +181,6 @@ def serialize_raffle(raffle, user, entry):
         if my_win:
             data['my_code'] = my_win.prize_code or None
             data['my_code_expires_at'] = my_win.code_expires_at
+            data['my_code_cart_url'] = my_win.cart_url or None
 
     return data

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Linking,
   Pressable,
   ScrollView,
   StyleProp,
@@ -13,7 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { t } from '../i18n';
 import { colors, spacing, borderRadius, fonts } from '../theme/colors';
-import { Card, SectionHeader } from './ui';
+import { Button, Card, SectionHeader } from './ui';
 import { getCampaigns, AppCampaign } from '../api/campaigns';
 
 /**
@@ -52,6 +53,12 @@ export function CampaignCard({
     copyTimer.current = setTimeout(() => setCopied(false), 2000);
   }
 
+  function openCart(url: string) {
+    Linking.openURL(url).catch((err) =>
+      console.log('[Campaign] Open cart error:', err)
+    );
+  }
+
   // Qualified: show what was earned.
   if (campaign.qualified) {
     return (
@@ -88,6 +95,18 @@ export function CampaignCard({
                 color={copied ? colors.success : colors.primary}
               />
             </Pressable>
+            {campaign.discount_cart_url ? (
+              <>
+                <Button
+                  label={t('campaign.redeemCta')}
+                  icon="cart-outline"
+                  size="sm"
+                  onPress={() => openCart(campaign.discount_cart_url!)}
+                  style={styles.redeemButton}
+                />
+                <Text style={styles.redeemHint}>{t('campaign.redeemHint')}</Text>
+              </>
+            ) : null}
             {campaign.discount_expires_at ? (
               <Text style={styles.expiresText}>
                 {t('campaign.codeExpires', {
@@ -273,6 +292,15 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: colors.textMuted,
     marginTop: 2,
+  },
+  redeemButton: {
+    marginTop: spacing.sm,
+  },
+  redeemHint: {
+    fontSize: 11,
+    color: colors.textMuted,
+    marginTop: 6,
+    textAlign: 'center',
   },
   expiresText: {
     fontSize: 11,
