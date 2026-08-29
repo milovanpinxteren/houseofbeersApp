@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, ReactNode } from 'react';
 import {
   View,
   Text,
@@ -20,6 +20,21 @@ import {
   buildOrderSearchIndex,
   searchOrders,
   countMatchedItems,
+  filterMatchesByItemStatus,
+  countItemsByStatus,
+  filterMatchesByEta,
+  countItemsByEta,
+  filterMatchesByPeriod,
+  orderYears,
+  threeMonthsBefore,
+  toDateKey,
+  periodForYear,
+  PERIOD_ALL,
+  PERIOD_3M,
+  ITEM_STATUSES,
+  ItemStatus,
+  ItemStatusFilter,
+  EtaFilter,
 } from '../../../src/utils/orderSearch';
 
 /** Renders text with the matched portions emphasised. */
@@ -54,6 +69,47 @@ function Highlighted({
 }
 
 
+/** A labelled row of chips inside the filter panel. */
+function FilterGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <View style={styles.filterGroup}>
+      <Text style={styles.filterGroupLabel}>{label}</Text>
+      <View style={styles.filterRow}>{children}</View>
+    </View>
+  );
+}
+
+/** One filter chip. */
+function FilterChip({
+  label,
+  count,
+  active,
+  onPress,
+}: {
+  label: string;
+  count?: number;
+  active: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      style={({ pressed }) => [
+        styles.filterChip,
+        active && styles.filterChipActive,
+        pressed && styles.pressed,
+      ]}
+    >
+      <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}>
+        {label}
+        {count !== undefined ? ` ${count}` : ''}
+      </Text>
+    </Pressable>
+  );
+}
+
 export default function OrdersScreen() {
   const { user } = useAuth();
   const { language } = useLanguage();
@@ -63,8 +119,12 @@ export default function OrdersScreen() {
   const [error, setError] = useState('');
   const [expandedOrderId, setExpandedOrderId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  // While searching, matching items are shown automatically; this tracks orders
-  // where the user asked to see the full item list instead.
+  const [statusFilter, setStatusFilter] = useState<ItemStatusFilter>('all');
+  const [etaFilter, setEtaFilter] = useState<EtaFilter>('all');
+  const [periodFilter, setPeriodFilter] = useState<string>(PERIOD_ALL);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  // While searching or filtering, matching items are shown automatically; this
+  // tracks orders where the user asked to see the full item list instead.
   const [showAllItemsFor, setShowAllItemsFor] = useState<Set<number>>(new Set());
 
   useEffect(() => {
@@ -112,6 +172,24 @@ export default function OrdersScreen() {
     });
   }
 
+  /** A card left on "show all items" would ignore the new filter entirely. */
+  function selectStatus(filter: ItemStatusFilter) {
+    setStatusFilter(filter);
+    setShowAllItemsFor(new Set());
+  }
+
+  function selectEta(filter: EtaFilter) {
+    setEtaFilter(filter);
+    setShowAllItemsFor(new Set());
+  }
+
+  function clearFilters() {
+    setStatusFilter('all');
+    setEtaFilter('all');
+    setPeriodFilter(PERIOD_ALL);
+    setShowAllItemsFor(new Set());
+  }
+
   const searchIndex = useMemo(
     () => buildOrderSearchIndex(orders, formatDate),
     // formatDate is locale-dependent, so the date haystack is rebuilt on
@@ -122,15 +200,80 @@ export default function OrdersScreen() {
   const queryTokens = useMemo(() => tokenize(searchQuery), [searchQuery]);
   const isSearching = queryTokens.length > 0;
 
-  const matches = useMemo(
+  const searchMatches = useMemo(
     () => searchOrders(searchIndex, queryTokens),
     [searchIndex, queryTokens]
   );
 
-  const matchedItemCount = useMemo(
-    () => (isSearching ? countMatchedItems(matches) : 0),
-    [matches, isSearching]
+  // Pinned to the payload rather than rendered fresh each pass, so "today" and
+  // the 3-month cutoff can't shift mid-interaction.
+  const now = useMemo(() => new Date(), [orders]);
+  const today = useMemo(() => toDateKey(now), [now]);
+
+  const periodMatches = useMemo(
+    () => filterMatchesByPeriod(searchMatches, periodFilter, now),
+    [searchMatches, periodFilter, now]
   );
+  const statusMatches = useMemo(
+    () => filterMatchesByItemStatus(periodMatches, statusFilter),
+    [periodMatches, statusFilter]
+  );
+
+  const matches = useMemo(
+    () => filterMatchesByEta(statusMatches, etaFilter, today),
+    [statusMatches, etaFilter, today]
+  );
+
+  // Faceted counts: each dimension is counted with the OTHER filters applied but
+  // not its own, so a chip always says what tapping it would actually give you
+  // (and the active chip never reads "0").
+  const statusCounts = useMemo(
+    () => countItemsByStatus(filterMatchesByEta(periodMatches, etaFilter, today)),
+    [periodMatches, etaFilter, today]
+  );
+  const etaCounts = useMemo(() => countItemsByEta(statusMatches, today), [statusMatches, today]);
+
+  const activeFilterCount =
+    (statusFilter !== 'all' ? 1 : 0) +
+    (etaFilter !== 'all' ? 1 : 0) +
+    (periodFilter !== PERIOD_ALL ? 1 : 0);
+  const isFiltering = activeFilterCount > 0;
+
+  // Period is order-level: it changes which cards show, not which items inside
+  // them, so it must NOT auto-expand every card the way the item filters do.
+  const isItemNarrowed = isSearching || statusFilter !== 'all' || etaFilter !== 'all';
+
+  const matchedItemCount = useMemo(
+    () => (isItemNarrowed ? countMatchedItems(matches) : 0),
+    [matches, isItemNarrowed]
+  );
+
+  // Only offer an option when it separates something, and never drop the one
+  // that's active or it couldn't be switched off.
+  const availableStatuses = ITEM_STATUSES.filter(
+    (s) => statusCounts[s] > 0 || s === statusFilter
+  );
+  const showStatusGroup = availableStatuses.length > 1 || statusFilter !== 'all';
+
+  const etaTotal = etaCounts.upcoming + etaCounts.past + etaCounts.none;
+  const availableEtas: EtaFilter[] = (['upcoming', 'none'] as const).filter(
+    (bucket) => (etaCounts[bucket] > 0 && etaCounts[bucket] < etaTotal) || bucket === etaFilter
+  );
+  const showEtaGroup = availableEtas.length > 0;
+
+  // Years and the 3-month shortcut only earn a chip if some order falls outside.
+  const years = useMemo(() => orderYears(orders), [orders]);
+  const hasOlderThanThreeMonths = useMemo(() => {
+    const cutoff = threeMonthsBefore(now).getTime();
+    return orders.some((o) => new Date(o.created_at).getTime() < cutoff);
+  }, [orders, now]);
+  const periodOptions = [
+    ...(hasOlderThanThreeMonths ? [PERIOD_3M] : []),
+    ...(years.length > 1 ? years.map(periodForYear) : []),
+  ];
+  const showPeriodGroup = periodOptions.length > 0;
+
+  const showFilters = showStatusGroup || showEtaGroup || showPeriodGroup;
 
   function formatDate(dateString: string): string {
     const date = new Date(dateString);
@@ -190,17 +333,51 @@ export default function OrdersScreen() {
       : `${count} ${t('orders.ordersPlural')}`;
   }
 
+  /** Short chip label — the full item labels are too long for a chip row. */
+  function getFilterLabel(status: ItemStatus): string {
+    switch (status) {
+      case 'fulfilled':
+        return t('orders.filterFulfilled');
+      case 'partial':
+        return t('orders.filterPartial');
+      default:
+        return t('orders.filterUnfulfilled');
+    }
+  }
+
+  function getEtaLabel(bucket: EtaFilter): string {
+    return bucket === 'upcoming' ? t('orders.filterEtaUpcoming') : t('orders.filterEtaNone');
+  }
+
+  function getPeriodLabel(period: string): string {
+    if (period === PERIOD_3M) return t('orders.filterPeriod3m');
+    const year = Number(period.slice(2));
+    return year === now.getFullYear() ? t('orders.filterPeriodThisYear') : String(year);
+  }
+
+  /** Names the active filters, so a collapsed panel still says what's on. */
+  function getActiveFilterLabels(): string[] {
+    const labels: string[] = [];
+    if (statusFilter !== 'all') labels.push(getFilterLabel(statusFilter));
+    if (etaFilter !== 'all') labels.push(getEtaLabel(etaFilter));
+    if (periodFilter !== PERIOD_ALL) labels.push(getPeriodLabel(periodFilter));
+    return labels;
+  }
+
   /**
    * Matching an order number matches no individual items, so reporting
    * "0 items" there would be wrong — show just the order count instead.
    */
   function getResultSummary(): string {
     const ordersLabel = getOrdersLabel(matches.length);
-    if (matchedItemCount === 0) return ordersLabel;
-    return t('orders.resultSummary', {
-      items: getItemsLabel(matchedItemCount),
-      orders: ordersLabel,
-    });
+    const count =
+      matchedItemCount === 0
+        ? ordersLabel
+        : t('orders.resultSummary', {
+            items: getItemsLabel(matchedItemCount),
+            orders: ordersLabel,
+          });
+    return [count, ...getActiveFilterLabels()].join('  ·  ');
   }
 
   function getItemFulfillmentLabel(status: string | null): string {
@@ -302,9 +479,118 @@ export default function OrdersScreen() {
         ) : null}
       </View>
 
+      {showFilters && (
+        <View style={styles.toolbar}>
+          <Pressable
+            onPress={() => setFiltersOpen((open) => !open)}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: filtersOpen }}
+            style={({ pressed }) => [
+              styles.filterToggle,
+              (filtersOpen || isFiltering) && styles.filterToggleOn,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Ionicons
+              name="options-outline"
+              size={15}
+              color={filtersOpen || isFiltering ? colors.background : colors.text}
+            />
+            <Text
+              style={[
+                styles.filterToggleText,
+                (filtersOpen || isFiltering) && styles.filterToggleTextOn,
+              ]}
+            >
+              {t('orders.filters')}
+              {activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
+            </Text>
+            <Ionicons
+              name={filtersOpen ? 'chevron-up' : 'chevron-down'}
+              size={13}
+              color={filtersOpen || isFiltering ? colors.background : colors.textMuted}
+            />
+          </Pressable>
+
+          {isFiltering && (
+            <Pressable
+              onPress={clearFilters}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={({ pressed }) => pressed && styles.pressed}
+            >
+              <Text style={styles.clearFilters}>{t('orders.filterClearAll')}</Text>
+            </Pressable>
+          )}
+        </View>
+      )}
+
+      {showFilters && filtersOpen && (
+        <View style={styles.filterPanel}>
+          {showStatusGroup && (
+            <FilterGroup label={t('orders.filterGroupShipping')}>
+              <FilterChip
+                label={t('orders.filterAll')}
+                active={statusFilter === 'all'}
+                onPress={() => selectStatus('all')}
+              />
+              {availableStatuses.map((status) => (
+                <FilterChip
+                  key={status}
+                  label={getFilterLabel(status)}
+                  count={statusCounts[status]}
+                  active={statusFilter === status}
+                  onPress={() => selectStatus(statusFilter === status ? 'all' : status)}
+                />
+              ))}
+            </FilterGroup>
+          )}
+
+          {showEtaGroup && (
+            <FilterGroup label={t('orders.filterGroupDelivery')}>
+              <FilterChip
+                label={t('orders.filterAll')}
+                active={etaFilter === 'all'}
+                onPress={() => selectEta('all')}
+              />
+              {availableEtas.map((bucket) => (
+                <FilterChip
+                  key={bucket}
+                  label={getEtaLabel(bucket)}
+                  count={etaCounts[bucket as 'upcoming' | 'none']}
+                  active={etaFilter === bucket}
+                  onPress={() => selectEta(etaFilter === bucket ? 'all' : bucket)}
+                />
+              ))}
+            </FilterGroup>
+          )}
+
+          {showPeriodGroup && (
+            <FilterGroup label={t('orders.filterGroupPeriod')}>
+              <FilterChip
+                label={t('orders.filterAll')}
+                active={periodFilter === PERIOD_ALL}
+                onPress={() => setPeriodFilter(PERIOD_ALL)}
+              />
+              {periodOptions.map((period) => (
+                <FilterChip
+                  key={period}
+                  label={getPeriodLabel(period)}
+                  active={periodFilter === period}
+                  onPress={() =>
+                    setPeriodFilter(periodFilter === period ? PERIOD_ALL : period)
+                  }
+                />
+              ))}
+            </FilterGroup>
+          )}
+        </View>
+      )}
+
       {/* Zero matches are covered by the list's empty state below. */}
-      {isSearching && matches.length > 0 && (
-        <Text style={styles.resultSummary}>{getResultSummary()}</Text>
+      {(isSearching || isFiltering) && matches.length > 0 && (
+        <Text style={styles.resultSummary} numberOfLines={1}>
+          {getResultSummary()}
+        </Text>
       )}
 
       <FlatList
@@ -319,7 +605,18 @@ export default function OrdersScreen() {
           />
         }
         ListEmptyComponent={
-          isSearching ? (
+          // The filter is the more specific "why is this empty" when both are on.
+          isFiltering ? (
+            <EmptyState
+              icon="funnel-outline"
+              title={t('orders.noResultsTitle')}
+              message={t('orders.noFilterResultsText', {
+                filters: getActiveFilterLabels().join(' + '),
+              })}
+              actionLabel={t('orders.filterClearAll')}
+              onAction={clearFilters}
+            />
+          ) : isSearching ? (
             <EmptyState
               icon="search"
               title={t('orders.noResultsTitle')}
@@ -330,12 +627,12 @@ export default function OrdersScreen() {
         renderItem={({ item: match }) => {
           const order = match.order;
           const showingAll = showAllItemsFor.has(order.id);
-          // While searching the matches are always visible — hiding them
-          // behind a tap would defeat the point of the search.
-          const isExpanded = isSearching ? true : expandedOrderId === order.id;
+          // While searching or filtering the matches are always visible — hiding
+          // them behind a tap would defeat the point of narrowing the list.
+          const isExpanded = isItemNarrowed ? true : expandedOrderId === order.id;
           const hiddenItemCount = order.line_items.length - match.matchedItems.length;
           const visibleItems =
-            isSearching && !showingAll ? match.matchedItems : order.line_items;
+            isItemNarrowed && !showingAll ? match.matchedItems : order.line_items;
 
           return (
             <Pressable
@@ -344,7 +641,7 @@ export default function OrdersScreen() {
                 pressed && { opacity: 0.85 },
               ]}
               onPress={() =>
-                isSearching ? toggleShowAllItems(order.id) : toggleOrderExpanded(order.id)
+                isItemNarrowed ? toggleShowAllItems(order.id) : toggleOrderExpanded(order.id)
               }
             >
               <View style={styles.orderHeader}>
@@ -442,7 +739,7 @@ export default function OrdersScreen() {
               )}
 
               <Text style={styles.expandHint}>
-                {!isSearching
+                {!isItemNarrowed
                   ? isExpanded
                     ? t('orders.tapToCollapse')
                     : t('orders.tapToExpand')
@@ -498,6 +795,85 @@ const styles = StyleSheet.create({
     fontSize: 15,
     // Keeps the row height stable across platforms while typing.
     paddingVertical: 10,
+  },
+  toolbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.sm,
+    marginHorizontal: spacing.md,
+  },
+  filterToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.pill,
+    paddingHorizontal: spacing.sm + spacing.xs,
+    paddingVertical: 7,
+  },
+  filterToggleOn: {
+    backgroundColor: colors.primary,
+  },
+  filterToggleText: {
+    fontFamily: fonts.heading,
+    fontSize: 12,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    color: colors.text,
+  },
+  filterToggleTextOn: {
+    color: colors.background,
+  },
+  clearFilters: {
+    fontSize: 12,
+    color: colors.primary,
+    textDecorationLine: 'underline',
+  },
+  filterPanel: {
+    backgroundColor: colors.surfaceLow,
+    borderRadius: borderRadius.md,
+    marginHorizontal: spacing.md,
+    marginTop: spacing.sm,
+    paddingVertical: spacing.sm + spacing.xs,
+  },
+  filterGroup: {
+    marginBottom: spacing.sm,
+  },
+  filterGroupLabel: {
+    fontFamily: fonts.heading,
+    fontSize: 11,
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
+    color: colors.textMuted,
+    marginHorizontal: spacing.md,
+    marginBottom: 6,
+  },
+  // A plain wrapping row, not a horizontal ScrollView: RNW shrinks a ScrollView
+  // inside this flex column to a sliver and clips the chips with overflow:hidden.
+  // Wrapping also keeps every chip reachable without a hidden sideways scroll.
+  filterRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginHorizontal: spacing.md,
+  },
+  filterChip: {
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.pill,
+    paddingHorizontal: spacing.sm + spacing.xs,
+    paddingVertical: 6,
+  },
+  filterChipActive: {
+    backgroundColor: colors.primary,
+  },
+  filterChipText: {
+    fontSize: 12,
+    color: colors.textMuted,
+  },
+  filterChipTextActive: {
+    color: colors.background,
+    fontWeight: '600',
   },
   resultSummary: {
     color: colors.textMuted,
