@@ -98,10 +98,10 @@
     <div data-action-section="raffle" hidden>
       <div class="field-row">
         <div class="field">
-          <label for="id_prize_name">Prijs</label>
+          <label for="id_prize_name">Prijs (kop op de kaart)</label>
           <input type="text" id="id_prize_name" name="prize_name" value="{{ form.prize_name }}" maxlength="200" placeholder="bijv. Magnum fles Westvleteren">
         </div>
-        <div class="field">
+        <div class="field" id="num-winners-field">
           <label for="id_num_winners">Aantal winnaars</label>
           <input type="number" id="id_num_winners" name="num_winners" min="1" value="{{ form.num_winners }}">
         </div>
@@ -140,6 +140,17 @@
         <input type="checkbox" id="id_send_reminder" name="send_reminder" {% if form.send_reminder %}checked{% endif %}>
         <label for="id_send_reminder">Herinnering sturen ± 3 uur voor de trekking</label>
       </div>
+
+      <h2 style="margin-top: 18px;">Meerdere prijzen (optioneel)</h2>
+      <p class="hint" style="color: var(--hob-muted); font-size: 12px; margin-top: 0;">
+        Geen prijzen toegevoegd = één prijs voor alle winnaars. Voeg je prijzen toe, dan
+        worden ze in deze volgorde verdeeld over één deelnemerspot: prijs 1 gaat naar de
+        eerst getrokken naam. Niemand kan twee prijzen winnen, en het aantal winnaars is
+        automatisch de som van de aantallen.
+      </p>
+      <div id="prize-rows"></div>
+      <button type="button" class="btn secondary" id="add-prize">+ Prijs toevoegen</button>
+      <input type="hidden" name="raffle_prizes" id="id_raffle_prizes" value="{{ form.raffle_prizes }}">
     </div>
 
     <div data-discount-section hidden>

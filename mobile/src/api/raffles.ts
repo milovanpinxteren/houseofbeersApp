@@ -4,6 +4,21 @@ import { apiFetch } from './client';
 
 export type RaffleStatus = 'open' | 'drawn';
 
+/**
+ * One prize tier of a multi-prize raffle (e.g. a shirt, a hoodie and a cap
+ * drawn from the same entrant pool). A user still wins at most one tier.
+ */
+export interface RafflePrize {
+  id: number;
+  name: string;
+  description: string;
+  image_url: string;
+  /** How many of this prize are available. */
+  quantity: number;
+  /** Display order, ascending. */
+  ordering: number;
+}
+
 export interface Raffle {
   id: number;
   campaign_id: number;
@@ -31,6 +46,17 @@ export interface Raffle {
   // the cart (prize products are normally unlisted in the webshop).
   my_code_cart_url: string | null;
   public_winner_names: string[] | null;
+  // Multi-prize support. The backend and the PWA deploy separately, so these
+  // are OPTIONAL: for every raffle created before the feature — and for any
+  // backend that predates it — they are missing entirely. `prize_name` /
+  // `prize_description` / `prize_image_url` above stay the headline; the tiers
+  // sit underneath, they do not replace it.
+  /** Prize tiers; absent or [] for a single-prize raffle. */
+  prizes?: RafflePrize[] | null;
+  /** The tier THIS user won; null pre-draw or when they didn't win. */
+  my_prize_name?: string | null;
+  /** Parallel to `winner_first_names`, same draw order; null pre-draw. */
+  winner_prizes?: string[] | null;
 }
 
 export async function getRaffles(): Promise<{ raffles: Raffle[] }> {

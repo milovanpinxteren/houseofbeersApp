@@ -1,0 +1,59 @@
+{% extends "loyalty/points_tool/base.html" %}
+{% load static %}
+
+{% block tool_content %}
+<div class="page-head">
+  <div>
+    <h1>Puntentool</h1>
+    <p class="page-sub">
+      Punten toekennen of een saldo corrigeren — met een reden die het lid in de app ziet.
+    </p>
+  </div>
+</div>
+
+{# The member URL is templated with id 0; the JS swaps in the picked user id. #}
+<div class="panel accent" id="search-panel"
+     data-user-search-url="{% url 'points_tool:user_search' %}"
+     data-member-url="{% url 'points_tool:member' 0 %}">
+  <h2>Klant zoeken</h2>
+  <div class="field">
+    <label for="id_member_search">E-mailadres, voornaam of achternaam</label>
+    <input type="search" id="id_member_search" autocomplete="off"
+           placeholder="bijv. jan@example.com of Jansen">
+    <div class="search-status" id="member-search-status" hidden></div>
+    <div class="search-results" id="member-search-results" hidden></div>
+    <div class="hint">Minimaal 2 tekens. Klik op een klant om verder te gaan.</div>
+  </div>
+  <div class="hint">
+    Huidige puntwaarde: <strong>{{ rate_per_point }}</strong> per punt — {{ rate.label }}
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Laatste acties via deze tool</h2>
+  {% if recent %}
+  <div class="table-scroll">
+    <table class="data">
+      <tr>
+        <th style="width: 150px;">Wanneer</th>
+        <th style="width: 180px;">Door</th>
+        <th style="width: 200px;">Klant</th>
+        <th>Actie</th>
+      </tr>
+      {% for entry in recent %}
+      <tr>
+        <td>{{ entry.action_time|date:"j M Y H:i" }}</td>
+        <td>{{ entry.user }}</td>
+        <td>{{ entry.object_repr }}</td>
+        <td>{{ entry.change_message }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% else %}
+  <div class="empty">Nog geen acties via de Puntentool.</div>
+  {% endif %}
+</div>
+
+<script src="{% static 'loyalty/points_tool/points_tool.js' %}" defer></script>
+{% endblock %}

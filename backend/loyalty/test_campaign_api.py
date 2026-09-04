@@ -90,6 +90,21 @@ class CampaignsListViewTest(CampaignTestCase):
         self.qualify(campaign, other, code='HOB-OTHER')
         self.assertEqual(self.get().json()['campaigns'], [])
 
+    def test_completed_campaign_visible_despite_another_users_empty_code(self):
+        """Someone else's failed mint (empty code) must not hide my code."""
+        campaign = self.make_campaign(
+            status='completed', action_type='discount_code',
+            points_amount=None, discount_type='percentage',
+            discount_value=10, discount_validity_days=30,
+        )
+        self.qualify(campaign, self.user, code='HOB-MINE')
+        other = self.make_user('failed@example.com', shopify_customer_id='444')
+        self.qualify(campaign, other, code='')
+
+        rows = self.get().json()['campaigns']
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['discount_code'], 'HOB-MINE')
+
     def test_audience_mode_hidden_from_non_members(self):
         self.make_campaign(
             audience_mode='audience',

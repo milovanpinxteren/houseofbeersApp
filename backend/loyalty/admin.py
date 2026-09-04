@@ -8,7 +8,8 @@ from .models import (PointsRule, RewardCategory, Reward, PointsBalance, PointsTr
                      ProcessedOrder, SyncState, Notification, NotificationRead,
                      BirthdayRewardConfig, BirthdayReward,
                      Campaign, CampaignAward, CampaignPreview, CampaignRaffle,
-                     CampaignRaffleWinner, RaffleEntry, ServiceGrant)
+                     CampaignRafflePrize, CampaignRaffleWinner, RaffleEntry,
+                     ServiceGrant)
 
 logger = logging.getLogger(__name__)
 
@@ -584,8 +585,22 @@ class CampaignAdmin(admin.ModelAdmin):
     studio_link.short_description = 'Studio'
 
 
+class CampaignRafflePrizeInline(admin.TabularInline):
+    """Read-only view of the prize tiers; the Studio builder owns editing."""
+    model = CampaignRafflePrize
+    extra = 0
+    fields = ['ordering', 'name', 'quantity', 'discount_type',
+              'discount_product_gid']
+    readonly_fields = fields
+    can_delete = False
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
 @admin.register(CampaignRaffle)
 class CampaignRaffleAdmin(admin.ModelAdmin):
+    inlines = [CampaignRafflePrizeInline]
     list_display = ['prize_name', 'campaign', 'status', 'num_winners', 'draw_at',
                     'entry_mode', 'fulfillment_type', 'studio_link']
     list_filter = ['status', 'entry_mode', 'fulfillment_type']
@@ -616,11 +631,11 @@ class RaffleEntryAdmin(admin.ModelAdmin):
 
 @admin.register(CampaignRaffleWinner)
 class CampaignRaffleWinnerAdmin(admin.ModelAdmin):
-    list_display = ['user', 'raffle', 'fulfillment_status', 'prize_code',
+    list_display = ['user', 'raffle', 'prize', 'fulfillment_status', 'prize_code',
                     'redeemed_at', 'drawn_at']
     list_filter = ['fulfillment_status', 'raffle']
     search_fields = ['user__email', 'prize_code', 'raffle__prize_name']
-    readonly_fields = ['raffle', 'user', 'prize_code', 'shopify_discount_id',
+    readonly_fields = ['raffle', 'user', 'prize', 'prize_code', 'shopify_discount_id',
                        'code_expires_at', 'result_delivery_id', 'drawn_at']
     ordering = ['-drawn_at']
 
@@ -638,6 +653,40 @@ class CampaignAwardAdmin(admin.ModelAdmin):
                        'discount_code', 'shopify_discount_id',
                        'notified_delivery_id', 'created_at']
     ordering = ['-created_at']
+
+
+# Proxy model so the Puntentool gets a clickable entry on the admin index under
+# Loyalty (same trick as CampagneStudio below); its "changelist" is a redirect
+# to /admin/points-tool/. Proxying PointsTransaction because that is what the
+# tool writes.
+class PuntenTool(PointsTransaction):
+    class Meta:
+        proxy = True
+        verbose_name = 'Puntentool'
+        verbose_name_plural = 'Puntentool'
+
+
+@admin.register(PuntenTool)
+class PuntenToolAdmin(admin.ModelAdmin):
+    # The tool's views enforce staff_member_required themselves; every staff
+    # user should see and reach the entry regardless of model permissions.
+    def has_module_permission(self, request):
+        return request.user.is_staff
+
+    def has_view_permission(self, request, obj=None):
+        return request.user.is_staff
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def changelist_view(self, request, extra_context=None):
+        return HttpResponseRedirect(reverse('points_tool:index'))
 
 
 # Proxy model so the Studio gets a clickable entry on the admin index under

@@ -78,6 +78,19 @@ class RegisterView(generics.CreateAPIView):
         except Exception as e:
             logger.error(f"Pending grant claim failed for {user.email}: {e}")
 
+        # Flyer welcome bonus. Wrapped exactly like the campaign hook in
+        # process_all_orders_for_user: someone who cannot create an account
+        # because a printed QR code was misconfigured is a far worse outcome
+        # than a missing bonus.
+        bonus_points = 0
+        try:
+            from .services.signup_codes import award_signup_bonus
+            bonus_points = award_signup_bonus(user)
+        except Exception as e:
+            logger.error(
+                f"Signup bonus failed for {user.email}: {e}", exc_info=True
+            )
+
         from analytics.tracker import track
         track('register', user=user)
 
@@ -85,9 +98,36 @@ class RegisterView(generics.CreateAPIView):
             {
                 'message': 'Registration successful.',
                 'shopify_linked': shopify_linked,
+                'signup_bonus_points': bonus_points,
             },
             status=status.HTTP_201_CREATED
         )
+
+
+class SignupCodeLookupView(APIView):
+    """
+    GET /api/auth/signup-code/<code>/ — what a flyer code is worth.
+
+    Unauthenticated on purpose: the register screen calls it before an account
+    exists, so it can promise the right number of points. It answers 200 with
+    `valid: false` rather than a 404 body (one code path for the client) and
+    never says WHY a code failed — an anonymous caller must not be able to
+    probe which codes exist, are exhausted, or are scheduled for next month.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request, code):
+        from .services.signup_codes import resolve_signup_code
+
+        signup_code, usable = resolve_signup_code(code)
+        if not usable:
+            return Response({'valid': False, 'label': '', 'points': 0})
+
+        return Response({
+            'valid': True,
+            'label': signup_code.label,
+            'points': signup_code.points,
+        })
 
 
 class UserMeView(APIView):

@@ -534,3 +534,273 @@ class AdminActionTests(APITestCase):
             self.request, User.objects.filter(pk=self.user.pk)
         )
         self.assertIn('Shopify down', ' '.join(self.messages))
+
+
+class SignupCodeTests(APITestCase):
+    """Flyer QR -> registration -> welcome bonus."""
+
+    def setUp(self):
+        from users.models import SignupCode
+
+        self.url = reverse('register')
+        # RegisterView reaches out to Shopify; never in tests.
+        patcher = patch('users.views.ShopifyService')
+        self.mock_shopify = patcher.start()
+        self.addCleanup(patcher.stop)
+        self.mock_shopify.return_value.link_customer_to_user.return_value = False
+
+        # The bonus notification goes over the real outbox; stub the delivery
+        # so these tests assert points, not push infrastructure.
+        notify_patcher = patch('notifications.services.send_notification')
+        self.mock_notify = notify_patcher.start()
+        self.addCleanup(notify_patcher.stop)
+
+        self.code = SignupCode.objects.create(
+            code='FLYER-UTRECHT', label='Flyer Utrecht september', points=100
+        )
+
+    def _payload(self, **overrides):
+        payload = {
+            'email': 'newuser@example.com',
+            'password': 'SuperSecret123!',
+            'password_confirm': 'SuperSecret123!',
+            'first_name': 'New',
+            'last_name': 'User',
+        }
+        payload.update(overrides)
+        return payload
+
+    def _register(self, **overrides):
+        return self.client.post(self.url, self._payload(**overrides), format='json')
+
+    # --- normalization ---------------------------------------------------
+
+    def test_code_is_stored_uppercase(self):
+        from users.models import SignupCode
+
+        code = SignupCode.objects.create(code='  flyer-den-bosch ', label='DB')
+        self.assertEqual(code.code, 'FLYER-DEN-BOSCH')
+
+    def test_lowercase_typed_code_matches_uppercase_qr_code(self):
+        """Someone typing 'flyer-utrecht' and a QR carrying it must agree."""
+        response = self._register(signup_code='flyer-utrecht')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        user = User.objects.get(email='newuser@example.com')
+        self.assertEqual(user.signup_code, self.code)
+
+    # --- awarding ---------------------------------------------------------
+
+    def test_valid_code_awards_points_once(self):
+        from loyalty.models import PointsBalance, PointsTransaction
+
+        response = self._register(signup_code='FLYER-UTRECHT')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['signup_bonus_points'], 100)
+
+        user = User.objects.get(email='newuser@example.com')
+        self.assertEqual(user.signup_code, self.code)
+        self.assertEqual(user.signup_code_raw, 'FLYER-UTRECHT')
+        self.assertEqual(PointsBalance.objects.get(user=user).balance, 100)
+        self.assertEqual(PointsTransaction.objects.filter(user=user).count(), 1)
+
+    def test_points_land_as_earned_without_a_shopify_order_id(self):
+        """
+        The shape the whole ledger agrees on: full sync's check-and-correct
+        rewrites earned rows that carry a shopify_order_id.
+        """
+        from loyalty.models import PointsTransaction
+
+        self._register(signup_code='FLYER-UTRECHT')
+        user = User.objects.get(email='newuser@example.com')
+
+        txn = PointsTransaction.objects.get(user=user)
+        self.assertEqual(txn.transaction_type, 'earned')
+        self.assertEqual(txn.points, 100)
+        self.assertIsNone(txn.rule)
+        self.assertFalse(txn.shopify_order_id)
+        # The label reaches the app's history expander via the breakdown.
+        self.assertIn('Flyer Utrecht september', txn.breakdown[0]['rule_name'])
+
+    def test_bonus_cannot_be_awarded_twice_for_the_same_user(self):
+        from loyalty.models import PointsBalance, PointsTransaction
+        from users.services.signup_codes import award_signup_bonus
+
+        self._register(signup_code='FLYER-UTRECHT')
+        user = User.objects.get(email='newuser@example.com')
+        self.assertIsNotNone(user.welcome_bonus_awarded_at)
+
+        # A replayed request / retried registration must be a no-op.
+        self.assertEqual(award_signup_bonus(user), 0)
+        self.assertEqual(PointsBalance.objects.get(user=user).balance, 100)
+        self.assertEqual(PointsTransaction.objects.filter(user=user).count(), 1)
+
+    def test_calling_the_award_path_twice_awards_once(self):
+        """The DB-level guard, exercised directly - no registration involved."""
+        from loyalty.models import PointsBalance, PointsTransaction
+        from users.services.signup_codes import award_signup_bonus
+
+        user = User.objects.create_user(
+            username='direct@example.com', email='direct@example.com',
+            password='SuperSecret123!',
+        )
+        user.signup_code = self.code
+        user.save(update_fields=['signup_code'])
+
+        self.assertEqual(award_signup_bonus(user), 100)
+        self.assertEqual(award_signup_bonus(user), 0)
+
+        self.assertEqual(PointsTransaction.objects.filter(user=user).count(), 1)
+        self.assertEqual(PointsBalance.objects.get(user=user).balance, 100)
+
+    def test_the_marker_alone_stops_a_second_award(self):
+        """
+        Even with the grant row gone (an admin cleanup, a data migration), the
+        marker must hold: the bonus is once per user, ever.
+        """
+        from loyalty.models import PointsBalance, ServiceGrant
+        from users.services.signup_codes import award_signup_bonus
+
+        self._register(signup_code='FLYER-UTRECHT')
+        user = User.objects.get(email='newuser@example.com')
+        ServiceGrant.objects.filter(dedupe_key=f'signup:{user.id}').delete()
+
+        self.assertEqual(award_signup_bonus(user), 0)
+        self.assertEqual(PointsBalance.objects.get(user=user).balance, 100)
+
+    def test_registration_without_a_code_awards_nothing(self):
+        from loyalty.models import PointsTransaction
+
+        response = self._register()
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        user = User.objects.get(email='newuser@example.com')
+        self.assertEqual(user.signup_code_raw, '')
+        self.assertIsNone(user.signup_code)
+        self.assertEqual(PointsTransaction.objects.filter(user=user).count(), 0)
+
+    # --- invalid codes still create the account --------------------------
+
+    def test_unknown_code_still_registers_and_records_the_raw_value(self):
+        from loyalty.models import PointsTransaction
+
+        response = self._register(signup_code='FLYER-TYPO')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        user = User.objects.get(email='newuser@example.com')
+        self.assertIsNone(user.signup_code)
+        self.assertEqual(user.signup_code_raw, 'FLYER-TYPO')
+        self.assertEqual(PointsTransaction.objects.filter(user=user).count(), 0)
+
+    def test_expired_code_still_registers_and_records_the_raw_value(self):
+        self.code.valid_until = timezone.now() - timedelta(days=1)
+        self.code.save()
+
+        response = self._register(signup_code='FLYER-UTRECHT')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['signup_bonus_points'], 0)
+        user = User.objects.get(email='newuser@example.com')
+        self.assertIsNone(user.signup_code)
+        self.assertEqual(user.signup_code_raw, 'FLYER-UTRECHT')
+
+    def test_inactive_and_not_yet_valid_codes_are_unusable(self):
+        self.code.valid_from = timezone.now() + timedelta(days=7)
+        self.code.save()
+        self.assertEqual(self.code.check_usable(), (False, 'not yet valid'))
+
+        self.code.valid_from = None
+        self.code.is_active = False
+        self.code.save()
+        self.assertEqual(self.code.check_usable(), (False, 'inactive'))
+
+    def test_max_uses_is_enforced(self):
+        self.code.max_uses = 1
+        self.code.save()
+
+        first = self._register(signup_code='FLYER-UTRECHT')
+        self.assertEqual(first.data['signup_bonus_points'], 100)
+
+        second = self._register(email='second@example.com',
+                                signup_code='FLYER-UTRECHT')
+        self.assertEqual(second.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(second.data['signup_bonus_points'], 0)
+
+        other = User.objects.get(email='second@example.com')
+        self.assertIsNone(other.signup_code)
+        self.assertEqual(other.signup_code_raw, 'FLYER-UTRECHT')
+        self.assertEqual(self.code.signup_count, 1)
+
+    def test_existing_account_gets_one_clear_error_pointing_at_login(self):
+        """
+        The welcome bonus is for NEW accounts. Someone who already has one and
+        registers again must get the email error and nothing else - the code
+        must not add a second, confusing error on top.
+        """
+        User.objects.create_user(
+            username='newuser@example.com', email='newuser@example.com',
+            password='SuperSecret123!',
+        )
+
+        response = self._register(signup_code='FLYER-UTRECHT')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(list(response.data.keys()), ['email'])
+        self.assertIn('log in', str(response.data['email']).lower())
+        # Nothing was recorded and nothing was paid out.
+        existing = User.objects.get(email='newuser@example.com')
+        self.assertEqual(existing.signup_code_raw, '')
+        self.assertIsNone(existing.welcome_bonus_awarded_at)
+
+    def test_a_broken_bonus_never_costs_the_account(self):
+        """The whole point of the try/except around the award."""
+        with patch('users.services.signup_codes.award_signup_bonus',
+                   side_effect=RuntimeError('loyalty is down')):
+            response = self._register(signup_code='FLYER-UTRECHT')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(User.objects.filter(email='newuser@example.com').exists())
+
+    # --- public lookup endpoint ------------------------------------------
+
+    def test_lookup_returns_points_for_a_valid_code(self):
+        response = self.client.get(
+            reverse('signup_code_lookup', args=['flyer-utrecht'])
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['valid'])
+        self.assertEqual(response.data['points'], 100)
+        self.assertEqual(response.data['label'], 'Flyer Utrecht september')
+
+    def test_lookup_needs_no_authentication(self):
+        """It runs before the account exists."""
+        self.client.force_authenticate(user=None)
+        response = self.client.get(reverse('signup_code_lookup', args=['NOPE']))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_lookup_leaks_nothing_about_an_invalid_code(self):
+        self.code.is_active = False
+        self.code.save()
+
+        unknown = self.client.get(
+            reverse('signup_code_lookup', args=['NOPE'])
+        ).data
+        inactive = self.client.get(
+            reverse('signup_code_lookup', args=['FLYER-UTRECHT'])
+        ).data
+
+        expected = {'valid': False, 'label': '', 'points': 0}
+        self.assertEqual(dict(unknown), expected)
+        # Identical to the unknown-code answer: an anonymous caller cannot
+        # probe which codes exist.
+        self.assertEqual(dict(inactive), expected)
+
+    # --- admin deliverable ------------------------------------------------
+
+    def test_qr_url_is_the_printable_deliverable(self):
+        self.assertEqual(
+            self.code.qr_url,
+            'https://app.houseofbeers.nl/?ref=FLYER-UTRECHT',
+        )

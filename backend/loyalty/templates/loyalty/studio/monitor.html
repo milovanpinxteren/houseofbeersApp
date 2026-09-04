@@ -77,6 +77,27 @@
   </div>
 </div>
 
+{% if raffle.prizes.all %}
+<div class="panel">
+  <h2>Prijzen ({{ raffle.num_winners }} winnaar{{ raffle.num_winners|pluralize:"s" }})</h2>
+  <div class="table-scroll">
+  <table class="data">
+    <thead><tr><th>#</th><th>Prijs</th><th>Aantal</th><th>Omschrijving</th></tr></thead>
+    <tbody>
+      {% for prize in raffle.prizes.all %}
+      <tr>
+        <td>{{ forloop.counter }}</td>
+        <td>{{ prize.name }}</td>
+        <td>{{ prize.quantity }}</td>
+        <td>{{ prize.description }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+
 {% if winners %}
 <div class="panel accent">
   <h2>Winnaars</h2>
@@ -84,13 +105,14 @@
   <table class="data">
     <thead>
       <tr>
-        <th>Winnaar</th><th>Prijscode</th><th>Status</th><th>Verzilverd</th><th></th>
+        <th>Winnaar</th><th>Prijs</th><th>Prijscode</th><th>Status</th><th>Verzilverd</th><th></th>
       </tr>
     </thead>
     <tbody>
       {% for winner in winners %}
       <tr>
         <td>{{ winner.user.email }}</td>
+        <td>{% if winner.prize %}{{ winner.prize.name }}{% else %}{{ raffle.prize_name }}{% endif %}</td>
         <td>{% if winner.prize_code %}<span class="code">{{ winner.prize_code }}</span>
           {% if winner.code_expires_at %}<br><small style="color: var(--hob-muted);">geldig t/m {{ winner.code_expires_at|date:"j M Y" }}</small>{% endif %}
           {% else %}<span class="no">—</span>{% endif %}</td>
@@ -151,7 +173,7 @@
         {% if raffle %}
         <td>{% if row.seen %}<span class="yes">✔</span>{% else %}<span class="no">—</span>{% endif %}</td>
         <td>{% if row.result_seen %}<span class="yes">✔</span>{% else %}<span class="no">—</span>{% endif %}</td>
-        <td>{% if row.winner %}<span class="yes">gewonnen</span>{% elif raffle.status == 'drawn' %}<span class="no">niet gewonnen</span>{% else %}<span class="no">—</span>{% endif %}</td>
+        <td>{% if row.winner %}<span class="yes">gewonnen{% if row.winner.prize %}: {{ row.winner.prize.name }}{% endif %}</span>{% elif raffle.status == 'drawn' %}<span class="no">niet gewonnen</span>{% else %}<span class="no">—</span>{% endif %}</td>
         {% else %}
         <td>
           {% if row.award %}

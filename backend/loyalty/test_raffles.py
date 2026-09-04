@@ -10,7 +10,8 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from loyalty.models import (
-    Campaign, CampaignRaffle, CampaignRaffleWinner, RaffleEntry,
+    Campaign, CampaignRaffle, CampaignRafflePrize, CampaignRaffleWinner,
+    RaffleEntry,
 )
 from loyalty.services.raffles import (
     check_winner_redemptions, draw_raffle, send_raffle_reminders,
@@ -27,6 +28,7 @@ USAGE_TARGET = 'users.services.shopify.ShopifyService.get_discount_code_usage'
 FROZEN_FIELDS = {
     'id', 'campaign_id', 'title', 'rule_sentence',
     'prize_name', 'prize_description', 'prize_image_url',
+    'prizes', 'my_prize_name', 'winner_prizes',
     'draw_at', 'status', 'entered', 'ticket_count', 'matched_products',
     'seen', 'result_seen', 'entrant_count',
     'entrant_first_names', 'winner_first_names',
@@ -67,6 +69,12 @@ class RaffleTestCase(TestCase):
             draw_at=draw_at,
         )
         return campaign, raffle
+
+    def add_prize(self, raffle, name, quantity=1, ordering=0, **kwargs):
+        return CampaignRafflePrize.objects.create(
+            raffle=raffle, name=name, quantity=quantity, ordering=ordering,
+            **kwargs
+        )
 
     def enter(self, raffle, user, tickets=1, **kwargs):
         return RaffleEntry.objects.create(
@@ -191,6 +199,115 @@ class DrawTests(RaffleTestCase):
 
         self.assertEqual(result, {'winners': 1})
         self.assertEqual(again, {'already_drawn': True})
+
+
+# ============ Prize tiers ============
+
+class PrizeTierDrawTests(RaffleTestCase):
+    """Several DIFFERENT prizes out of one entrant pool."""
+
+    def test_three_prizes_go_to_three_distinct_winners_in_order(self):
+        _, raffle = self.make_raffle(num_winners=1)  # ignored once tiers exist
+        shirt = self.add_prize(raffle, 'T-shirt', ordering=0)
+        hoodie = self.add_prize(raffle, 'Hoodie', ordering=1)
+        cap = self.add_prize(raffle, 'Pet', ordering=2)
+        for i in range(10):
+            self.enter(raffle, self.make_user(f'user{i}@example.com'))
+
+        winners, _ = self.draw(raffle)
+
+        self.assertEqual(len(winners), 3)
+        self.assertEqual(
+            [w.prize_id for w in winners], [shirt.id, hoodie.id, cap.id],
+            'prizes are handed out in ordering order',
+        )
+        user_ids = [w.user_id for w in winners]
+        self.assertEqual(len(set(user_ids)), 3, 'nobody wins two prizes')
+
+    def test_quantity_expands_into_multiple_slots(self):
+        _, raffle = self.make_raffle()
+        shirt = self.add_prize(raffle, 'T-shirt', quantity=3, ordering=0)
+        cap = self.add_prize(raffle, 'Pet', quantity=1, ordering=1)
+        for i in range(6):
+            self.enter(raffle, self.make_user(f'user{i}@example.com'))
+
+        winners, _ = self.draw(raffle)
+
+        self.assertEqual(
+            [w.prize_id for w in winners],
+            [shirt.id, shirt.id, shirt.id, cap.id],
+        )
+        self.assertEqual(len({w.user_id for w in winners}), 4)
+
+    def test_fewer_entrants_than_slots_clamps(self):
+        _, raffle = self.make_raffle()
+        shirt = self.add_prize(raffle, 'T-shirt', ordering=0)
+        self.add_prize(raffle, 'Hoodie', ordering=1)
+        self.add_prize(raffle, 'Pet', quantity=5, ordering=2)
+        only = self.make_user('only@example.com')
+        self.enter(raffle, only)
+
+        winners, _ = self.draw(raffle)
+
+        self.assertEqual(len(winners), 1)
+        self.assertEqual(winners[0].user_id, only.id)
+        self.assertEqual(winners[0].prize_id, shirt.id, 'the first prize goes first')
+        raffle.refresh_from_db()
+        self.assertEqual(raffle.status, 'drawn')
+
+    def test_legacy_raffle_without_prizes_draws_as_before(self):
+        _, raffle = self.make_raffle(num_winners=2)
+        for i in range(4):
+            self.enter(raffle, self.make_user(f'user{i}@example.com'))
+
+        winners, _ = self.draw(raffle)
+
+        self.assertEqual(len(winners), 2)
+        self.assertEqual([w.prize_id for w in winners], [None, None])
+
+    def test_per_prize_free_product_codes_use_their_own_gid(self):
+        _, raffle = self.make_raffle(
+            fulfillment_type='shopify_code',
+            discount_type='fixed_amount', discount_value=10,
+        )
+        self.add_prize(
+            raffle, 'T-shirt', ordering=0, discount_type='free_product',
+            discount_product_gid='gid://shopify/Product/111',
+            discount_validity_days=14,
+        )
+        self.add_prize(
+            raffle, 'Hoodie', ordering=1, discount_type='free_product',
+            discount_product_gid='gid://shopify/Product/222',
+        )
+        for i in range(2):
+            self.enter(raffle, self.make_user(f'user{i}@example.com'))
+
+        with patch(DISCOUNT_TARGET) as mock_create:
+            mock_create.return_value = {'code': 'WIN-X', 'discount_id': '1',
+                                        'expires_at': None}
+            winners, _ = self.draw(raffle)
+
+        configs = [call.args[1] for call in mock_create.call_args_list]
+        self.assertEqual(len(configs), 2)
+        self.assertEqual(
+            [c.discount_product_gid for c in configs],
+            ['gid://shopify/Product/111', 'gid://shopify/Product/222'],
+        )
+        self.assertEqual([c.discount_type for c in configs],
+                         ['free_product', 'free_product'])
+        # Blank prize fields fall back to the campaign's config.
+        self.assertEqual(configs[0].discount_validity_days, 14)
+        self.assertEqual(configs[1].discount_validity_days, 30)
+        self.assertEqual(len(winners), 2)
+
+    def test_winner_notification_names_their_own_prize(self):
+        _, raffle = self.make_raffle()
+        self.add_prize(raffle, 'Hoodie', ordering=0)
+        self.enter(raffle, self.make_user())
+
+        _winners, mock_notify = self.draw(raffle)
+
+        self.assertIn('Hoodie', mock_notify.call_args.kwargs['body'])
 
 
 # ============ Fulfillment ============
@@ -626,6 +743,47 @@ class RaffleApiTests(RaffleTestCase):
         self.assertTrue(payload['did_win'])
         self.assertEqual(payload['my_code'], 'WIN-MINE')
         self.assertIsNotNone(payload['my_code_expires_at'])
+
+    def test_prize_tiers_in_payload_before_and_after_the_draw(self):
+        _, raffle = self.make_raffle(draw_at=timezone.now() + timedelta(days=1))
+        self.add_prize(raffle, 'T-shirt', quantity=2, ordering=0,
+                       description='In jouw maat')
+        self.add_prize(raffle, 'Hoodie', ordering=1)
+        self.enter(raffle, self.user)
+        other = self.make_user('other@example.com', first_name='Otto')
+        self.enter(raffle, other)
+
+        payload = self.get_raffles()[0]
+        self.assertEqual(set(payload.keys()), FROZEN_FIELDS)
+        self.assertEqual(
+            [(p['name'], p['quantity'], p['ordering']) for p in payload['prizes']],
+            [('T-shirt', 2, 0), ('Hoodie', 1, 1)],
+        )
+        self.assertEqual(payload['prizes'][0]['description'], 'In jouw maat')
+        self.assertIsNone(payload['my_prize_name'], 'null before the draw')
+        self.assertIsNone(payload['winner_prizes'])
+
+        self.draw(raffle)
+
+        payload = self.get_raffles()[0]
+        # 3 slots, 2 entrants: both win, and the T-shirt (quantity 2) fills
+        # both slots before the hoodie is reached.
+        self.assertEqual(payload['winner_prizes'], ['T-shirt', 'T-shirt'])
+        self.assertEqual(len(payload['winner_prizes']), len(payload['winner_first_names']))
+        self.assertTrue(payload['did_win'])
+        self.assertEqual(payload['my_prize_name'], 'T-shirt')
+
+    def test_legacy_raffle_reports_empty_prize_fields(self):
+        _, raffle = self.make_raffle()
+        self.enter(raffle, self.user)
+        self.draw(raffle)
+
+        payload = self.get_raffles()[0]
+        self.assertEqual(set(payload.keys()), FROZEN_FIELDS)
+        self.assertEqual(payload['prizes'], [])
+        self.assertIsNone(payload['my_prize_name'])
+        self.assertIsNone(payload['winner_prizes'])
+        self.assertEqual(payload['prize_name'], 'Magnum fles')
 
     def test_drawn_raffle_hidden_from_non_entrants(self):
         _, raffle = self.make_raffle()

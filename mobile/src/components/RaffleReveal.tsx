@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { t } from '../i18n';
 import { colors, spacing, borderRadius, fonts } from '../theme/colors';
 import { Button } from './ui';
+import { winnersWithPrizes } from '../utils/rafflePrizes';
 
 type Phase = 'idle' | 'countdown' | 'spinning' | 'revealing' | 'result';
 
@@ -157,7 +158,16 @@ interface RaffleRevealProps {
   entrantNames: string[];
   /** Winner first names in draw order. */
   winnerNames: string[];
+  /**
+   * Multi-prize raffles only: the prize each winner won, positional against
+   * `winnerNames`. Absent/null for a single-prize (or pre-feature) raffle —
+   * then the reveal reads exactly as it always did.
+   */
+  winnerPrizes?: string[] | null;
+  /** Headline prize of the raffle. */
   prizeName: string;
+  /** The specific prize the caller won, when the raffle has prize tiers. */
+  myPrizeName?: string | null;
   didWin: boolean;
   /** Discount code for a winning caller (null for manual fulfillment). */
   myCode: string | null;
@@ -184,7 +194,9 @@ interface RaffleRevealProps {
 export function RaffleReveal({
   entrantNames,
   winnerNames,
+  winnerPrizes,
   prizeName,
+  myPrizeName,
   didWin,
   myCode,
   myCodeExpiresAt,
@@ -364,7 +376,27 @@ export function RaffleReveal({
   }
 
   const showWinners = phase === 'revealing' || phase === 'result';
-  const publicNames = winnerNames.join(', ');
+  // Only name prizes per winner when that actually adds information: several
+  // different prizes, or one that isn't the headline already shown on top.
+  // A tier-less raffle (or an older backend) therefore reads exactly as before.
+  const distinctPrizes = Array.from(
+    new Set((Array.isArray(winnerPrizes) ? winnerPrizes : []).filter(Boolean))
+  );
+  const perWinnerPrizes =
+    distinctPrizes.length > 1 ||
+    (distinctPrizes.length === 1 && distinctPrizes[0] !== prizeName);
+  const prizeFor = (index: number): string | null => {
+    if (!perWinnerPrizes || !Array.isArray(winnerPrizes)) return null;
+    return winnerPrizes[index] || null;
+  };
+  // With prize tiers the losing line credits each winner with their prize;
+  // without them (the normal case) it stays a plain list of names.
+  const publicNames = (
+    perWinnerPrizes ? winnersWithPrizes(winnerNames, winnerPrizes) : winnerNames
+  ).join(', ');
+  /** The prize this user won — their tier when it differs from the headline. */
+  const myTierPrize = myPrizeName && myPrizeName !== prizeName ? myPrizeName : null;
+  const myPrize = myTierPrize || prizeName;
 
   return (
     <View
@@ -439,9 +471,12 @@ export function RaffleReveal({
               {winnerNames.length === 1 ? t('raffle.winner') : t('raffle.winners')}
             </Text>
             {winnerNames.map((name, index) => (
-              <Text key={`${name}-${index}`} style={styles.winnerName}>
-                {name}
-              </Text>
+              <View key={`${name}-${index}`} style={styles.winnerBlock}>
+                <Text style={styles.winnerName}>{name}</Text>
+                {prizeFor(index) ? (
+                  <Text style={styles.winnerPrize}>{prizeFor(index)}</Text>
+                ) : null}
+              </View>
             ))}
           </Animated.View>
         ) : null}
@@ -456,11 +491,15 @@ export function RaffleReveal({
                 <Text style={styles.wonBannerText}>{t('raffle.youWon')}</Text>
               </View>
               <Text style={styles.resultBody}>
-                {t('raffle.youWonBody', { prize: prizeName })}
+                {t('raffle.youWonBody', { prize: myPrize })}
               </Text>
               {myCode ? (
                 <>
-                  <Text style={styles.codeLabel}>{t('raffle.yourCode')}</Text>
+                  <Text style={styles.codeLabel}>
+                    {myTierPrize
+                      ? t('raffle.yourCodeFor', { prize: myTierPrize })
+                      : t('raffle.yourCode')}
+                  </Text>
                   <Pressable
                     style={({ pressed }) => [styles.codeBox, pressed && { opacity: 0.8 }]}
                     onPress={() => copyCode(myCode)}
@@ -654,6 +693,19 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     color: colors.warning,
     marginBottom: spacing.xs,
+  },
+  winnerBlock: {
+    alignItems: 'center',
+    marginBottom: spacing.xs,
+  },
+  winnerPrize: {
+    fontFamily: fonts.heading,
+    fontSize: 12,
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
+    color: colors.primary,
+    textAlign: 'center',
+    marginTop: 2,
   },
   winnerName: {
     fontFamily: fonts.headingBold,

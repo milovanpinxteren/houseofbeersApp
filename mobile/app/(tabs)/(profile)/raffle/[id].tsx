@@ -19,6 +19,36 @@ import {
   markRaffleResultSeen,
   Raffle,
 } from '../../../../src/api/raffles';
+import {
+  hasPrizeTiers,
+  prizeLabel,
+  sortedPrizes,
+} from '../../../../src/utils/rafflePrizes';
+
+/**
+ * The prize tiers of a multi-prize raffle, under the headline prize. Renders
+ * nothing when the raffle has a single prize (or predates the feature).
+ */
+function PrizeTierList({ raffle }: { raffle: Raffle }) {
+  if (!hasPrizeTiers(raffle)) return null;
+  return (
+    <Card style={styles.sectionCard}>
+      <Text style={styles.sectionLabel}>{t('raffle.prizesLabel')}</Text>
+      {sortedPrizes(raffle).map((prize) => (
+        <View key={prize.id} style={styles.tierRow}>
+          <Ionicons name="gift-outline" size={16} color={colors.primary} />
+          <View style={styles.tierTextWrap}>
+            <Text style={styles.tierName}>{prizeLabel(prize)}</Text>
+            {prize.description ? (
+              <Text style={styles.tierDescription}>{prize.description}</Text>
+            ) : null}
+          </View>
+        </View>
+      ))}
+      <Text style={styles.tierNote}>{t('raffle.onePrizePerWinner')}</Text>
+    </Card>
+  );
+}
 
 /** Live countdown to the draw: D/H/M tiles, seconds ticking under a day. */
 function DrawCountdown({ target }: { target: string }) {
@@ -160,7 +190,9 @@ export default function RaffleScreen() {
             <RaffleReveal
               entrantNames={raffle.entrant_first_names || []}
               winnerNames={winners}
+              winnerPrizes={raffle.winner_prizes}
               prizeName={raffle.prize_name}
+              myPrizeName={raffle.my_prize_name}
               didWin={raffle.did_win === true}
               myCode={raffle.my_code}
               myCodeExpiresAt={raffle.my_code_expires_at}
@@ -184,6 +216,7 @@ export default function RaffleScreen() {
               <Text style={styles.prizeDescription}>{raffle.prize_description}</Text>
             ) : null}
           </Card>
+          <PrizeTierList raffle={raffle} />
         </>
       ) : (
         <>
@@ -206,6 +239,8 @@ export default function RaffleScreen() {
           {raffle.prize_description ? (
             <Text style={styles.prizeDescription}>{raffle.prize_description}</Text>
           ) : null}
+
+          <PrizeTierList raffle={raffle} />
 
           {raffle.entered ? (
             <Card variant="accent" style={styles.sectionCard}>
@@ -332,6 +367,32 @@ const styles = StyleSheet.create({
   },
   sectionCard: {
     marginTop: spacing.sm,
+  },
+  tierRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  tierTextWrap: {
+    flex: 1,
+  },
+  tierName: {
+    fontFamily: fonts.heading,
+    fontSize: 15,
+    letterSpacing: 0.4,
+    color: colors.text,
+  },
+  tierDescription: {
+    fontFamily: fonts.serif,
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  tierNote: {
+    fontSize: 12,
+    color: colors.textMuted,
   },
   enteredRow: {
     flexDirection: 'row',

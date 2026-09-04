@@ -393,6 +393,12 @@ export default {
     haveAccount: 'Already have an account?',
     signUp: 'Sign Up',
     signIn: 'Sign In',
+    haveSignupCode: 'Have a promo code?',
+    signupCode: 'Promo code (optional)',
+    signupCodeHint: 'Got a flyer? Enter its code for welcome points.',
+    signupCodeBonus: 'You get %{points} welcome points',
+    signupCodeAlreadyMember: 'This welcome code is for new members — share it with a friend.',
+    emailTaken: 'An account with this email already exists. Log in below.',
   },
 
   // Recommendations
@@ -646,6 +652,18 @@ export default {
     seconds: 'sec',
     drawAnyMoment: 'The draw can start any moment…',
     prizeLabel: 'The prize',
+    // Multiple prizes (prize tiers) — only shown when the raffle really has
+    // more than one; otherwise the copy above stays exactly as it was.
+    prizesLabel: 'All prizes',
+    prizeQuantity: '{{count}}× {{name}}',
+    morePrizes: '+{{count}} more',
+    onePrizePerWinner: 'Each winner wins one prize.',
+    teaserTitleMulti: 'Win one of {{count}} prizes',
+    enteredBodyMulti: 'You have {{tickets}} in the draw for {{count}} prizes.',
+    drawDoneHintMulti: 'Who won the {{count}} prizes? Watch the draw to find out.',
+    winnerWithPrize: '{{name}} – {{prize}}',
+    wonPrizeViewCode: 'You won {{prize}} · view your code',
+    yourCodeFor: 'Your code for {{prize}}',
     // Open + not entered (teaser)
     teaserTitle: 'Win {{prize}}',
     teaserHint: 'See how to enter',

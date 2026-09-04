@@ -6,6 +6,14 @@ interface RegisterData {
   password_confirm: string;
   first_name?: string;
   last_name?: string;
+  /** Flyer code (?ref=CODE or typed by hand). Never blocks registration. */
+  signup_code?: string;
+}
+
+export interface SignupCodeInfo {
+  valid: boolean;
+  label: string;
+  points: number;
 }
 
 interface LoginData {
@@ -36,6 +44,17 @@ export async function register(data: RegisterData): Promise<void> {
     method: 'POST',
     body: JSON.stringify(data),
   });
+}
+
+/**
+ * What a flyer code is worth. Unauthenticated - it runs before the account
+ * exists. The backend answers 200 with valid:false for anything it will not
+ * honour, so there is no error case to special-case here.
+ */
+export async function lookupSignupCode(code: string): Promise<SignupCodeInfo> {
+  return apiFetch<SignupCodeInfo>(
+    `/auth/signup-code/${encodeURIComponent(code)}/`
+  );
 }
 
 export async function login(data: LoginData): Promise<void> {

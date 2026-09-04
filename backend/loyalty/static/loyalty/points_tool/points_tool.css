@@ -1,0 +1,23 @@
+/* Puntentool — the few bits studio.css does not already cover.
+   Everything stays scoped under .studio (the shared root class) so nothing
+   leaks into the admin chrome, and all colors come from the admin's own theme
+   variables so the page follows the light/dark toggle. */
+
+.studio .conversion {
+  font-size: 15px;
+  color: var(--hob-accent);
+  min-height: 22px;
+  margin: -4px 0 14px 0;
+}
+.studio .conversion.warn {
+  color: var(--hob-warn);
+  font-weight: 600;
+}
+
+/* The number staff actually has to check before confirming. */
+.studio .stat.highlight {
+  border-color: var(--hob-accent);
+  border-width: 2px;
+}
+
+.studio .search-results .result .r-title { font-weight: 500; }

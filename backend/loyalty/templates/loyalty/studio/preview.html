@@ -11,6 +11,7 @@
       <span class="chip {{ campaign.status }}">{{ status_label }}</span>
       &nbsp;{{ action_label }}{% if raffle %} — {{ raffle.prize_name }}{% endif %}
       &nbsp;·&nbsp; {{ campaign.window_start|date:"j M Y H:i" }} &ndash; {{ campaign.window_end|date:"j M Y H:i" }}
+      {% if raffle.prizes.all %}<br>Prijzen: {% for prize in raffle.prizes.all %}{{ prize.quantity }}x {{ prize.name }}{% if not forloop.last %} · {% endif %}{% endfor %}{% endif %}
     </p>
   </div>
   <div class="actions">

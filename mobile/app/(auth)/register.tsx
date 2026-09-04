@@ -1,8 +1,15 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
 import { Link, router } from 'expo-router';
 import { useAuth } from '../../src/context/AuthContext';
 import { useLanguage } from '../../src/context/LanguageContext';
+import { lookupSignupCode } from '../../src/api/auth';
+import {
+  clearStoredSignupCode,
+  ensureSignupCodeCaptured,
+  getStoredSignupCode,
+  normalizeSignupCode,
+} from '../../src/utils/signupCode';
 import { t } from '../../src/i18n';
 import { colors, spacing, borderRadius } from '../../src/theme/colors';
 
@@ -12,10 +19,59 @@ export default function RegisterScreen() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
+  const [signupCode, setSignupCode] = useState('');
+  const [showCodeField, setShowCodeField] = useState(false);
+  const [bonusPoints, setBonusPoints] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const { register } = useAuth();
   const { language } = useLanguage();
+
+  // Pre-fill from the QR capture. The field stays hidden for everyone else:
+  // registration is the app's most important funnel and an input almost
+  // nobody can fill in is pure friction. It is still reachable by hand
+  // because on iOS, adding the PWA to the home screen creates a separate
+  // storage partition - a code scanned in Safari is gone in the installed
+  // app, and the flyer prints the code so it can be retyped.
+  useEffect(() => {
+    // Await the capture first: arriving straight from a QR link, the code may
+    // still be on its way into storage.
+    ensureSignupCodeCaptured()
+      .then(getStoredSignupCode)
+      .then((stored) => {
+        if (stored) {
+          setSignupCode(stored);
+          setShowCodeField(true);
+        }
+      });
+  }, []);
+
+  // Ask the backend what this code is worth, so we only ever promise a number
+  // we will actually pay out. Debounced because the field is hand-typed.
+  useEffect(() => {
+    const code = normalizeSignupCode(signupCode);
+    if (!code) {
+      setBonusPoints(0);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const info = await lookupSignupCode(code);
+        if (!cancelled) setBonusPoints(info.valid ? info.points : 0);
+      } catch {
+        // Offline or backend hiccup: promise nothing. The code still travels
+        // with the registration, so a valid one is honoured regardless.
+        if (!cancelled) setBonusPoints(0);
+      }
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [signupCode]);
 
   async function handleRegister() {
     setErrorMessage('');
@@ -37,11 +93,20 @@ export default function RegisterScreen() {
 
     setIsLoading(true);
     try {
-      await register(email, password, firstName, lastName);
+      await register(email, password, firstName, lastName, normalizeSignupCode(signupCode));
+      // Used (or at least recorded) - do not offer it again on this device.
+      await clearStoredSignupCode();
       router.replace('/(tabs)');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Registration failed';
-      setErrorMessage(message);
+      // The one failure worth translating: someone who already has an account
+      // arriving from a flyer. The raw backend string names the field, which
+      // reads like a form bug rather than "you are already a member".
+      setErrorMessage(
+        message.toLowerCase().includes('already exists')
+          ? t('auth.emailTaken')
+          : message
+      );
     } finally {
       setIsLoading(false);
     }
@@ -104,6 +169,32 @@ export default function RegisterScreen() {
             onChangeText={setConfirmPassword}
             secureTextEntry
           />
+
+          {showCodeField ? (
+            <View style={styles.codeField}>
+              <TextInput
+                style={styles.input}
+                placeholder={t('auth.signupCode')}
+                placeholderTextColor={colors.textMuted}
+                value={signupCode}
+                onChangeText={setSignupCode}
+                autoCapitalize="characters"
+                autoCorrect={false}
+                autoFocus={!signupCode}
+              />
+              {bonusPoints > 0 ? (
+                <Text style={styles.codeBonus}>
+                  {t('auth.signupCodeBonus', { points: bonusPoints })}
+                </Text>
+              ) : (
+                <Text style={styles.codeHint}>{t('auth.signupCodeHint')}</Text>
+              )}
+            </View>
+          ) : (
+            <TouchableOpacity onPress={() => setShowCodeField(true)}>
+              <Text style={styles.codeReveal}>{t('auth.haveSignupCode')}</Text>
+            </TouchableOpacity>
+          )}
 
           <TouchableOpacity
             style={[styles.button, isLoading && styles.buttonDisabled]}
@@ -185,6 +276,27 @@ const styles = StyleSheet.create({
   },
   halfInput: {
     flex: 1,
+  },
+  codeField: {
+    gap: spacing.xs,
+  },
+  codeHint: {
+    color: colors.textMuted,
+    fontSize: 12,
+    paddingHorizontal: spacing.xs,
+  },
+  codeReveal: {
+    color: colors.textMuted,
+    fontSize: 13,
+    paddingHorizontal: spacing.xs,
+    textDecorationLine: 'underline',
+  },
+  codeBonus: {
+    color: colors.primary,
+    fontFamily: 'Oswald_500Medium',
+    fontSize: 14,
+    letterSpacing: 0.5,
+    paddingHorizontal: spacing.xs,
   },
   button: {
     backgroundColor: colors.primary,

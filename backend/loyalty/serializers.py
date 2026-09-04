@@ -136,10 +136,16 @@ def serialize_raffle(raffle, user, entry):
     """
     One raffle as the FROZEN /api/loyalty/raffles/ shape (see
     CAMPAIGN_CONTRACT.md - the mobile app depends on it field-for-field).
-    Expects `entries__user` and `winners__user` to be prefetched; `entry` is
-    the caller's RaffleEntry or None (teaser card for non-entrants).
+    Expects `entries__user`, `winners__user` and `prizes` to be prefetched;
+    `entry` is the caller's RaffleEntry or None (teaser card for
+    non-entrants).
+
+    The three prize-tier fields (`prizes`, `my_prize_name`, `winner_prizes`)
+    describe a multi-prize raffle. A raffle without tiers reports them
+    empty/null and the app falls back to `prize_name`, exactly as before.
     """
     campaign = raffle.campaign
+    prizes = list(raffle.prizes.all())
     data = {
         'id': raffle.id,
         'campaign_id': campaign.id,
@@ -148,6 +154,14 @@ def serialize_raffle(raffle, user, entry):
         'prize_name': raffle.prize_name,
         'prize_description': raffle.prize_description,
         'prize_image_url': raffle.prize_image_url,
+        'prizes': [{
+            'id': prize.id,
+            'name': prize.name,
+            'description': prize.description,
+            'image_url': prize.image_url,
+            'quantity': prize.quantity,
+            'ordering': prize.ordering,
+        } for prize in prizes],
         'draw_at': raffle.draw_at,
         'status': raffle.status,
         'entered': entry is not None,
@@ -158,6 +172,8 @@ def serialize_raffle(raffle, user, entry):
         'entrant_count': len(raffle.entries.all()),
         'entrant_first_names': None,
         'winner_first_names': None,
+        'winner_prizes': None,
+        'my_prize_name': None,
         'did_win': None,
         'my_code': None,
         'my_code_expires_at': None,
@@ -177,8 +193,17 @@ def serialize_raffle(raffle, user, entry):
         data['entrant_first_names'] = entrant_names
         data['winner_first_names'] = winner_names
         data['public_winner_names'] = winner_names
+        if prizes:
+            # Parallel to winner_first_names, so the reveal can show "Willem —
+            # hoodie". Stays null for a tier-less raffle: there is nothing to
+            # say per winner that prize_name doesn't already say.
+            data['winner_prizes'] = [
+                w.prize.name if w.prize_id else raffle.prize_name
+                for w in winners
+            ]
         data['did_win'] = my_win is not None
         if my_win:
+            data['my_prize_name'] = my_win.prize.name if my_win.prize_id else None
             data['my_code'] = my_win.prize_code or None
             data['my_code_expires_at'] = my_win.code_expires_at
             data['my_code_cart_url'] = my_win.cart_url or None

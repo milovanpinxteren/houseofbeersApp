@@ -70,6 +70,40 @@ def _nl_amount(value) -> str:
     return f"€{amount}"
 
 
+def _raffle_prizes(raffle) -> list:
+    """
+    The raffle's prize tiers. The Studio's live-sentence endpoint builds an
+    UNSAVED raffle (no pk, so no reverse manager) and hands its equally
+    unsaved rows over on `_preview_prizes`.
+    """
+    preview = getattr(raffle, '_preview_prizes', None)
+    if preview is not None:
+        return list(preview)
+    if not raffle.pk:
+        return []
+    return list(raffle.prizes.all())
+
+
+def _prize_clause(raffle) -> str:
+    """
+    " voor <prijs>" for the action clause. With tiers it names all of them
+    ("voor 3 prijzen: T-shirt, hoodie of pet"); without tiers it is the
+    raffle headline, unchanged.
+    """
+    prizes = _raffle_prizes(raffle)
+    names = [prize.name for prize in prizes if prize.name]
+    if not names:
+        return f" voor {raffle.prize_name}" if raffle.prize_name else ''
+
+    total = sum(max(prize.quantity or 1, 1) for prize in prizes)
+    if len(names) > 1:
+        listed = f"{', '.join(names[:-1])} of {names[-1]}"
+        return f" voor {total} prijzen: {listed}"
+    if total > 1:
+        return f" voor {total}x {names[0]}"
+    return f" voor {names[0]}"
+
+
 def _action_clause(campaign) -> str:
     """Third-person-singular action clause ('krijgt 50 punten')."""
     if campaign.action_type == 'points' and campaign.points_amount:
@@ -92,8 +126,7 @@ def _action_clause(campaign) -> str:
         action = "doet mee in de loting"
         raffle = campaign.raffle if hasattr(campaign, 'raffle') else None
         if raffle:
-            if raffle.prize_name:
-                action += f" voor {raffle.prize_name}"
+            action += _prize_clause(raffle)
             if campaign.audience_mode != 'audience':
                 if raffle.entry_mode == 'per_item':
                     action += " (1 lot per gekocht item)"

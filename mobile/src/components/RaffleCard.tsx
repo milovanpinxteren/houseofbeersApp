@@ -14,9 +14,33 @@ import { t } from '../i18n';
 import { colors, spacing, borderRadius, fonts } from '../theme/colors';
 import { Card, SectionHeader } from './ui';
 import { getRaffles, Raffle } from '../api/raffles';
+import {
+  hasPrizeTiers,
+  prizeLabels,
+  prizeSummary,
+  prizeTotal,
+  winnersWithPrizes,
+} from '../utils/rafflePrizes';
 
 function ticketLabel(count: number): string {
   return count === 1 ? t('raffle.oneTicket') : t('raffle.manyTickets', { count });
+}
+
+/**
+ * One calm line naming the prize tiers of a multi-prize raffle, e.g.
+ * "Shirt · Hoodie · +2 meer". Renders nothing for a single-prize raffle, so
+ * those cards look exactly as they always did.
+ */
+function PrizeTierLine({ raffle }: { raffle: Raffle }) {
+  if (!hasPrizeTiers(raffle)) return null;
+  return (
+    <View style={styles.tierRow}>
+      <Ionicons name="gift-outline" size={13} color={colors.primary} />
+      <Text style={styles.tierText} numberOfLines={1}>
+        {prizeSummary(prizeLabels(raffle))}
+      </Text>
+    </View>
+  );
 }
 
 /**
@@ -54,6 +78,10 @@ export function RaffleCard({
 
   const drawn = raffle.status === 'drawn';
   const winners = raffle.public_winner_names || raffle.winner_first_names || [];
+  // Multi-prize raffles say "several prizes" instead of naming one; single-prize
+  // (and every pre-feature) raffle keeps today's copy exactly.
+  const multiPrize = hasPrizeTiers(raffle);
+  const prizeCount = prizeTotal(raffle);
 
   // Drawn, reveal not watched yet: the big call-to-action.
   if (drawn && !raffle.result_seen) {
@@ -67,8 +95,11 @@ export function RaffleCard({
         </View>
         <Text style={styles.title}>{t('raffle.drawDone')}</Text>
         <Text style={styles.body} numberOfLines={2}>
-          {t('raffle.drawDoneHint', { prize: raffle.prize_name })}
+          {multiPrize
+            ? t('raffle.drawDoneHintMulti', { count: prizeCount })
+            : t('raffle.drawDoneHint', { prize: raffle.prize_name })}
         </Text>
+        <PrizeTierLine raffle={raffle} />
         <View style={styles.ctaRow}>
           <Ionicons name="play-circle" size={18} color={colors.primary} />
           <Text style={styles.ctaText}>{t('raffle.viewDraw')}</Text>
@@ -90,13 +121,24 @@ export function RaffleCard({
             <Text style={styles.compactTitle} numberOfLines={1}>
               {raffle.prize_name}
             </Text>
+            {/* The archive stays a three-line row: with tiers the winners line
+                names each winner's prize instead of gaining an extra line. */}
             <Text style={styles.compactSub} numberOfLines={1}>
               {winners.length > 0
-                ? t('raffle.wonBy', { names: winners.join(', ') })
+                ? t('raffle.wonBy', {
+                    names: (multiPrize
+                      ? winnersWithPrizes(winners, raffle.winner_prizes)
+                      : winners
+                    ).join(', '),
+                  })
                 : t('raffle.drawDone')}
             </Text>
             {raffle.did_win ? (
-              <Text style={styles.compactWin}>{t('raffle.viewCode')}</Text>
+              <Text style={styles.compactWin} numberOfLines={1}>
+                {multiPrize && raffle.my_prize_name
+                  ? t('raffle.wonPrizeViewCode', { prize: raffle.my_prize_name })
+                  : t('raffle.viewCode')}
+              </Text>
             ) : null}
           </View>
           <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
@@ -120,11 +162,17 @@ export function RaffleCard({
         </View>
         <Text style={styles.title}>{t('raffle.entered')}</Text>
         <Text style={styles.body} numberOfLines={2}>
-          {t('raffle.enteredBody', {
-            tickets: ticketLabel(raffle.ticket_count),
-            prize: raffle.prize_name,
-          })}
+          {multiPrize
+            ? t('raffle.enteredBodyMulti', {
+                tickets: ticketLabel(raffle.ticket_count),
+                count: prizeCount,
+              })
+            : t('raffle.enteredBody', {
+                tickets: ticketLabel(raffle.ticket_count),
+                prize: raffle.prize_name,
+              })}
         </Text>
+        <PrizeTierLine raffle={raffle} />
         <View style={styles.metaRow}>
           <Ionicons name="time-outline" size={14} color={colors.textMuted} />
           <Text style={styles.metaText}>
@@ -146,12 +194,17 @@ export function RaffleCard({
           <Text style={styles.raffleBadgeText}>{t('raffle.badge')}</Text>
         </View>
       </View>
-      <Text style={styles.title}>{t('raffle.teaserTitle', { prize: raffle.prize_name })}</Text>
+      <Text style={styles.title}>
+        {multiPrize
+          ? t('raffle.teaserTitleMulti', { count: prizeCount })
+          : t('raffle.teaserTitle', { prize: raffle.prize_name })}
+      </Text>
       {raffle.rule_sentence ? (
         <Text style={styles.body} numberOfLines={3}>
           {raffle.rule_sentence}
         </Text>
       ) : null}
+      <PrizeTierLine raffle={raffle} />
       <View style={styles.ctaRow}>
         <Text style={styles.ctaText}>{t('raffle.teaserHint')}</Text>
         <Ionicons name="chevron-forward" size={15} color={colors.primary} />
@@ -327,6 +380,19 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 21,
     color: colors.textMuted,
+  },
+  tierRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: spacing.sm,
+  },
+  tierText: {
+    fontFamily: fonts.heading,
+    fontSize: 12,
+    letterSpacing: 0.4,
+    color: colors.primary,
+    flexShrink: 1,
   },
   metaRow: {
     flexDirection: 'row',

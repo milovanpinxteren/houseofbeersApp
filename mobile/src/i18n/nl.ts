@@ -392,6 +392,12 @@ export default {
     haveAccount: 'Heb je al een account?',
     signUp: 'Registreren',
     signIn: 'Inloggen',
+    haveSignupCode: 'Heb je een actiecode?',
+    signupCode: 'Actiecode (optioneel)',
+    signupCodeHint: 'Heb je een flyer? Vul de code in voor welkomstpunten.',
+    signupCodeBonus: 'Je krijgt %{points} welkomstpunten',
+    signupCodeAlreadyMember: "Deze welkomstcode is voor nieuwe leden — deel 'm met een vriend.",
+    emailTaken: 'Er bestaat al een account met dit e-mailadres. Log hieronder in.',
   },
 
   // Recommendations
@@ -645,6 +651,18 @@ export default {
     seconds: 'sec',
     drawAnyMoment: 'De trekking kan elk moment beginnen…',
     prizeLabel: 'De prijs',
+    // Meerdere prijzen (prize tiers) — alleen zichtbaar als de verloting er
+    // meer dan één heeft; anders blijft de tekst hierboven ongewijzigd.
+    prizesLabel: 'Alle prijzen',
+    prizeQuantity: '{{count}}× {{name}}',
+    morePrizes: '+{{count}} meer',
+    onePrizePerWinner: 'Elke winnaar wint één prijs.',
+    teaserTitleMulti: 'Win één van {{count}} prijzen',
+    enteredBodyMulti: 'Je hebt {{tickets}} in de trekking voor {{count}} prijzen.',
+    drawDoneHintMulti: 'Wie hebben de {{count}} prijzen gewonnen? Bekijk de trekking en ontdek het.',
+    winnerWithPrize: '{{name}} – {{prize}}',
+    wonPrizeViewCode: 'Jij won {{prize}} · bekijk je code',
+    yourCodeFor: 'Jouw code voor {{prize}}',
     // Open + doet nog niet mee (teaser)
     teaserTitle: 'Win {{prize}}',
     teaserHint: 'Zo doe je mee',

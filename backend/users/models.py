@@ -51,6 +51,34 @@ class User(AbstractUser):
         help_text="When the birthdate was last set. Used for the anti-abuse lead time."
     )
 
+    # Where this member came from. The FK is set only when the code was
+    # actually redeemable at registration; signup_code_raw keeps whatever they
+    # arrived with — including a mistyped or long-expired flyer code, because
+    # "this flyer is still pulling people in" is worth knowing even when no
+    # bonus was paid out.
+    signup_code = models.ForeignKey(
+        'users.SignupCode',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='signups',
+    )
+    signup_code_raw = models.CharField(
+        max_length=64,
+        blank=True,
+        default='',
+        help_text="The code as it arrived (QR or typed), valid or not."
+    )
+    # The once-ever marker for the welcome bonus. Checked and set under a row
+    # lock in the same transaction as the points write, so a retried request
+    # or a double-submitted form cannot pay out twice. "Registration happens
+    # once" is not a guard we are willing to lean on.
+    welcome_bonus_awarded_at = models.DateTimeField(
+        blank=True,
+        null=True,
+        help_text="When the signup-code welcome bonus was paid out. Set once, ever."
+    )
+
     # Last time the user did anything in the app. Indexed because segment
     # queries filter on it.
     last_active_at = models.DateTimeField(
@@ -96,3 +124,6 @@ class User(AbstractUser):
         nobody can move their birthday around to farm gifts.
         """
         return self.birthdate is not None
+
+
+from .models_signup import *  # noqa: E402,F401,F403

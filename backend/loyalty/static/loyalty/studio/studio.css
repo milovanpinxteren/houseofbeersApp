@@ -219,6 +219,23 @@ html[data-theme="dark"] .studio {
   background: none; border: 1px solid var(--hob-red); color: var(--hob-red);
   border-radius: 4px; padding: 5px 10px; cursor: pointer; font-size: 12px;
 }
+/* --- Prize tiers (multi-prize raffle) --- */
+.studio .prize-row {
+  background: var(--hob-panel); border: 1px solid var(--hob-line);
+  border-radius: 6px; padding: 12px 14px; margin-bottom: 10px;
+}
+.studio .prize-row .prize-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+}
+.studio .prize-row .prize-index {
+  font-size: 12px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--hob-accent);
+}
+.studio .prize-row .remove {
+  background: none; border: 1px solid var(--hob-red); color: var(--hob-red);
+  border-radius: 4px; padding: 5px 10px; cursor: pointer; font-size: 12px;
+}
+
 .studio .search-results {
   max-width: 480px; background: var(--body-bg, #fff);
   border: 1px solid var(--hob-border); border-radius: 6px;

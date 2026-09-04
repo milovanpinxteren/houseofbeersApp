@@ -48,10 +48,33 @@ def _weighted_sample_without_replacement(entries, num_to_draw):
     return selected
 
 
+def _prize_slots(raffle):
+    """
+    The prizes to hand out, one entry per winner slot: every prize tier
+    repeated by its quantity, in (ordering, id) order — so prize 1 goes to
+    the first name drawn.
+
+    A raffle without prize tiers yields num_winners anonymous slots (None),
+    i.e. exactly the pre-tier behaviour: everyone wins the raffle's headline
+    prize.
+    """
+    prizes = list(raffle.prizes.all())
+    if not prizes:
+        return [None] * raffle.num_winners
+    slots = []
+    for prize in prizes:
+        slots.extend([prize] * max(prize.quantity, 1))
+    return slots
+
+
 def draw_raffle(raffle):
     """
     Draw the raffle. Returns the list of CampaignRaffleWinner in draw order,
     or None when the raffle was already drawn (double-draw safe).
+
+    With several prizes it stays ONE sample from ONE pool: the slots are
+    assigned to the sampled entrants in order, and since the sample is
+    without replacement a user can win at most one of the prizes.
 
     Winner selection and the status flips happen inside one locked
     transaction, so a concurrent draw sees status='drawn' and backs off.
@@ -68,14 +91,17 @@ def draw_raffle(raffle):
             return None
 
         entries = list(locked.entries.select_related('user'))
-        num_to_draw = min(locked.num_winners, len(entries))
+        slots = _prize_slots(locked)
+        num_to_draw = min(len(slots), len(entries))
         winning_entries = _weighted_sample_without_replacement(entries, num_to_draw)
 
         # Individual creates (not bulk_create): draw order = pk order, and
         # SQLite does not return ids from bulk_create anyway.
         winners = [
-            CampaignRaffleWinner.objects.create(raffle=locked, user=entry.user)
-            for entry in winning_entries
+            CampaignRaffleWinner.objects.create(
+                raffle=locked, user=entry.user, prize=slots[index]
+            )
+            for index, entry in enumerate(winning_entries)
         ]
 
         locked.status = 'drawn'
@@ -102,11 +128,42 @@ def draw_raffle(raffle):
 
 # ============ Fulfillment ============
 
+def _discount_config(campaign, prize):
+    """
+    The discount config to mint one winner's code from: the prize tier's own
+    fields, with the campaign's as the fallback for whatever the tier leaves
+    blank (tiers that all award the same discount only configure it once).
+
+    Without a tier the campaign itself is the config — it already duck-types
+    as one, and passing it through keeps the pre-tier path byte-identical.
+    """
+    if prize is None:
+        return campaign
+
+    from loyalty.services.discounts import DiscountConfig
+
+    return DiscountConfig(
+        discount_type=prize.discount_type or campaign.discount_type,
+        discount_value=(
+            prize.discount_value if prize.discount_value is not None
+            else campaign.discount_value
+        ),
+        discount_product_gid=(
+            prize.discount_product_gid or campaign.discount_product_gid
+        ),
+        discount_validity_days=(
+            prize.discount_validity_days or campaign.discount_validity_days
+        ),
+        discount_title=f"Campaign - {campaign.name} - {prize.name}",
+    )
+
+
 def _fulfill_winners(raffle, winners):
     """
-    shopify_code -> mint a prize code per winner (campaign discount_* fields
-    are the prize config); a failed mint leaves the winner 'pending' so
-    "Check redemptions"/a re-run can retry by hand. manual -> manual_pending.
+    shopify_code -> mint a prize code per winner from THAT winner's prize
+    config (see _discount_config); a failed mint leaves the winner 'pending'
+    so "Check redemptions"/a re-run can retry by hand — and only that winner,
+    the rest of the fulfillment continues. manual -> manual_pending.
     """
     from loyalty.services.discounts import create_discount_code
 
@@ -118,7 +175,8 @@ def _fulfill_winners(raffle, winners):
             continue
 
         code = _generate_prize_code()
-        result = create_discount_code(winner.user, campaign, code)
+        config = _discount_config(campaign, winner.prize)
+        result = create_discount_code(winner.user, config, code)
         if result:
             winner.prize_code = result.get('code') or code
             winner.shopify_discount_id = str(result.get('discount_id', ''))
@@ -142,7 +200,10 @@ def _fulfill_winners(raffle, winners):
 # ============ Notifications ============
 
 def _winner_body(raffle, winner) -> str:
-    body = f"Gefeliciteerd! Je hebt gewonnen: {raffle.prize_name}."
+    # With prize tiers the winner cares about the prize THEY got, not the
+    # umbrella name on the card.
+    prize = winner.prize.name if winner.prize_id else raffle.prize_name
+    body = f"Gefeliciteerd! Je hebt gewonnen: {prize}."
     if winner.prize_code:
         body += f" Je code: {winner.prize_code}."
         if winner.code_expires_at:

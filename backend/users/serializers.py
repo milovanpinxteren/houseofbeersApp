@@ -1,3 +1,5 @@
+import logging
+
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.contrib.auth import get_user_model
@@ -7,6 +9,7 @@ from django.utils import timezone
 from .validators import validate_birthdate
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -15,6 +18,11 @@ class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
 
 
 class RegisterSerializer(serializers.ModelSerializer):
+    # Declared explicitly so the model field's UniqueValidator does not
+    # pre-empt validate_email(). It fires first on an exact match and its
+    # message ("user with this email already exists") offers no way forward —
+    # a dead end for someone who just scanned a flyer and landed here.
+    email = serializers.EmailField()
     password = serializers.CharField(write_only=True, validators=[validate_password])
     password_confirm = serializers.CharField(write_only=True)
     # Optional: existing clients that never send a birthdate keep working.
@@ -25,17 +33,31 @@ class RegisterSerializer(serializers.ModelSerializer):
         allow_null=True,
         validators=[validate_birthdate],
     )
+    # Flyer code (?ref=CODE or typed by hand). Never a validation error: an
+    # unknown or expired code must not block an account, it just wins no bonus.
+    signup_code = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        max_length=64,
+        write_only=True,
+    )
 
     class Meta:
         model = User
-        fields = ['email', 'password', 'password_confirm', 'first_name', 'last_name', 'birthdate']
+        fields = ['email', 'password', 'password_confirm', 'first_name', 'last_name',
+                  'birthdate', 'signup_code']
 
     def validate_email(self, value):
         # Stored lowercase so login and password reset are case-insensitive
         # regardless of what the phone keyboard capitalized.
         value = value.lower()
         if User.objects.filter(email__iexact=value).exists():
-            raise serializers.ValidationError('A user with this email already exists.')
+            # Names the way out. Someone arriving from a flyer QR lands on the
+            # register screen, and "already exists" alone is a dead end.
+            raise serializers.ValidationError(
+                'A user with this email already exists. Please log in instead.'
+            )
         return value
 
     def validate(self, attrs):
@@ -46,6 +68,7 @@ class RegisterSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         validated_data.pop('password_confirm')
         birthdate = validated_data.get('birthdate')
+        signup_code = validated_data.pop('signup_code', '')
         user = User.objects.create_user(
             username=validated_data['email'],
             email=validated_data['email'],
@@ -57,6 +80,21 @@ class RegisterSerializer(serializers.ModelSerializer):
             user.birthdate = birthdate
             user.birthdate_set_at = timezone.now()
             user.save(update_fields=['birthdate', 'birthdate_set_at'])
+
+        if signup_code:
+            # Records the code on the user (raw always, FK only when usable).
+            # Awarding the bonus happens in the view. Guarded here too: a
+            # misconfigured flyer must cost someone a bonus, never an account.
+            try:
+                from .services.signup_codes import attach_signup_code
+                attach_signup_code(user, signup_code)
+            except Exception as e:
+                logger.error(
+                    f"Attaching signup code '{signup_code}' to {user.email} "
+                    f"failed: {e}",
+                    exc_info=True,
+                )
+
         return user
 
 

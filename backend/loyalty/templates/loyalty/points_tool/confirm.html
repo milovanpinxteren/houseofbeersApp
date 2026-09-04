@@ -1,0 +1,85 @@
+{% extends "loyalty/points_tool/base.html" %}
+
+{% block tool_crumb %} &rsaquo; <a href="{% url 'points_tool:member' member.pk %}">{{ member.email }}</a> &rsaquo; Bevestigen{% endblock %}
+
+{% block tool_content %}
+<div class="page-head">
+  <div>
+    <h1>Kloppen deze punten?</h1>
+    <p class="page-sub">
+      {{ member.get_full_name|default:member.email }} &middot; {{ member.email }}
+    </p>
+  </div>
+</div>
+
+{% for warning in warnings %}
+<div class="banner warn"><strong>Let op.</strong> {{ warning }}</div>
+{% endfor %}
+
+<div class="panel accent">
+  <h2>{% if form.mode == 'add' %}Punten toevoegen{% else %}Saldo instellen{% endif %}</h2>
+
+  <div class="stat-row">
+    <div class="stat">
+      <div class="n">{{ snapshot.balance }}</div>
+      <div class="l">Saldo nu</div>
+    </div>
+    <div class="stat">
+      <div class="n">{% if delta > 0 %}+{% endif %}{{ delta }}</div>
+      <div class="l">Verschil ({{ delta_euro }})</div>
+    </div>
+    <div class="stat highlight">
+      <div class="n">{{ new_balance }}</div>
+      <div class="l">Saldo daarna ({{ new_balance_euro }})</div>
+    </div>
+  </div>
+
+  <table class="data">
+    <tr><th style="width: 35%;">Reden</th><td>{{ form.reason }}</td></tr>
+    <tr>
+      <th>Zichtbaar voor het lid</th>
+      <td>
+        {% if form.mode == 'add' %}
+        Ja — in de puntengeschiedenis als <strong>"{{ form.reason }}"</strong>.
+        {% else %}
+        Nee — dit wordt geboekt als saldocorrectie, niet als verdiende punten.
+        {% endif %}
+      </td>
+    </tr>
+    <tr>
+      <th>Melding</th>
+      <td>
+        {% if form.notify %}
+        Ja, het lid krijgt deze melding in de app:
+        <div class="push-mock" style="margin-top: 8px;">
+          <div class="app-icon">HoB</div>
+          <div>
+            <div class="push-app">House of Beers</div>
+            <div class="push-title">{{ notification_title }}</div>
+            <div class="push-body">{{ notification_body }}</div>
+          </div>
+        </div>
+        {% else %}
+        Nee, er wordt geen melding gestuurd.
+        {% endif %}
+      </td>
+    </tr>
+  </table>
+
+  <form method="post" action="{% url 'points_tool:member' member.pk %}" style="margin-top: 18px;">
+    {% csrf_token %}
+    <input type="hidden" name="step" value="execute">
+    <input type="hidden" name="mode" value="{{ form.mode }}">
+    <input type="hidden" name="points" value="{{ form.points }}">
+    <input type="hidden" name="target_balance" value="{{ form.target_balance }}">
+    <input type="hidden" name="reason" value="{{ form.reason }}">
+    {% if form.notify %}<input type="hidden" name="notify" value="on">{% endif %}
+    {# Same token on a resubmit -> the grant's dedupe_key catches a double click. #}
+    <input type="hidden" name="token" value="{{ form.token }}">
+    <button type="submit" class="btn">
+      {% if form.mode == 'add' %}Ja, {{ delta }} punten toekennen{% else %}Ja, saldo op {{ new_balance }} zetten{% endif %}
+    </button>
+    <a class="btn secondary" href="{% url 'points_tool:member' member.pk %}">Annuleren</a>
+  </form>
+</div>
+{% endblock %}

@@ -26,6 +26,20 @@ class LoyaltyService:
             logger.info(f"Created points balance for {user.email}")
         return balance
 
+    def _get_locked_balance(self, user) -> PointsBalance:
+        """
+        Same as get_or_create_balance but locks the row (same idiom as
+        `grants._fulfil_grant`). A separate method so only the callers that
+        genuinely race take the lock — every read-only balance fetch would
+        otherwise serialise on it. Caller must be inside a transaction.
+        """
+        balance, created = PointsBalance.objects.select_for_update().get_or_create(
+            user=user
+        )
+        if created:
+            logger.info(f"Created points balance for {user.email}")
+        return balance
+
     def get_active_rules(self) -> List[PointsRule]:
         """Get all currently active point rules."""
         now = timezone.now()
@@ -73,8 +87,18 @@ class LoyaltyService:
         order_total = Decimal(str(order.get('total_price', 0)))
         line_items = order.get('line_items', [])
 
-        # Check if this is the user's first order
-        is_first_order = not ProcessedOrder.objects.filter(user=user).exists()
+        # Check if this is the user's first order. The order being evaluated is
+        # excluded because check_and_correct_points recalculates orders that
+        # ALREADY have a ProcessedOrder row — counting it would recalculate the
+        # first_order bonus to 0 and silently subtract it on every full sync.
+        # Same guard as the campaign engine's first_order_only check.
+        current_order_id = order.get('id')
+        earlier_orders = ProcessedOrder.objects.filter(user=user)
+        if current_order_id is not None:
+            earlier_orders = earlier_orders.exclude(
+                shopify_order_id=str(current_order_id)
+            )
+        is_first_order = not earlier_orders.exists()
 
         for rule in rules:
             # Skip rules that only apply after registration if order predates it
@@ -452,7 +476,9 @@ class LoyaltyService:
         except Reward.DoesNotExist:
             return {'success': False, 'error': 'Reward not found or inactive'}
 
-        balance = self.get_or_create_balance(user)
+        # Locked read: without it two concurrent redemptions both see the same
+        # balance, both pass the check below, and the balance goes negative.
+        balance = self._get_locked_balance(user)
 
         # Check if user has enough points
         if balance.balance < reward.points_cost:

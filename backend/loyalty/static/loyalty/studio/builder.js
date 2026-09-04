@@ -50,6 +50,8 @@
     });
     var entryModeField = document.getElementById('id_entry_mode');
     if (entryModeField) entryModeField.closest('.field').hidden = audienceOnly;
+    // Per-prize code fields only matter for a Shopify-code fulfillment.
+    syncPrizes();
     if (audienceModeHint) {
       audienceModeHint.textContent = audienceOnly
         ? 'Iedereen in de doelgroep doet automatisch mee zodra de campagne actief wordt. ' +
@@ -149,6 +151,187 @@
 
   readMatchers().forEach(addRow);
   syncHidden();
+
+  // ---------- Prize tiers ----------
+  // Same idiom as the matcher rows: the visible inputs are mirrored into one
+  // hidden JSON field that the form parser reads back.
+  var prizeContainer = document.getElementById('prize-rows');
+  var prizeInput = document.getElementById('id_raffle_prizes');
+  var numWinnersField = document.getElementById('num-winners-field');
+  var numWinnersInput = document.getElementById('id_num_winners');
+
+  var DISCOUNT_TYPES = [
+    ['', 'Zelfde als campagne'],
+    ['fixed_amount', 'Vast bedrag'],
+    ['percentage', 'Percentage'],
+    ['free_shipping', 'Gratis verzending'],
+    ['free_product', 'Gratis product'],
+  ];
+
+  function readPrizes() {
+    try {
+      var parsed = JSON.parse(prizeInput.value || '[]');
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function syncPrizes() {
+    var prizes = [];
+    prizeContainer.querySelectorAll('.prize-row').forEach(function (row) {
+      var value = function (field) {
+        var el = row.querySelector('[data-prize-field="' + field + '"]');
+        return el ? el.value.trim() : '';
+      };
+      if (!value('name')) return;
+      prizes.push({
+        name: value('name'),
+        description: value('description'),
+        image_url: value('image_url'),
+        quantity: value('quantity') || '1',
+        discount_type: value('discount_type'),
+        discount_value: value('discount_value'),
+        discount_product_gid: value('discount_product_gid'),
+        discount_validity_days: value('discount_validity_days'),
+      });
+    });
+    prizeInput.value = JSON.stringify(prizes);
+    updatePrizeChrome(prizes);
+  }
+
+  function updatePrizeChrome(prizes) {
+    // With tiers the winner count is the sum of the quantities, so the
+    // manual field would only be able to contradict the draw.
+    var total = 0;
+    prizes.forEach(function (prize) {
+      total += parseInt(prize.quantity, 10) || 1;
+    });
+    if (numWinnersField) numWinnersField.hidden = prizes.length > 0;
+    if (numWinnersInput && prizes.length) numWinnersInput.value = String(total);
+    prizeContainer.querySelectorAll('.prize-row').forEach(function (row, index) {
+      var label = row.querySelector('.prize-index');
+      if (label) label.textContent = 'Prijs ' + (index + 1);
+      var discountBlock = row.querySelector('[data-prize-discount]');
+      if (discountBlock) {
+        discountBlock.hidden = fulfillmentSelect.value !== 'shopify_code';
+      }
+    });
+  }
+
+  function prizeField(row, labelText, field, attrs) {
+    var wrap = document.createElement('div');
+    wrap.className = 'field';
+    var label = document.createElement('label');
+    label.textContent = labelText;
+    wrap.appendChild(label);
+    var input = document.createElement(attrs.tag || 'input');
+    if (!attrs.tag) input.type = attrs.type || 'text';
+    if (attrs.min) input.min = attrs.min;
+    if (attrs.step) input.step = attrs.step;
+    if (attrs.placeholder) input.placeholder = attrs.placeholder;
+    input.dataset.prizeField = field;
+    input.value = attrs.value || '';
+    input.addEventListener('input', function () { syncPrizes(); scheduleSentence(); });
+    input.addEventListener('change', function () { syncPrizes(); scheduleSentence(); });
+    wrap.appendChild(input);
+    row.appendChild(wrap);
+    return input;
+  }
+
+  function addPrizeRow(prize) {
+    prize = prize || {};
+    var row = document.createElement('div');
+    row.className = 'prize-row';
+
+    var head = document.createElement('div');
+    head.className = 'prize-head';
+    var index = document.createElement('span');
+    index.className = 'prize-index';
+    head.appendChild(index);
+    var remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'remove';
+    remove.textContent = 'Verwijderen';
+    remove.addEventListener('click', function () {
+      row.remove();
+      syncPrizes();
+      scheduleSentence();
+    });
+    head.appendChild(remove);
+    row.appendChild(head);
+
+    var top = document.createElement('div');
+    top.className = 'field-row';
+    prizeField(top, 'Naam', 'name', {
+      value: prize.name, placeholder: 'bijv. T-shirt',
+    });
+    prizeField(top, 'Aantal', 'quantity', {
+      type: 'number', min: '1', value: prize.quantity || 1,
+    });
+    row.appendChild(top);
+
+    var details = document.createElement('div');
+    details.className = 'field-row';
+    prizeField(details, 'Omschrijving (zichtbaar in de app)', 'description', {
+      tag: 'textarea', value: prize.description,
+    });
+    prizeField(details, 'Afbeelding-URL (optioneel)', 'image_url', {
+      type: 'url', value: prize.image_url,
+    });
+    row.appendChild(details);
+
+    var discount = document.createElement('div');
+    discount.dataset.prizeDiscount = 'true';
+    var discountRow = document.createElement('div');
+    discountRow.className = 'field-row';
+
+    var typeWrap = document.createElement('div');
+    typeWrap.className = 'field';
+    var typeLabel = document.createElement('label');
+    typeLabel.textContent = 'Kortingstype van deze prijs';
+    typeWrap.appendChild(typeLabel);
+    var typeSelect = document.createElement('select');
+    typeSelect.dataset.prizeField = 'discount_type';
+    DISCOUNT_TYPES.forEach(function (pair) {
+      var opt = document.createElement('option');
+      opt.value = pair[0];
+      opt.textContent = pair[1];
+      if ((prize.discount_type || '') === pair[0]) opt.selected = true;
+      typeSelect.appendChild(opt);
+    });
+    typeSelect.addEventListener('change', function () { syncPrizes(); });
+    typeWrap.appendChild(typeSelect);
+    discountRow.appendChild(typeWrap);
+
+    prizeField(discountRow, 'Waarde (€ of %)', 'discount_value', {
+      type: 'number', step: '0.01', min: '0', value: prize.discount_value,
+    });
+    prizeField(discountRow, 'Geldigheid (dagen)', 'discount_validity_days', {
+      type: 'number', min: '1', value: prize.discount_validity_days,
+    });
+    discount.appendChild(discountRow);
+
+    var gidRow = document.createElement('div');
+    gidRow.className = 'field-row';
+    prizeField(gidRow, 'Shopify product-ID of GID (bij gratis product)',
+      'discount_product_gid', {
+        value: prize.discount_product_gid,
+        placeholder: '123456789 of gid://shopify/Product/123456789',
+      });
+    discount.appendChild(gidRow);
+    row.appendChild(discount);
+
+    prizeContainer.appendChild(row);
+  }
+
+  document.getElementById('add-prize').addEventListener('click', function () {
+    addPrizeRow();
+    syncPrizes();
+  });
+
+  readPrizes().forEach(addPrizeRow);
+  syncPrizes();
 
   // ---------- Product search ----------
   var searchInput = document.getElementById('id_product_search');
@@ -406,6 +589,7 @@
 
   function fetchSentence() {
     syncHidden();
+    syncPrizes();
     var body = new FormData(form);
     fetch(sentenceUrl, {
       method: 'POST',
@@ -467,6 +651,9 @@
   scheduleSentence();
   scheduleAudienceCount();
 
-  // Keep the hidden matcher JSON current on submit.
-  form.addEventListener('submit', syncHidden);
+  // Keep the hidden matcher/prize JSON current on submit.
+  form.addEventListener('submit', function () {
+    syncHidden();
+    syncPrizes();
+  });
 })();

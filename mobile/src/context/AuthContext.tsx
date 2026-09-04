@@ -18,7 +18,13 @@ interface AuthContextType {
   isLoading: boolean;
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, firstName?: string, lastName?: string) => Promise<void>;
+  register: (
+    email: string,
+    password: string,
+    firstName?: string,
+    lastName?: string,
+    signupCode?: string
+  ) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
 }
@@ -62,13 +68,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(userData);
   }
 
-  async function register(email: string, password: string, firstName?: string, lastName?: string) {
+  async function register(
+    email: string,
+    password: string,
+    firstName?: string,
+    lastName?: string,
+    signupCode?: string
+  ) {
     await apiRegister({
       email,
       password,
       password_confirm: password,
       first_name: firstName,
       last_name: lastName,
+      // Sent as typed; the backend normalizes and decides. An unusable code
+      // is recorded for attribution and simply wins no bonus.
+      signup_code: signupCode || undefined,
     });
     await login(email, password);
   }

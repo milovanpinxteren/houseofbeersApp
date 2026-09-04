@@ -9,7 +9,8 @@ from django.db import models
 
 __all__ = [
     'Campaign', 'CampaignProgress', 'CampaignAward', 'CampaignRaffle',
-    'RaffleEntry', 'CampaignRaffleWinner', 'CampaignPreview',
+    'CampaignRafflePrize', 'RaffleEntry', 'CampaignRaffleWinner',
+    'CampaignPreview',
 ]
 
 
@@ -294,10 +295,17 @@ class CampaignRaffle(models.Model):
     campaign = models.OneToOneField(
         Campaign, on_delete=models.CASCADE, related_name='raffle'
     )
+    # The headline of the raffle (what the card and the teaser show). With
+    # prize tiers (see CampaignRafflePrize) this stays the umbrella name:
+    # "Merch-pakket", with shirt/hoodie/cap as the tiers underneath.
     prize_name = models.CharField(max_length=200)
     prize_description = models.TextField(blank=True)
     prize_image_url = models.URLField(blank=True)
-    num_winners = models.PositiveIntegerField(default=1)
+    num_winners = models.PositiveIntegerField(
+        default=1,
+        help_text="Kept in sync with the summed prize quantities when the "
+                  "raffle has prize tiers"
+    )
     draw_at = models.DateTimeField(
         null=True, blank=True, help_text="Null = manual draw only"
     )
@@ -321,6 +329,59 @@ class CampaignRaffle(models.Model):
 
     def __str__(self):
         return f"Raffle: {self.prize_name} ({self.status})"
+
+
+class CampaignRafflePrize(models.Model):
+    """
+    One prize tier of a raffle: several DIFFERENT prizes (a shirt, a hoodie,
+    a cap) drawn from ONE entrant pool. Each row contributes `quantity` slots
+    to the draw; slots are handed out in (ordering, id) order to the winners
+    in draw order, and the draw itself still samples without replacement — so
+    the winner of prize 1 can never also win prize 2.
+
+    No prize rows = the raffle behaves exactly as it did before tiers
+    existed: num_winners anonymous slots, all of them CampaignRaffle
+    .prize_name.
+
+    The discount_* fields mirror Campaign's and are the prize's own code
+    config; a blank field falls back to the campaign's (a set of tiers that
+    all award the same discount only needs it configured once).
+    """
+    raffle = models.ForeignKey(
+        CampaignRaffle, on_delete=models.CASCADE, related_name='prizes'
+    )
+    name = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    image_url = models.URLField(blank=True)
+    quantity = models.PositiveIntegerField(
+        default=1, help_text="Number of winners for this specific prize"
+    )
+    ordering = models.IntegerField(
+        default=0, help_text="Draw order; prize 1 is handed out first"
+    )
+
+    discount_type = models.CharField(
+        max_length=20, choices=Campaign.DISCOUNT_TYPE_CHOICES, blank=True,
+        help_text="Blank = use the campaign's discount config"
+    )
+    discount_value = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True
+    )
+    discount_product_gid = models.CharField(
+        max_length=255, blank=True,
+        help_text="For free_product: Shopify product GID of THIS prize"
+    )
+    discount_validity_days = models.PositiveIntegerField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['ordering', 'id']
+        verbose_name = 'Campaign Raffle Prize'
+        verbose_name_plural = 'Campaign Raffle Prizes'
+
+    def __str__(self):
+        if self.quantity > 1:
+            return f"{self.quantity}x {self.name}"
+        return self.name
 
 
 class RaffleEntry(models.Model):
@@ -369,6 +430,12 @@ class CampaignRaffleWinner(models.Model):
         # events.RaffleWinner (livestream) already owns User.raffle_wins
         related_name='campaign_raffle_wins'
     )
+    prize = models.ForeignKey(
+        CampaignRafflePrize, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='winners',
+        help_text="Which tier this winner got; null for a raffle without "
+                  "prize tiers (then the raffle's prize_name is the prize)"
+    )
     prize_code = models.CharField(max_length=255, blank=True)
     shopify_discount_id = models.CharField(max_length=255, blank=True)
     cart_url = models.TextField(
@@ -395,7 +462,8 @@ class CampaignRaffleWinner(models.Model):
         verbose_name_plural = 'Campaign Raffle Winners'
 
     def __str__(self):
-        return f"{self.user.email} won {self.raffle.prize_name}"
+        prize = self.prize.name if self.prize_id else self.raffle.prize_name
+        return f"{self.user.email} won {prize}"
 
 
 class CampaignPreview(models.Model):

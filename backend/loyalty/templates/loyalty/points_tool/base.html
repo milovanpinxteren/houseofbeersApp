@@ -1,0 +1,31 @@
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{% block title %}{{ title }} | Puntentool{% endblock %}
+
+{% block extrastyle %}
+{{ block.super }}
+{% comment %}
+Deliberately the Studio's stylesheet: both staff tools are the same kind of
+page, and studio.css is already scoped under .studio and driven by the admin's
+own theme variables (so this page follows the light/dark toggle).
+points_tool.css adds only what is unique here, also scoped under .studio.
+Note: {# #} is single-line only in Django - a multi-line one renders as text.
+{% endcomment %}
+<link rel="stylesheet" href="{% static 'loyalty/studio/studio.css' %}">
+<link rel="stylesheet" href="{% static 'loyalty/points_tool/points_tool.css' %}">
+{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">Home</a>
+  &rsaquo; <a href="{% url 'points_tool:index' %}">Puntentool</a>
+  {% block tool_crumb %}{% endblock %}
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="studio points-tool">
+{% block tool_content %}{% endblock %}
+</div>
+{% endblock %}

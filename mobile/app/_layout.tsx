@@ -16,9 +16,15 @@ import { AuthProvider } from '../src/context/AuthContext';
 import { LanguageProvider } from '../src/context/LanguageContext';
 import { ToastProvider } from '../src/components/ui/Toast';
 import { ScreenTracker } from '../src/components/ScreenTracker';
+import { SignupCodeNotice } from '../src/components/SignupCodeNotice';
+import { useSignupCodeCapture } from '../src/utils/signupCode';
 import { colors } from '../src/theme/colors';
 
 export default function RootLayout() {
+  // Flyer QR: grab ?ref=CODE before anything else. The visitor has no account
+  // yet, so this has to happen outside (and ahead of) the auth flow.
+  useSignupCodeCapture();
+
   const [fontsLoaded] = useFonts({
     Oswald_400Regular,
     Oswald_500Medium,
@@ -42,6 +48,7 @@ export default function RootLayout() {
         <ToastProvider>
           <StatusBar style="light" />
           <ScreenTracker />
+          <SignupCodeNotice />
           <Stack
             screenOptions={{
               headerStyle: { backgroundColor: colors.background },

@@ -232,12 +232,18 @@ class CampaignsListView(APIView):
             .exclude(action_type='raffle')
             .order_by('window_end')
         )
+        # Derived from the caller's awards, not from a chained
+        # .exclude(awards__discount_code=''): that gets its own join and would
+        # test ANY award on the campaign, so one other member's empty code (a
+        # failed Shopify mint) hid the campaign from everyone.
+        my_coded_campaign_ids = CampaignAward.objects.filter(
+            user=request.user,
+        ).exclude(discount_code='').values_list('campaign_id', flat=True)
         completed_with_code = list(
             Campaign.objects.filter(
                 status__in=('completed', 'archived'),
-                awards__user=request.user,
+                id__in=my_coded_campaign_ids,
             ).exclude(action_type='raffle')
-            .exclude(awards__discount_code='')
             .order_by('-window_end')[:self.COMPLETED_CODE_LIMIT]
         )
         campaigns = active + completed_with_code
@@ -292,7 +298,8 @@ class RafflesListView(APIView):
         open_raffles = list(
             CampaignRaffle.objects.filter(status='open', campaign__status='active')
             .select_related('campaign')
-            .prefetch_related('entries__user', 'winners__user')
+            .prefetch_related('entries__user', 'winners__user', 'winners__prize',
+                              'prizes')
         )
         # Audience-selected raffles have no "how to enter" — showing a teaser
         # to someone outside the selection would be a promise they can't act
@@ -305,7 +312,8 @@ class RafflesListView(APIView):
         drawn_raffles = list(
             CampaignRaffle.objects.filter(status='drawn', entries__user=request.user)
             .select_related('campaign')
-            .prefetch_related('entries__user', 'winners__user')
+            .prefetch_related('entries__user', 'winners__user', 'winners__prize',
+                              'prizes')
             .order_by('-drawn_at')[:self.DRAWN_HISTORY_LIMIT]
         )
         raffles = open_raffles + drawn_raffles

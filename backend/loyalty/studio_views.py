@@ -31,7 +31,7 @@ from django.views.decorators.http import require_GET, require_POST
 from loyalty import tasks as loyalty_tasks
 from loyalty.models import (
     Campaign, CampaignAward, CampaignPreview, CampaignProgress,
-    CampaignRaffle, CampaignRaffleWinner, RaffleEntry,
+    CampaignRaffle, CampaignRafflePrize, CampaignRaffleWinner, RaffleEntry,
 )
 from loyalty.services.campaigns import (
     _default_qualify_body, _default_qualify_title, build_rule_sentence,
@@ -147,6 +147,160 @@ def _dt_input(value):
 
 
 # ============ Form parsing & validation ============
+
+def _parse_prize_rows(raw, fulfillment_type, errors):
+    """
+    Parse the builder's hidden raffle_prizes JSON into CampaignRafflePrize
+    field dicts — same idiom as product_matchers. Submitted order IS the draw
+    order, so `ordering` is just the row index.
+
+    A row may leave its discount config blank (the campaign's config is the
+    fallback); whatever it does fill in is validated like the campaign-level
+    config, because a prize code that Shopify refuses only surfaces after the
+    draw, when it is too late to fix.
+    """
+    try:
+        parsed = json.loads(raw or '[]')
+        if not isinstance(parsed, list):
+            raise ValueError
+    except ValueError:
+        errors.append('De prijzen van de loting konden niet gelezen worden.')
+        return []
+
+    rows = []
+    for index, row in enumerate(parsed):
+        if not isinstance(row, dict):
+            errors.append('Elke prijs heeft een naam nodig.')
+            continue
+        name = str(row.get('name') or '').strip()[:200]
+        if not name:
+            errors.append('Elke prijs heeft een naam nodig.')
+            continue
+
+        try:
+            quantity = int(row.get('quantity') or 1)
+        except (TypeError, ValueError):
+            quantity = 0
+        if quantity < 1:
+            errors.append(f"Het aantal van prijs '{name}' moet minstens 1 zijn.")
+            quantity = 1
+
+        discount_type = str(row.get('discount_type') or '').strip()
+        if discount_type and discount_type not in dict(Campaign.DISCOUNT_TYPE_CHOICES):
+            errors.append(f"Kies een geldig kortingstype voor prijs '{name}'.")
+            discount_type = ''
+
+        raw_value = str(row.get('discount_value') or '').strip().replace(',', '.')
+        discount_value = None
+        if raw_value:
+            try:
+                discount_value = Decimal(raw_value)
+            except InvalidOperation:
+                errors.append(f"De waarde van de prijscode voor '{name}' is geen geldig bedrag.")
+
+        product_gid = str(row.get('discount_product_gid') or '').strip()
+        if product_gid:
+            product_id = _extract_product_id(product_gid)
+            if product_id is None:
+                errors.append(
+                    f"'{product_gid}' is geen geldig product-ID of product-GID "
+                    f"voor prijs '{name}'."
+                )
+                product_gid = ''
+            else:
+                product_gid = f'gid://shopify/Product/{product_id}'
+
+        raw_validity = str(row.get('discount_validity_days') or '').strip()
+        validity_days = None
+        if raw_validity:
+            try:
+                validity_days = int(raw_validity)
+            except ValueError:
+                errors.append(f"De geldigheid van de prijscode voor '{name}' is geen geldig getal.")
+            else:
+                if validity_days < 1:
+                    errors.append(
+                        f"De geldigheid van de prijscode voor '{name}' moet minstens 1 dag zijn."
+                    )
+                    validity_days = None
+
+        if fulfillment_type == 'shopify_code' and discount_type:
+            if discount_type in ('fixed_amount', 'percentage'):
+                if not discount_value or discount_value <= 0:
+                    errors.append(
+                        f"Vul de waarde van de prijscode voor '{name}' in (groter dan 0)."
+                    )
+                elif discount_type == 'percentage' and discount_value > 100:
+                    errors.append(
+                        f"Een kortingspercentage kan niet groter zijn dan 100 (prijs '{name}')."
+                    )
+            elif discount_type == 'free_product' and not product_gid:
+                errors.append(
+                    f"Vul het Shopify product-ID in voor het gratis product bij prijs '{name}'."
+                )
+
+        rows.append({
+            'name': name,
+            'description': str(row.get('description') or '').strip(),
+            'image_url': str(row.get('image_url') or '').strip(),
+            'quantity': quantity,
+            'ordering': index,
+            'discount_type': discount_type,
+            'discount_value': discount_value,
+            'discount_product_gid': product_gid,
+            'discount_validity_days': validity_days,
+        })
+    return rows
+
+
+def _split_prizes(raffle_data):
+    """
+    Prize rows travel inside raffle_data but are their own model rows, so
+    they must never reach CampaignRaffle(**raffle_data).
+    """
+    if not raffle_data:
+        return []
+    return raffle_data.pop('prizes', [])
+
+
+PRIZE_FIELDS = ('name', 'description', 'image_url', 'quantity', 'ordering',
+                'discount_type', 'discount_product_gid')
+
+
+def _prize_signature(rows):
+    """Comparable shape of submitted prize rows (see the drawn-raffle guard)."""
+    return [tuple(str(row.get(field) or '') for field in PRIZE_FIELDS) for row in rows]
+
+
+def _stored_prize_signature(raffle):
+    if raffle is None or not raffle.pk:
+        return []
+    return _prize_signature([
+        {field: getattr(prize, field) for field in PRIZE_FIELDS}
+        for prize in raffle.prizes.all()
+    ])
+
+
+def _prize_rows_json(raffle):
+    """Stored prize tiers as the builder's hidden-field JSON."""
+    if raffle is None or not raffle.pk:
+        return '[]'
+    return json.dumps([{
+        'name': prize.name,
+        'description': prize.description,
+        'image_url': prize.image_url,
+        'quantity': prize.quantity,
+        'discount_type': prize.discount_type,
+        'discount_value': (
+            '' if prize.discount_value is None else str(prize.discount_value)
+        ),
+        'discount_product_gid': prize.discount_product_gid,
+        'discount_validity_days': (
+            '' if prize.discount_validity_days is None
+            else str(prize.discount_validity_days)
+        ),
+    } for prize in raffle.prizes.all()])
+
 
 def _parse_campaign_form(post):
     """
@@ -362,21 +516,37 @@ def _parse_campaign_form(post):
         fulfillment_type = post.get('fulfillment_type') or 'manual'
         if fulfillment_type not in dict(CampaignRaffle.FULFILLMENT_TYPE_CHOICES):
             fulfillment_type = 'manual'
+        prize_rows = _parse_prize_rows(
+            post.get('raffle_prizes'), fulfillment_type, errors
+        )
         raffle_data = {
             'prize_name': prize_name,
             'prize_description': (post.get('prize_description') or '').strip(),
             'prize_image_url': (post.get('prize_image_url') or '').strip(),
-            'num_winners': num_winners or 1,
+            # With tiers the number of winners IS the number of prize slots;
+            # keeping them in sync stops the rest of the UI from disagreeing
+            # with the draw.
+            'num_winners': (
+                sum(row['quantity'] for row in prize_rows) if prize_rows
+                else (num_winners or 1)
+            ),
             'draw_at': _parse_dt(post.get('draw_at')),
             'entry_mode': entry_mode,
             'fulfillment_type': fulfillment_type,
             'send_reminder': bool(post.get('send_reminder')),
+            'prizes': prize_rows,
         }
 
     # A discount config is required for the discount action, and for a raffle
-    # whose prize is fulfilled with a Shopify code.
+    # whose prize is fulfilled with a Shopify code — unless every prize tier
+    # brings its own config, in which case the campaign-level fallback would
+    # never be read.
     needs_discount = action_type == 'discount_code' or (
         raffle_data is not None and raffle_data['fulfillment_type'] == 'shopify_code'
+        and not (
+            raffle_data['prizes']
+            and all(row['discount_type'] for row in raffle_data['prizes'])
+        )
     )
     if needs_discount:
         where = 'de kortingscode' if action_type == 'discount_code' else 'de prijscode van de loting'
@@ -453,9 +623,9 @@ def _form_values(campaign=None, raffle=None, post=None):
             'discount_product_gid', 'discount_validity_days', 'qualify_title',
             'qualify_body', 'rule_sentence', 'prize_name', 'prize_description',
             'prize_image_url', 'num_winners', 'draw_at', 'entry_mode',
-            'fulfillment_type', 'aud_min_age', 'aud_birthday_month',
-            'aud_min_app_age_days', 'aud_min_lifetime_orders',
-            'aud_active_within_days',
+            'fulfillment_type', 'raffle_prizes', 'aud_min_age',
+            'aud_birthday_month', 'aud_min_app_age_days',
+            'aud_min_lifetime_orders', 'aud_active_within_days',
         )}
         for checkbox in ('first_order_only', 'only_after_registration',
                          'requires_untappd', 'notify_on_qualify',
@@ -463,6 +633,7 @@ def _form_values(campaign=None, raffle=None, post=None):
             values[checkbox] = bool(post.get(checkbox))
         values['audience_mode'] = post.get('audience_mode') or 'orders'
         values['manual_users'] = post.get('manual_users') or '[]'
+        values['raffle_prizes'] = post.get('raffle_prizes') or '[]'
         return values
 
     def _num(value):
@@ -481,6 +652,7 @@ def _form_values(campaign=None, raffle=None, post=None):
             'qualify_body': '', 'rule_sentence': '', 'prize_name': '',
             'prize_description': '', 'prize_image_url': '', 'num_winners': '1',
             'draw_at': '', 'entry_mode': 'single', 'fulfillment_type': 'manual',
+            'raffle_prizes': '[]',
             'first_order_only': False, 'only_after_registration': False,
             'requires_untappd': False, 'notify_on_qualify': True,
             'qualify_email_fallback': False, 'send_reminder': True,
@@ -533,6 +705,7 @@ def _form_values(campaign=None, raffle=None, post=None):
         'entry_mode': raffle.entry_mode if raffle else 'single',
         'fulfillment_type': raffle.fulfillment_type if raffle else 'manual',
         'send_reminder': raffle.send_reminder if raffle else True,
+        'raffle_prizes': _prize_rows_json(raffle),
     }
     return values
 
@@ -648,12 +821,23 @@ def campaign_builder(request, pk=None):
     errors = []
     if request.method == 'POST':
         data, raffle_data, errors = _parse_campaign_form(request.POST)
+        prize_rows = _split_prizes(raffle_data)
 
         if (campaign and campaign.action_type == 'raffle'
                 and data['action_type'] != 'raffle'
                 and raffle and raffle.entries.exists()):
             errors.append(
                 'Het actietype kan niet meer gewijzigd worden: er zijn al loten uitgedeeld.'
+            )
+
+        # A drawn raffle's prizes are already handed out; editing the rows
+        # would rewrite what winners were told they won. (Normally
+        # unreachable: a draw completes the campaign and completed campaigns
+        # are not editable at all.)
+        if (raffle and raffle.status == 'drawn'
+                and _prize_signature(prize_rows) != _stored_prize_signature(raffle)):
+            errors.append(
+                'De prijzen kunnen niet meer gewijzigd worden: de loting is al getrokken.'
             )
 
         if not errors:
@@ -668,6 +852,13 @@ def campaign_builder(request, pk=None):
                 raffle, _ = CampaignRaffle.objects.update_or_create(
                     campaign=campaign, defaults=raffle_data
                 )
+                if raffle.status != 'drawn':
+                    # Full replace, like product_matchers: the rows carry no
+                    # id and only a not-yet-drawn raffle can be reshuffled
+                    # (winners keep their prize via SET_NULL either way).
+                    raffle.prizes.all().delete()
+                    for row in prize_rows:
+                        CampaignRafflePrize.objects.create(raffle=raffle, **row)
             elif raffle is not None:
                 # Action changed away from raffle; safe because the entries
                 # check above already blocked the risky case.
@@ -713,6 +904,7 @@ def campaign_builder(request, pk=None):
 def rule_sentence_preview(request):
     """Live NL rule sentence for the (unsaved) builder form values."""
     data, raffle_data, _errors = _parse_campaign_form(request.POST)
+    prize_rows = _split_prizes(raffle_data)
     if not data['window_start'] or not data['window_end']:
         return JsonResponse({'sentence': '', 'error': 'Vul eerst de actieperiode in.'})
     if not data['action_type']:
@@ -721,7 +913,13 @@ def rule_sentence_preview(request):
     campaign = Campaign(**{k: v for k, v in data.items()})
     if raffle_data is not None:
         try:
-            campaign.raffle = CampaignRaffle(**raffle_data)
+            raffle = CampaignRaffle(**raffle_data)
+            # Unsaved parent: no reverse manager, so the sentence builder
+            # reads the tiers off _preview_prizes instead.
+            raffle._preview_prizes = [
+                CampaignRafflePrize(**row) for row in prize_rows
+            ]
+            campaign.raffle = raffle
         except Exception:  # pragma: no cover - descriptor quirks only
             pass
     try:
@@ -1094,7 +1292,9 @@ def _monitor_data(campaign):
     winners_by_user = {}
     winners = []
     if raffle:
-        winners = list(raffle.winners.select_related('user').order_by('drawn_at', 'id'))
+        winners = list(
+            raffle.winners.select_related('user', 'prize').order_by('drawn_at', 'id')
+        )
         winners_by_user = {w.user_id: w for w in winners}
 
     rows = []
@@ -1292,13 +1492,19 @@ def export_entrants_csv(request, pk):
     writer = csv.writer(response)
 
     if data['raffle']:
+        raffle = data['raffle']
         writer.writerow([
             'email', 'voornaam', 'loten', 'producten', 'push', 'email_verstuurd',
-            'kaart_geopend', 'trekking_bekeken', 'gewonnen', 'prijscode',
+            'kaart_geopend', 'trekking_bekeken', 'gewonnen', 'prijs', 'prijscode',
             'prijs_status', 'verzilverd_op',
         ])
         for row in data['rows']:
             winner = row['winner']
+            # Which of the prizes they won; without tiers that is the
+            # raffle's single prize.
+            prize = ''
+            if winner:
+                prize = winner.prize.name if winner.prize_id else raffle.prize_name
             writer.writerow([
                 row['email'],
                 row['first_name'],
@@ -1309,6 +1515,7 @@ def export_entrants_csv(request, pk):
                 row['seen'].isoformat() if row['seen'] else '',
                 row['result_seen'].isoformat() if row['result_seen'] else '',
                 'ja' if winner else 'nee',
+                prize,
                 winner.prize_code if winner else '',
                 winner.get_fulfillment_status_display() if winner else '',
                 winner.redeemed_at.isoformat() if winner and winner.redeemed_at else '',

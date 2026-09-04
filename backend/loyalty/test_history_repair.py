@@ -4,6 +4,7 @@ command that fixes legacy correction rows and lifetime counters.
 """
 from decimal import Decimal
 from io import StringIO
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
@@ -104,6 +105,61 @@ class CheckAndCorrectTests(TestCase):
         self.assertEqual(txn.breakdown[0]['rule_name'], '1 punt per euro')
         self.assertEqual(txn.breakdown[0]['rule_type'], 'per_euro')
         self.assertEqual(txn.breakdown[0]['points'], 30)
+
+
+class FirstOrderBonusTests(TestCase):
+    """The first_order bonus must survive a full (check-and-correct) sync."""
+
+    SHOPIFY_TARGET = (
+        'users.services.shopify.ShopifyService.get_all_customer_orders'
+    )
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='first@example.com', email='first@example.com',
+            password='SuperSecret123!', shopify_customer_id='777',
+        )
+        PointsRule.objects.create(
+            name='Welkomstbonus', rule_type='first_order', points=250,
+        )
+        self.service = LoyaltyService()
+
+    def test_check_and_correct_keeps_first_order_bonus(self):
+        order = make_order(3001, '40.00')
+        self.assertEqual(self.service.award_points_for_order(self.user, order), 250)
+
+        self.service.check_and_correct_points(self.user, [order])
+
+        txn = PointsTransaction.objects.get(user=self.user)
+        self.assertEqual(txn.points, 250)
+        balance = PointsBalance.objects.get(user=self.user)
+        self.assertEqual(balance.balance, 250)
+        self.assertEqual(balance.lifetime_earned, 250)
+        self.assertEqual(
+            ProcessedOrder.objects.get(shopify_order_id='3001').points_awarded, 250
+        )
+
+    def test_full_sync_keeps_first_order_bonus(self):
+        order = make_order(3002, '40.00')
+        self.service.award_points_for_order(self.user, order)
+
+        with patch(self.SHOPIFY_TARGET, return_value=[order]):
+            result = self.service.full_sync_for_user(self.user)
+
+        self.assertTrue(result['success'])
+        self.assertEqual(result['new_balance'], 250)
+        self.assertEqual(PointsBalance.objects.get(user=self.user).balance, 250)
+
+    def test_second_order_gets_no_bonus(self):
+        """The exclusion must not hand the bonus to every later order too."""
+        self.service.award_points_for_order(self.user, make_order(3003, '40.00'))
+        second = make_order(3004, '40.00')
+
+        self.assertEqual(self.service.award_points_for_order(self.user, second), 0)
+        self.service.check_and_correct_points(self.user, [second])
+        self.assertFalse(
+            PointsTransaction.objects.filter(shopify_order_id='3004').exists()
+        )
 
 
 class AdjustPointsTests(TestCase):

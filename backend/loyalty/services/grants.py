@@ -167,6 +167,17 @@ def _fulfil_grant(grant, user):
     )
 
 
+def grant_notification_text(points, reason):
+    """
+    (title, body) of the grant notification.
+
+    Public so a UI that awards points can show staff the EXACT text the member
+    will read before they confirm — a preview that guesses at the copy is a
+    preview that goes stale.
+    """
+    return 'Je hebt punten gekregen!', f'{points} punten: {reason}'
+
+
 def _notify_grant(grant):
     """In-app notification via the outbox; never raises."""
     if not grant.notify or not grant.user:
@@ -176,11 +187,12 @@ def _notify_grant(grant):
         # on the notifications app at import time.
         from notifications.services import send_notification
 
+        title, body = grant_notification_text(grant.points, grant.reason)
         delivery = send_notification(
             grant.user,
             kind='announcement',
-            title='Je hebt punten gekregen!',
-            body=f'{grant.points} punten: {grant.reason}',
+            title=title,
+            body=body,
             data={'url': '/loyalty'},
             dedupe_key=f'grant:{grant.dedupe_key}',
         )

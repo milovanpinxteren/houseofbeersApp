@@ -19,7 +19,7 @@ from django.utils import timezone
 from loyalty import tasks as loyalty_tasks
 from loyalty.models import (
     Campaign, CampaignAward, CampaignPreview, CampaignProgress,
-    CampaignRaffle, CampaignRaffleWinner, RaffleEntry,
+    CampaignRaffle, CampaignRafflePrize, CampaignRaffleWinner, RaffleEntry,
 )
 
 User = get_user_model()
@@ -371,6 +371,150 @@ class BuilderTests(StudioTestCase):
         self.assertEqual(campaign.action_type, 'raffle')
 
 
+class PrizeTierBuilderTests(StudioTestCase):
+    """Repeatable prize rows: the hidden raffle_prizes JSON round-trip."""
+
+    def raffle_post_data(self, prizes, **overrides):
+        data = self.builder_post_data(
+            action_type='raffle', points_amount='',
+            prize_name='Merch-pakket', num_winners='1',
+            entry_mode='single', fulfillment_type='manual',
+            raffle_prizes=json.dumps(prizes),
+        )
+        data.update(overrides)
+        return data
+
+    def test_prize_rows_saved_in_order_and_sum_num_winners(self):
+        response = self.client.post(
+            reverse('studio:campaign_create'),
+            self.raffle_post_data([
+                {'name': 'T-shirt', 'quantity': '2', 'description': 'In jouw maat'},
+                {'name': 'Hoodie', 'quantity': '1'},
+                {'name': 'Pet', 'quantity': '1', 'image_url': 'https://cdn/pet.jpg'},
+            ]),
+        )
+        self.assertEqual(response.status_code, 302)
+        raffle = Campaign.objects.get(name='Oktoberfest campagne').raffle
+        prizes = list(raffle.prizes.all())
+        self.assertEqual([p.name for p in prizes], ['T-shirt', 'Hoodie', 'Pet'])
+        self.assertEqual([p.ordering for p in prizes], [0, 1, 2])
+        self.assertEqual(prizes[0].quantity, 2)
+        self.assertEqual(prizes[0].description, 'In jouw maat')
+        self.assertEqual(prizes[2].image_url, 'https://cdn/pet.jpg')
+        # num_winners follows the prize quantities, not the submitted field.
+        self.assertEqual(raffle.num_winners, 4)
+        self.assertEqual(raffle.prize_name, 'Merch-pakket', 'headline is kept')
+        # The auto-generated sentence talks about the tiers, not the headline.
+        self.assertIn(
+            'doet mee in de loting voor 4 prijzen: T-shirt, Hoodie of Pet',
+            raffle.campaign.rule_sentence,
+        )
+
+    def test_prize_needs_a_name(self):
+        response = self.client.post(
+            reverse('studio:campaign_create'),
+            self.raffle_post_data([{'name': '  ', 'quantity': '1'}]),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Elke prijs heeft een naam nodig.')
+        self.assertEqual(Campaign.objects.count(), 0)
+
+    def test_prize_quantity_must_be_at_least_one(self):
+        response = self.client.post(
+            reverse('studio:campaign_create'),
+            self.raffle_post_data([{'name': 'T-shirt', 'quantity': '0'}]),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Het aantal van prijs &#x27;T-shirt&#x27; moet minstens 1 zijn.")
+
+    def test_free_product_prize_needs_a_product_and_normalizes_it(self):
+        missing = self.client.post(
+            reverse('studio:campaign_create'),
+            self.raffle_post_data(
+                [{'name': 'T-shirt', 'quantity': '1',
+                  'discount_type': 'free_product'}],
+                fulfillment_type='shopify_code',
+                discount_type='fixed_amount', discount_value='10',
+            ),
+        )
+        self.assertEqual(missing.status_code, 200)
+        self.assertContains(missing, 'Vul het Shopify product-ID in voor het gratis product bij prijs')
+
+        ok = self.client.post(
+            reverse('studio:campaign_create'),
+            self.raffle_post_data(
+                [{'name': 'T-shirt', 'quantity': '1',
+                  'discount_type': 'free_product',
+                  'discount_product_gid': '123456789'}],
+                fulfillment_type='shopify_code',
+                discount_type='fixed_amount', discount_value='10',
+            ),
+        )
+        self.assertEqual(ok.status_code, 302)
+        prize = Campaign.objects.get(name='Oktoberfest campagne').raffle.prizes.get()
+        self.assertEqual(prize.discount_product_gid, 'gid://shopify/Product/123456789')
+
+    def test_campaign_discount_not_required_when_every_prize_brings_its_own(self):
+        response = self.client.post(
+            reverse('studio:campaign_create'),
+            self.raffle_post_data(
+                [{'name': 'T-shirt', 'quantity': '1',
+                  'discount_type': 'free_product',
+                  'discount_product_gid': '111'},
+                 {'name': 'Hoodie', 'quantity': '1',
+                  'discount_type': 'percentage', 'discount_value': '50'}],
+                fulfillment_type='shopify_code',
+            ),
+        )
+        self.assertEqual(response.status_code, 302)
+
+    def test_campaign_discount_still_required_as_fallback(self):
+        response = self.client.post(
+            reverse('studio:campaign_create'),
+            self.raffle_post_data(
+                [{'name': 'T-shirt', 'quantity': '1'}],
+                fulfillment_type='shopify_code',
+            ),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Kies een kortingstype voor de prijscode van de loting.')
+
+    def test_edit_replaces_the_rows_and_prefills_the_form(self):
+        campaign, raffle = self.make_raffle_campaign()
+        CampaignRafflePrize.objects.create(raffle=raffle, name='Oud shirt', ordering=0)
+
+        form = self.client.get(reverse('studio:campaign_edit', args=[campaign.pk]))
+        self.assertContains(form, 'Oud shirt')
+
+        response = self.client.post(
+            reverse('studio:campaign_edit', args=[campaign.pk]),
+            self.raffle_post_data(
+                [{'name': 'Nieuw shirt', 'quantity': '2'}],
+                name='Septemberactie', entry_mode='per_item',
+            ),
+        )
+        self.assertEqual(response.status_code, 302)
+        raffle.refresh_from_db()
+        self.assertEqual([p.name for p in raffle.prizes.all()], ['Nieuw shirt'])
+        self.assertEqual(raffle.num_winners, 2)
+
+    def test_prizes_frozen_once_the_raffle_is_drawn(self):
+        campaign, raffle = self.make_raffle_campaign(
+            status='active', raffle_kwargs={'status': 'drawn'},
+        )
+        CampaignRafflePrize.objects.create(raffle=raffle, name='T-shirt', ordering=0)
+
+        response = self.client.post(
+            reverse('studio:campaign_edit', args=[campaign.pk]),
+            self.raffle_post_data(
+                [{'name': 'Hoodie', 'quantity': '1'}], name='Septemberactie',
+            ),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'de loting is al getrokken')
+        self.assertEqual([p.name for p in raffle.prizes.all()], ['T-shirt'])
+
+
 class RuleSentenceEndpointTests(StudioTestCase):
 
     def test_sentence_for_unsaved_form(self):
@@ -394,6 +538,26 @@ class RuleSentenceEndpointTests(StudioTestCase):
         )
         payload = response.json()
         self.assertIn('doet mee in de loting voor Magnum fles', payload['sentence'])
+
+    def test_sentence_names_all_prize_tiers(self):
+        response = self.client.post(
+            reverse('studio:rule_sentence'),
+            self.builder_post_data(
+                action_type='raffle', points_amount='',
+                prize_name='Merch-pakket', num_winners='1',
+                entry_mode='single', fulfillment_type='manual',
+                raffle_prizes=json.dumps([
+                    {'name': 'T-shirt', 'quantity': '1'},
+                    {'name': 'hoodie', 'quantity': '1'},
+                    {'name': 'pet', 'quantity': '1'},
+                ]),
+            ),
+        )
+        payload = response.json()
+        self.assertIn(
+            'doet mee in de loting voor 3 prijzen: T-shirt, hoodie of pet',
+            payload['sentence'],
+        )
 
     def test_sentence_needs_window(self):
         response = self.client.post(
@@ -741,6 +905,19 @@ class MonitorTests(StudioTestCase):
         self.assertContains(response, 'points@example.com')
         self.assertContains(response, '100 punten')
 
+    def test_monitor_shows_prize_per_winner(self):
+        campaign, raffle, winner = self.seed_raffle_monitor()
+        prize = CampaignRafflePrize.objects.create(
+            raffle=raffle, name='Hoodie', quantity=1, ordering=0,
+        )
+        winner.prize = prize
+        winner.save(update_fields=['prize'])
+
+        response = self.client.get(reverse('studio:campaign_monitor', args=[campaign.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Hoodie')
+        self.assertContains(response, 'Prijzen')
+
     def test_manual_fulfill_toggle(self):
         campaign, raffle, winner = self.seed_raffle_monitor()
         response = self.client.post(
@@ -825,6 +1002,22 @@ class CsvExportTests(StudioTestCase):
         self.assertIn('4', content)
         self.assertIn('WIN-ABC123', content)
         self.assertIn('loten', content)
+
+    def test_raffle_csv_names_the_won_prize(self):
+        campaign, raffle = self.make_raffle_campaign(status='active')
+        user = self.make_user('tier@example.com')
+        prize = CampaignRafflePrize.objects.create(
+            raffle=raffle, name='Hoodie', ordering=0,
+        )
+        RaffleEntry.objects.create(raffle=raffle, user=user, ticket_count=1)
+        CampaignRaffleWinner.objects.create(
+            raffle=raffle, user=user, prize=prize,
+            fulfillment_status='manual_pending',
+        )
+        response = self.client.get(reverse('studio:entrants_csv', args=[campaign.pk]))
+        content = response.content.decode('utf-8')
+        self.assertIn('prijs', content.splitlines()[0])
+        self.assertIn('Hoodie', content)
 
     def test_points_csv(self):
         campaign = self.make_campaign(status='active')

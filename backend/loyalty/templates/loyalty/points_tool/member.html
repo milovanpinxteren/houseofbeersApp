@@ -1,0 +1,128 @@
+{% extends "loyalty/points_tool/base.html" %}
+{% load static %}
+
+{% block tool_crumb %} &rsaquo; {{ member.email }}{% endblock %}
+
+{% block tool_content %}
+<div class="page-head">
+  <div>
+    <h1>{{ member.get_full_name|default:member.email }}</h1>
+    <p class="page-sub">{{ member.email }}</p>
+  </div>
+  <div class="actions">
+    <a class="btn secondary" href="{% url 'points_tool:index' %}">Andere klant zoeken</a>
+    <a class="btn secondary" href="{% url 'admin:users_user_change' member.pk %}">Account in admin</a>
+  </div>
+</div>
+
+{% if errors %}
+<div class="banner error">
+  <strong>Controleer het formulier:</strong>
+  <ul>{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Huidige stand</h2>
+  <div class="stat-row">
+    <div class="stat">
+      <div class="n">{{ snapshot.balance }}</div>
+      <div class="l">Saldo ({{ snapshot.balance_euro }})</div>
+    </div>
+    <div class="stat">
+      <div class="n">{{ snapshot.lifetime_earned }}</div>
+      <div class="l">Ooit verdiend</div>
+    </div>
+    <div class="stat">
+      <div class="n">{{ snapshot.lifetime_spent }}</div>
+      <div class="l">Ooit uitgegeven</div>
+    </div>
+    <div class="stat">
+      <div class="n">{% if snapshot.has_shopify %}<span class="yes">Ja</span>{% else %}<span class="no">Nee</span>{% endif %}</div>
+      <div class="l">Shopify gekoppeld</div>
+    </div>
+  </div>
+  {% if snapshot.has_shopify %}
+  <div class="hint">Shopify-klantnummer: <span class="code">{{ snapshot.shopify_customer_id }}</span></div>
+  {% else %}
+  <div class="hint">
+    Geen Shopify-klant gekoppeld — punten toekennen kan gewoon, bestellingen tellen
+    voor dit account nog niet mee.
+  </div>
+  {% endif %}
+</div>
+
+<form method="post" action="{% url 'points_tool:member' member.pk %}" id="points-form"
+      data-rate="{{ rate_value }}" data-warn-points="{{ warn_points }}"
+      data-balance="{{ snapshot.balance }}">
+  {% csrf_token %}
+  <input type="hidden" name="step" value="confirm">
+  <input type="hidden" name="token" value="{{ form.token }}">
+
+  <div class="panel accent">
+    <h2>Wat wil je doen?</h2>
+
+    <div class="field">
+      <label for="id_mode">Actie</label>
+      <select name="mode" id="id_mode">
+        <option value="add" {% if form.mode == 'add' %}selected{% endif %}>Punten toevoegen</option>
+        <option value="set" {% if form.mode == 'set' %}selected{% endif %}>Saldo instellen op</option>
+      </select>
+      <div class="hint" id="mode-hint"></div>
+    </div>
+
+    <div data-mode="add">
+      <div class="field-row">
+        <div class="field">
+          <label for="id_points">Aantal punten</label>
+          <input type="number" name="points" id="id_points" min="1" step="1"
+                 max="{{ max_points }}" value="{{ form.points }}" inputmode="numeric">
+        </div>
+        <div class="field">
+          <label for="id_euro">…of in euro's</label>
+          <input type="number" name="euro" id="id_euro" min="0" step="0.01"
+                 value="{{ form.euro }}" inputmode="decimal">
+          <div class="hint">Vult automatisch het aantal punten in.</div>
+        </div>
+      </div>
+      <div class="conversion" id="conversion-line" aria-live="polite"></div>
+    </div>
+
+    <div data-mode="set" hidden>
+      <div class="field">
+        <label for="id_target_balance">Nieuw saldo</label>
+        <input type="number" name="target_balance" id="id_target_balance" min="0"
+               step="1" max="{{ max_points }}" value="{{ form.target_balance }}"
+               inputmode="numeric">
+        <div class="hint">
+          Het verschil met het huidige saldo ({{ snapshot.balance }}) wordt als
+          correctie geboekt.
+        </div>
+      </div>
+      <div class="conversion" id="set-conversion-line" aria-live="polite"></div>
+    </div>
+
+    <div class="field">
+      <label for="id_reason">Reden</label>
+      <input type="text" name="reason" id="id_reason" maxlength="255"
+             value="{{ form.reason }}" placeholder="bijv. Instagram post, WhatsApp uitnodiging">
+      <div class="hint" id="reason-hint"></div>
+    </div>
+
+    <div class="field checkbox">
+      <input type="checkbox" name="notify" id="id_notify" {% if form.notify %}checked{% endif %}>
+      <label for="id_notify">Stuur een melding in de app</label>
+    </div>
+
+    <div class="hint">
+      Puntwaarde: <strong>{{ rate_per_point }}</strong> per punt — {{ rate.label }}
+    </div>
+
+    <div class="page-head" style="margin: 16px 0 0 0;">
+      <button type="submit" class="btn">Controleren</button>
+    </div>
+  </div>
+</form>
+
+<script src="{% static 'loyalty/points_tool/points_tool.js' %}" defer></script>
+{% endblock %}
