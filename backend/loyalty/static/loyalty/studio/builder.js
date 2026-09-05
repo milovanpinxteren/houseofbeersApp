@@ -642,8 +642,13 @@
   }
   titleInput.addEventListener('input', function () { updatePushMock(); });
   bodyInput.addEventListener('input', function () { updatePushMock(); });
-  var prizeInput = document.getElementById('id_prize_name');
-  if (prizeInput) prizeInput.addEventListener('input', function () { updatePushMock(); });
+  // NOT `prizeInput` — that name belongs to the hidden prize-tier JSON field
+  // above, and `var` is function-scoped: reusing it here would repoint
+  // syncPrizes() at this text box and dump the tier JSON into prize_name.
+  var prizeNameInput = document.getElementById('id_prize_name');
+  if (prizeNameInput) {
+    prizeNameInput.addEventListener('input', function () { updatePushMock(); });
+  }
 
   // ---------- Init ----------
   updateSections();

@@ -213,6 +213,20 @@ class BuilderTests(StudioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Vul een prijsnaam in voor de loting.')
 
+    def test_overlong_prize_name_is_a_form_error_not_a_crash(self):
+        # prize_name is CharField(max_length=200); an over-long value used to
+        # reach the DB and raise DataError (a 500 on the builder).
+        response = self.client.post(
+            reverse('studio:campaign_create'),
+            self.builder_post_data(
+                action_type='raffle', points_amount='', prize_name='x' * 250,
+                num_winners='1', entry_mode='single', fulfillment_type='manual',
+            ),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'maximaal 200 tekens')
+        self.assertEqual(Campaign.objects.count(), 0)
+
     def test_window_end_must_be_after_start(self):
         response = self.client.post(
             reverse('studio:campaign_create'),

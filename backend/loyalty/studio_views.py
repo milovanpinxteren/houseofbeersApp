@@ -527,6 +527,11 @@ def _parse_campaign_form(post):
         prize_name = (post.get('prize_name') or '').strip()
         if not prize_name:
             errors.append('Vul een prijsnaam in voor de loting.')
+        elif len(prize_name) > 200:
+            # CharField(max_length=200): without this the save blows up with a
+            # DB-level DataError instead of a readable form error.
+            errors.append('De prijsnaam mag maximaal 200 tekens lang zijn.')
+            prize_name = prize_name[:200]
         num_winners = _int('num_winners', 'Aantal winnaars', default=1, minimum=1)
         entry_mode = post.get('entry_mode') or 'single'
         if entry_mode not in dict(CampaignRaffle.ENTRY_MODE_CHOICES):
