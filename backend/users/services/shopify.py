@@ -6,6 +6,24 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
+# Shopify defaults every combinesWith field to false, which means "this code
+# cannot be used together with ANY other discount". A member can easily hold
+# several of our codes at once (a reward, a campaign code, a raffle prize, a
+# birthday gift, a sixpack code), and they told us they could not use them in
+# one order — this default was why. Every code we mint opts in to all three
+# discount classes.
+#
+# Combination is symmetric: the OTHER discount has to allow it too, so any
+# discount created by hand in the Shopify admin still needs its own
+# Combinations boxes ticked. Shopify also caps a checkout at 5 product/order
+# codes plus 1 shipping code, and order+order combination is only offered to
+# stores without checkout.liquid customizations.
+COMBINES_WITH_ALL = {
+    'orderDiscounts': True,
+    'productDiscounts': True,
+    'shippingDiscounts': True,
+}
+
 
 class ShopifyService:
     """Service for interacting with Shopify Admin API."""
@@ -306,83 +324,10 @@ class ShopifyService:
         """
         return self.link_customer_to_user(user)
 
-    def create_discount_code(
-        self,
-        code: str,
-        discount_type: str,
-        value: float,
-        usage_limit: int = 1,
-        customer_id: str = None,
-        ends_at=None,
-    ) -> Optional[dict]:
-        """
-        Create a discount code in Shopify.
-
-        Args:
-            code: The discount code string
-            discount_type: 'fixed_amount' or 'percentage'
-            value: Discount value (amount in currency or percentage)
-            usage_limit: Number of times the code can be used
-            customer_id: Limit to specific customer (optional)
-            ends_at: datetime the code expires (optional, None = never expires)
-
-        Returns:
-            Price rule data or None if failed
-        """
-        # First create a price rule
-        price_rule_data = {
-            'price_rule': {
-                'title': f'Loyalty Reward - {code}',
-                'target_type': 'line_item',
-                'target_selection': 'all',
-                'allocation_method': 'across',
-                'value_type': discount_type,
-                'value': str(-abs(value)),  # Shopify expects negative value
-                'customer_selection': 'prerequisite' if customer_id else 'all',
-                'usage_limit': usage_limit,
-                'once_per_customer': True,
-                'starts_at': timezone.now().isoformat(),
-            }
-        }
-
-        # Add customer prerequisite if specified
-        if customer_id:
-            price_rule_data['price_rule']['prerequisite_customer_ids'] = [int(customer_id)]
-
-        # Optional expiry
-        if ends_at:
-            price_rule_data['price_rule']['ends_at'] = ends_at.isoformat()
-
-        result = self._request('POST', 'price_rules.json', json=price_rule_data)
-        if not result or 'price_rule' not in result:
-            logger.error(f"Failed to create price rule for {code}")
-            return None
-
-        price_rule_id = result['price_rule']['id']
-
-        # Now create the discount code
-        discount_data = {
-            'discount_code': {
-                'code': code,
-            }
-        }
-
-        discount_result = self._request(
-            'POST',
-            f'price_rules/{price_rule_id}/discount_codes.json',
-            json=discount_data
-        )
-
-        if discount_result and 'discount_code' in discount_result:
-            logger.info(f"Created Shopify discount code: {code}")
-            return {
-                'price_rule_id': price_rule_id,
-                'discount_code_id': discount_result['discount_code']['id'],
-                'code': code,
-            }
-
-        logger.error(f"Failed to create discount code {code}")
-        return None
+    # The REST price-rule discount creator that used to live here is gone: the
+    # REST API has no combinesWith field, so every code it minted was
+    # permanently non-combinable. Its one caller (the birthday gift in
+    # loyalty/tasks.py) now uses create_basic_discount.
 
     # ============ GraphQL API Methods ============
 
@@ -740,6 +685,8 @@ class ShopifyService:
         applies_once_per_customer: bool = True,
         ends_at=None,
         minimum_subtotal: float = None,
+        customer_id: str = None,
+        combines_with: dict = None,
     ) -> Optional[dict]:
         """
         Create a basic discount code (fixed amount or percentage off).
@@ -754,6 +701,11 @@ class ShopifyService:
             applies_once_per_customer: Limit to one use per customer
             ends_at: datetime the code expires (optional, None = never expires)
             minimum_subtotal: Minimum cart subtotal required for the code
+            customer_id: Numeric Shopify customer id — locks the code to that
+                one customer (None = usable by anyone holding the code)
+            combines_with: Override the discount classes this code stacks with
+                (defaults to COMBINES_WITH_ALL; pass {} for a code that must
+                stand alone)
         """
         # Build the discount value
         if discount_type == "percentage":
@@ -802,6 +754,15 @@ class ShopifyService:
         }
         """
 
+        # A linked customer narrows the code to exactly one person; without
+        # one, usage_limit bounds the exposure instead.
+        if customer_id:
+            customer_selection = {
+                "customers": {"add": [f"gid://shopify/Customer/{customer_id}"]}
+            }
+        else:
+            customer_selection = {"all": True}
+
         variables = {
             "basicCodeDiscount": {
                 "title": title,
@@ -809,7 +770,10 @@ class ShopifyService:
                 "startsAt": timezone.now().isoformat(),
                 "usageLimit": usage_limit,
                 "appliesOncePerCustomer": applies_once_per_customer,
-                "customerSelection": {"all": True},
+                "customerSelection": customer_selection,
+                "combinesWith": (
+                    COMBINES_WITH_ALL if combines_with is None else combines_with
+                ),
                 "customerGets": {
                     "value": customer_gets_value,
                     "items": items
@@ -856,8 +820,16 @@ class ShopifyService:
         title: str,
         usage_limit: int = 1,
         applies_once_per_customer: bool = True,
+        combines_with: dict = None,
     ) -> Optional[dict]:
-        """Create a free shipping discount code."""
+        """
+        Create a free shipping discount code.
+
+        `combines_with` defaults to COMBINES_WITH_ALL. Note that Shopify never
+        stacks two shipping discounts on one order regardless of this flag —
+        the flag is what lets this code ride along with a product or order
+        discount.
+        """
 
         query = """
         mutation discountCodeFreeShippingCreate($freeShippingCodeDiscount: DiscountCodeFreeShippingInput!) {
@@ -891,6 +863,9 @@ class ShopifyService:
                 "usageLimit": usage_limit,
                 "appliesOncePerCustomer": applies_once_per_customer,
                 "customerSelection": {"all": True},
+                "combinesWith": (
+                    COMBINES_WITH_ALL if combines_with is None else combines_with
+                ),
                 "destination": {"all": True}
             }
         }
@@ -1003,6 +978,81 @@ class ShopifyService:
             return None
         usage = (node.get("codeDiscount") or {}).get("asyncUsageCount")
         return int(usage) if usage is not None else None
+
+    def set_discount_combines_with(
+        self, code: str, combines_with: dict = None
+    ) -> Optional[str]:
+        """
+        Make an ALREADY-MINTED code combinable.
+
+        combinesWith lives on the Shopify discount, not on our row, so codes
+        issued before we started sending the field stay stuck at
+        "combines with nothing" until they are updated here. Used by
+        `backfill_discount_combines`.
+
+        Returns a short status string — 'updated', 'not_found', or 'failed' —
+        rather than a bool, so the backfill can report per-code. Never raises.
+        """
+        combines_with = COMBINES_WITH_ALL if combines_with is None else combines_with
+
+        lookup = """
+        query codeNode($code: String!) {
+            codeDiscountNodeByCode(code: $code) {
+                id
+                codeDiscount {
+                    __typename
+                }
+            }
+        }
+        """
+        data = self._graphql_request(lookup, {"code": code})
+        if not data:
+            return 'failed'
+
+        node = data.get("codeDiscountNodeByCode")
+        if not node:
+            # Deleted in the Shopify admin, or never created. Nothing to fix.
+            return 'not_found'
+
+        typename = (node.get("codeDiscount") or {}).get("__typename")
+        node_id = node["id"]
+
+        # Each discount type has its own update mutation and input key; a
+        # DiscountCodeBasic cannot be updated through the free-shipping one.
+        if typename == 'DiscountCodeBasic':
+            mutation_name, input_key, input_type = (
+                'discountCodeBasicUpdate', 'basicCodeDiscount', 'DiscountCodeBasicInput'
+            )
+        elif typename == 'DiscountCodeFreeShipping':
+            mutation_name, input_key, input_type = (
+                'discountCodeFreeShippingUpdate', 'freeShippingCodeDiscount',
+                'DiscountCodeFreeShippingInput',
+            )
+        else:
+            logger.warning(f"Cannot set combinesWith on {code}: type {typename}")
+            return 'failed'
+
+        mutation = """
+        mutation update($id: ID!, $input: %s!) {
+            %s(id: $id, %s: $input) {
+                userErrors { code field message }
+            }
+        }
+        """ % (input_type, mutation_name, input_key)
+
+        result = self._graphql_request(
+            mutation, {"id": node_id, "input": {"combinesWith": combines_with}}
+        )
+        if not result:
+            return 'failed'
+
+        user_errors = (result.get(mutation_name) or {}).get("userErrors") or []
+        if user_errors:
+            logger.error(f"combinesWith update failed for {code}: {user_errors}")
+            return 'failed'
+
+        logger.info(f"Updated combinesWith on discount code {code}")
+        return 'updated'
 
     def search_products(self, query: str, limit: int = 10) -> Optional[list]:
         """

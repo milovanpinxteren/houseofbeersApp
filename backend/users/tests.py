@@ -388,30 +388,11 @@ class EmailCaseInsensitivityTests(APITestCase):
 
 
 class ShopifyEndsAtTests(APITestCase):
-    """create_discount_code / create_basic_discount accept an optional expiry."""
+    """create_basic_discount accepts an optional expiry."""
 
     def _service(self):
         from users.services import ShopifyService
         return ShopifyService()
-
-    def test_rest_discount_omits_ends_at_by_default(self):
-        service = self._service()
-        with patch.object(service, '_request', return_value=None) as mock_request:
-            service.create_discount_code(code='X', discount_type='fixed_amount', value=5)
-
-        payload = mock_request.call_args.kwargs['json']['price_rule']
-        self.assertNotIn('ends_at', payload)
-
-    def test_rest_discount_sends_ends_at(self):
-        service = self._service()
-        ends_at = timezone.now() + timedelta(days=30)
-        with patch.object(service, '_request', return_value=None) as mock_request:
-            service.create_discount_code(
-                code='X', discount_type='fixed_amount', value=5, ends_at=ends_at
-            )
-
-        payload = mock_request.call_args.kwargs['json']['price_rule']
-        self.assertEqual(payload['ends_at'], ends_at.isoformat())
 
     def test_graphql_discount_ends_at_is_optional(self):
         service = self._service()
@@ -430,6 +411,173 @@ class ShopifyEndsAtTests(APITestCase):
                 mock_gql.call_args.args[1]['basicCodeDiscount']['endsAt'],
                 ends_at.isoformat(),
             )
+
+
+class ShopifyCombinesWithTests(APITestCase):
+    """
+    Every code we mint must be stackable with the other codes a member holds.
+
+    Shopify defaults combinesWith to all-false, so omitting the field is the
+    same as saying "this code stands alone" — which is what members were
+    running into. These tests pin the field down at the payload level.
+    """
+
+    def _service(self):
+        from users.services import ShopifyService
+        return ShopifyService()
+
+    def _basic_payload(self, mock_gql):
+        return mock_gql.call_args.args[1]['basicCodeDiscount']
+
+    def test_basic_discount_combines_with_everything_by_default(self):
+        service = self._service()
+        with patch.object(service, '_graphql_request', return_value=None) as mock_gql:
+            service.create_basic_discount(
+                code='HOB-X', title='t', discount_type='fixed_amount', value=5
+            )
+
+        self.assertEqual(
+            self._basic_payload(mock_gql)['combinesWith'],
+            {'orderDiscounts': True, 'productDiscounts': True, 'shippingDiscounts': True},
+        )
+
+    def test_free_product_discount_combines_with_everything(self):
+        """Raffle prizes go through create_free_product_discount."""
+        service = self._service()
+        with patch.object(service, '_graphql_request', return_value=None) as mock_gql:
+            service.create_free_product_discount(
+                code='WIN-X', title='t', product_id='gid://shopify/Product/1'
+            )
+
+        self.assertEqual(
+            self._basic_payload(mock_gql)['combinesWith'],
+            {'orderDiscounts': True, 'productDiscounts': True, 'shippingDiscounts': True},
+        )
+
+    def test_free_shipping_discount_combines_with_everything(self):
+        service = self._service()
+        with patch.object(service, '_graphql_request', return_value=None) as mock_gql:
+            service.create_free_shipping_discount(code='HOB-X', title='t')
+
+        payload = mock_gql.call_args.args[1]['freeShippingCodeDiscount']
+        self.assertEqual(
+            payload['combinesWith'],
+            {'orderDiscounts': True, 'productDiscounts': True, 'shippingDiscounts': True},
+        )
+
+    def test_combines_with_can_be_overridden(self):
+        """An explicit {} mints a stand-alone code without touching the default."""
+        service = self._service()
+        with patch.object(service, '_graphql_request', return_value=None) as mock_gql:
+            service.create_basic_discount(
+                code='HOB-X', title='t', discount_type='percentage', value=10,
+                combines_with={},
+            )
+
+        self.assertEqual(self._basic_payload(mock_gql)['combinesWith'], {})
+
+    def test_customer_id_locks_the_code_to_one_customer(self):
+        """The birthday gift relies on this; it used to be a REST prerequisite."""
+        service = self._service()
+        with patch.object(service, '_graphql_request', return_value=None) as mock_gql:
+            service.create_basic_discount(
+                code='BDAY-X', title='t', discount_type='fixed_amount', value=5,
+                customer_id='123456',
+            )
+
+        self.assertEqual(
+            self._basic_payload(mock_gql)['customerSelection'],
+            {'customers': {'add': ['gid://shopify/Customer/123456']}},
+        )
+
+    def test_without_customer_id_the_code_is_open(self):
+        service = self._service()
+        with patch.object(service, '_graphql_request', return_value=None) as mock_gql:
+            service.create_basic_discount(
+                code='HOB-X', title='t', discount_type='fixed_amount', value=5
+            )
+
+        self.assertEqual(
+            self._basic_payload(mock_gql)['customerSelection'], {'all': True}
+        )
+
+
+class ShopifySetCombinesWithTests(APITestCase):
+    """Repairing codes that were already minted non-combinable."""
+
+    def _service(self):
+        from users.services import ShopifyService
+        return ShopifyService()
+
+    def _responses(self, typename, update_key, user_errors=None):
+        """codeDiscountNodeByCode lookup, then the update mutation."""
+        return [
+            {'codeDiscountNodeByCode': {
+                'id': 'gid://shopify/DiscountCodeNode/7',
+                'codeDiscount': {'__typename': typename},
+            }},
+            {update_key: {'userErrors': user_errors or []}},
+        ]
+
+    def test_basic_code_is_updated_through_the_basic_mutation(self):
+        service = self._service()
+        with patch.object(service, '_graphql_request') as mock_gql:
+            mock_gql.side_effect = self._responses(
+                'DiscountCodeBasic', 'discountCodeBasicUpdate'
+            )
+            result = service.set_discount_combines_with('HOB-ABC12345')
+
+        self.assertEqual(result, 'updated')
+        mutation, variables = mock_gql.call_args.args
+        self.assertIn('discountCodeBasicUpdate', mutation)
+        self.assertIn('basicCodeDiscount', mutation)
+        self.assertEqual(variables['id'], 'gid://shopify/DiscountCodeNode/7')
+        self.assertEqual(
+            variables['input']['combinesWith'],
+            {'orderDiscounts': True, 'productDiscounts': True, 'shippingDiscounts': True},
+        )
+
+    def test_free_shipping_code_uses_its_own_mutation(self):
+        """A DiscountCodeBasic input cannot update a free-shipping discount."""
+        service = self._service()
+        with patch.object(service, '_graphql_request') as mock_gql:
+            mock_gql.side_effect = self._responses(
+                'DiscountCodeFreeShipping', 'discountCodeFreeShippingUpdate'
+            )
+            result = service.set_discount_combines_with('HOB-SHIP1234')
+
+        self.assertEqual(result, 'updated')
+        mutation, _variables = mock_gql.call_args.args
+        self.assertIn('discountCodeFreeShippingUpdate', mutation)
+        self.assertIn('freeShippingCodeDiscount', mutation)
+
+    def test_missing_code_reports_not_found_without_updating(self):
+        """Deleted in the Shopify admin: nothing to repair, not a failure."""
+        service = self._service()
+        with patch.object(service, '_graphql_request') as mock_gql:
+            mock_gql.return_value = {'codeDiscountNodeByCode': None}
+            result = service.set_discount_combines_with('HOB-GONE0000')
+
+        self.assertEqual(result, 'not_found')
+        self.assertEqual(mock_gql.call_count, 1)
+
+    def test_user_errors_report_failed(self):
+        service = self._service()
+        with patch.object(service, '_graphql_request') as mock_gql:
+            mock_gql.side_effect = self._responses(
+                'DiscountCodeBasic', 'discountCodeBasicUpdate',
+                user_errors=[{'code': 'INVALID', 'message': 'nope'}],
+            )
+            result = service.set_discount_combines_with('HOB-ABC12345')
+
+        self.assertEqual(result, 'failed')
+
+    def test_shopify_silence_reports_failed(self):
+        service = self._service()
+        with patch.object(service, '_graphql_request', return_value=None):
+            result = service.set_discount_combines_with('HOB-ABC12345')
+
+        self.assertEqual(result, 'failed')
 
 
 class AdminActionTests(APITestCase):

@@ -568,9 +568,40 @@ npx expo start
 - Service: `backend/loyalty/services/points.py`
 
 ### Discount Code Creation
-- Uses Shopify GraphQL Admin API
+- Uses Shopify GraphQL Admin API — `create_basic_discount()` /
+  `create_free_shipping_discount()` / `create_free_product_discount()` in
+  `users/services/shopify.py`. There is no REST price-rule path any more (it
+  could not carry `combinesWith`, see below).
 - Supports: fixed discount, percentage discount, free shipping, free product
 - Free product requires Shopify Product GID (e.g., `gid://shopify/Product/123456`)
+- `customer_id` locks a code to one Shopify customer (the birthday gift uses it)
+
+**Codes must combine (2026-09-05).** Shopify defaults every `combinesWith`
+field to **false**, i.e. "this code cannot be used alongside any other
+discount" — members reported not being able to use two of our codes in one
+order and that default was the whole reason. Every creator now sends
+`COMBINES_WITH_ALL` (all three discount classes true) unless a caller passes
+`combines_with` explicitly; that covers reward redemptions, campaign codes,
+raffle prizes (`WIN-`), birthday gifts (`BDAY-`) and sixpack codes (`SIX-`).
+Things that are NOT in our control:
+
+- Combination is **symmetric** — a discount created by hand in the Shopify
+  admin needs its own Combinations boxes ticked or it still blocks ours.
+- Our cart-wide fixed/percentage codes target `items: {all: true}`, which makes
+  them **order**-class. Shopify only offers order+order and product+order
+  combination to stores without `checkout.liquid` customizations. Free-product
+  codes are product-class and free shipping is shipping-class, and those
+  combine everywhere.
+- Checkout caps at **5 product/order codes + 1 shipping code** per order, and
+  two shipping discounts never stack.
+
+`combinesWith` lives on the Shopify discount, not on our row, so codes minted
+before this change stay non-combinable until repaired:
+`python manage.py backfill_discount_combines [--apply]` (dry-run by default)
+walks every still-redeemable code and calls
+`ShopifyService.set_discount_combines_with()`. Tests:
+`backend/loyalty/test_discount_combines.py`, `backend/users/tests.py`
+(`ShopifyCombinesWithTests`, `ShopifySetCombinesWithTests`).
 
 ---
 

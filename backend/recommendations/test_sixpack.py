@@ -108,6 +108,9 @@ class SixpackCheckoutViewTests(TestCase):
         self.assertEqual(kwargs['discount_type'], 'fixed_amount')
         self.assertEqual(kwargs['usage_limit'], 1)
         self.assertAlmostEqual(kwargs['minimum_subtotal'], 55.86, places=2)
+        # The pack code stacks with the member's other codes: no override, so
+        # create_basic_discount applies the combines-with-everything default.
+        self.assertNotIn('combines_with', kwargs)
 
     @patch('recommendations.views.ShopifyService')
     def test_identical_pack_reuses_code(self, shopify_cls, _products):

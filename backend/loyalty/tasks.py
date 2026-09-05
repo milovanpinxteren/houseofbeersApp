@@ -158,8 +158,12 @@ def _issue_birthday_gift(user, year: int, config) -> bool:
     # usage_limit=1 bounds the exposure to exactly the gift we intended.
     customer_id = user.shopify_customer_id or None
 
-    result = ShopifyService().create_discount_code(
+    # GraphQL, not the old REST price-rule path: only this mutation carries
+    # combinesWith, and a birthday gift that blocks every other code the
+    # member holds is worse than no gift.
+    result = ShopifyService().create_basic_discount(
         code=code,
+        title=f"Birthday gift - {user.email}",
         discount_type=config.discount_type,
         value=float(config.discount_value),
         usage_limit=1,

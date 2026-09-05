@@ -16,7 +16,7 @@ AMS = ZoneInfo('Europe/Amsterdam')
 # Where the Shopify call and the notification send are patched. Both are
 # imported inside the task, so patching the source module is what takes
 # effect - and it means these tests run before notifications/ exists.
-SHOPIFY_TARGET = 'users.services.shopify.ShopifyService.create_discount_code'
+SHOPIFY_TARGET = 'users.services.shopify.ShopifyService.create_basic_discount'
 NOTIFY_TARGET = 'notifications.services.send_notification'
 
 
@@ -49,7 +49,7 @@ class BirthdayScanTestCase(TestCase):
         Returns (result, mock_shopify, mock_notify).
         """
         if shopify_result == 'ok':
-            shopify_result = {'price_rule_id': 1, 'discount_code_id': 2, 'code': 'X'}
+            shopify_result = {'discount_id': 'gid://shopify/DiscountCodeNode/1', 'code': 'X'}
 
         if notify_return is None:
             notify_return = MagicMock(id=99)
@@ -96,6 +96,9 @@ class BirthdayGiftIssuingTests(BirthdayScanTestCase):
         self.assertEqual(kwargs['discount_type'], 'fixed_amount')
         self.assertEqual(kwargs['value'], 5.0)
         self.assertEqual(kwargs['code'], reward.discount_code)
+        self.assertIn(user.email, kwargs['title'])
+        # No combines_with override: the gift stacks like every other code.
+        self.assertNotIn('combines_with', kwargs)
 
         notify_kwargs = mock_notify.call_args.kwargs
         self.assertEqual(notify_kwargs['kind'], 'birthday_gift')
