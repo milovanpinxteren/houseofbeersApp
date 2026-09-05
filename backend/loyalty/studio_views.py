@@ -148,17 +148,25 @@ def _dt_input(value):
 
 # ============ Form parsing & validation ============
 
-def _parse_prize_rows(raw, fulfillment_type, errors):
+def _parse_prize_rows(raw, fulfillment_type, errors, fallback=None):
     """
     Parse the builder's hidden raffle_prizes JSON into CampaignRafflePrize
     field dicts — same idiom as product_matchers. Submitted order IS the draw
     order, so `ordering` is just the row index.
 
-    A row may leave its discount config blank (the campaign's config is the
-    fallback); whatever it does fill in is validated like the campaign-level
-    config, because a prize code that Shopify refuses only surfaces after the
-    draw, when it is too late to fix.
+    A row may leave any part of its discount config blank and inherit the
+    campaign's, so what gets validated is the EFFECTIVE config: the row's own
+    fields merged over `fallback` exactly the way services/raffles.py
+    `_discount_config()` merges them at draw time. Validating the row's raw
+    fields instead would reject the most natural way to set up tiers — three
+    different free products, each with its own product ID, all leaving the
+    type on "Zelfde als campagne" — and would demand a campaign-level product
+    ID that the draw would never read.
+
+    A prize code that Shopify refuses only surfaces after the draw, when it is
+    too late to fix, so this is the last line of defence.
     """
+    fallback = fallback or {}
     try:
         parsed = json.loads(raw or '[]')
         if not isinstance(parsed, list):
@@ -224,17 +232,30 @@ def _parse_prize_rows(raw, fulfillment_type, errors):
                     )
                     validity_days = None
 
-        if fulfillment_type == 'shopify_code' and discount_type:
-            if discount_type in ('fixed_amount', 'percentage'):
-                if not discount_value or discount_value <= 0:
+        if fulfillment_type == 'shopify_code':
+            # What this tier will actually mint, campaign fallback included.
+            eff_type = discount_type or fallback.get('discount_type') or ''
+            eff_value = (
+                discount_value if discount_value is not None
+                else fallback.get('discount_value')
+            )
+            eff_gid = product_gid or fallback.get('discount_product_gid') or ''
+
+            if not eff_type:
+                errors.append(
+                    f"Kies een kortingstype voor prijs '{name}' (of vul de "
+                    f"kortingscode-instellingen van de campagne in)."
+                )
+            elif eff_type in ('fixed_amount', 'percentage'):
+                if not eff_value or eff_value <= 0:
                     errors.append(
                         f"Vul de waarde van de prijscode voor '{name}' in (groter dan 0)."
                     )
-                elif discount_type == 'percentage' and discount_value > 100:
+                elif eff_type == 'percentage' and eff_value > 100:
                     errors.append(
                         f"Een kortingspercentage kan niet groter zijn dan 100 (prijs '{name}')."
                     )
-            elif discount_type == 'free_product' and not product_gid:
+            elif eff_type == 'free_product' and not eff_gid:
                 errors.append(
                     f"Vul het Shopify product-ID in voor het gratis product bij prijs '{name}'."
                 )
@@ -517,7 +538,12 @@ def _parse_campaign_form(post):
         if fulfillment_type not in dict(CampaignRaffle.FULFILLMENT_TYPE_CHOICES):
             fulfillment_type = 'manual'
         prize_rows = _parse_prize_rows(
-            post.get('raffle_prizes'), fulfillment_type, errors
+            post.get('raffle_prizes'), fulfillment_type, errors,
+            fallback={
+                'discount_type': discount_type,
+                'discount_value': discount_value,
+                'discount_product_gid': discount_product_gid,
+            },
         )
         raffle_data = {
             'prize_name': prize_name,
@@ -538,15 +564,15 @@ def _parse_campaign_form(post):
         }
 
     # A discount config is required for the discount action, and for a raffle
-    # whose prize is fulfilled with a Shopify code — unless every prize tier
-    # brings its own config, in which case the campaign-level fallback would
-    # never be read.
+    # whose prize is fulfilled with a Shopify code. Prize tiers are the
+    # exception: every code then comes from a tier, and _parse_prize_rows has
+    # already validated each tier's effective config (its own fields over the
+    # campaign's). Re-checking the campaign level here would report a missing
+    # product ID for a campaign-wide field the draw never reads.
     needs_discount = action_type == 'discount_code' or (
-        raffle_data is not None and raffle_data['fulfillment_type'] == 'shopify_code'
-        and not (
-            raffle_data['prizes']
-            and all(row['discount_type'] for row in raffle_data['prizes'])
-        )
+        raffle_data is not None
+        and raffle_data['fulfillment_type'] == 'shopify_code'
+        and not raffle_data['prizes']
     )
     if needs_discount:
         where = 'de kortingscode' if action_type == 'discount_code' else 'de prijscode van de loting'

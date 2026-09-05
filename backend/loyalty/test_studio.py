@@ -468,7 +468,12 @@ class PrizeTierBuilderTests(StudioTestCase):
         )
         self.assertEqual(response.status_code, 302)
 
-    def test_campaign_discount_still_required_as_fallback(self):
+    def test_prize_without_any_config_anywhere_is_rejected(self):
+        """
+        A tier that configures nothing and a campaign that configures nothing
+        would mint nothing. The error names the prize, because that is where
+        the admin is looking.
+        """
         response = self.client.post(
             reverse('studio:campaign_create'),
             self.raffle_post_data(
@@ -477,7 +482,62 @@ class PrizeTierBuilderTests(StudioTestCase):
             ),
         )
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Kies een kortingstype voor prijs &#x27;T-shirt&#x27;')
+
+    def test_campaign_discount_still_required_without_prize_tiers(self):
+        """No tiers = the campaign config is the only config there is."""
+        response = self.client.post(
+            reverse('studio:campaign_create'),
+            self.raffle_post_data([], fulfillment_type='shopify_code'),
+        )
+        self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Kies een kortingstype voor de prijscode van de loting.')
+
+    def test_tiers_may_supply_only_the_product_and_inherit_the_type(self):
+        """
+        The natural way to set up three different free products: pick
+        'Gratis product' once on the campaign, then give each prize its own
+        product ID and leave its type on 'Zelfde als campagne'. The draw
+        merges tier over campaign field by field, so the campaign-level
+        product ID is never read and must not be demanded.
+        """
+        response = self.client.post(
+            reverse('studio:campaign_create'),
+            self.raffle_post_data(
+                [{'name': 'T-shirt', 'quantity': '1', 'discount_product_gid': '111'},
+                 {'name': 'Hoodie', 'quantity': '1', 'discount_product_gid': '222'},
+                 {'name': 'Pet', 'quantity': '2', 'discount_product_gid': '333'}],
+                fulfillment_type='shopify_code',
+                discount_type='free_product', discount_product_gid='',
+            ),
+        )
+        self.assertEqual(response.status_code, 302)
+
+        raffle = Campaign.objects.get(name='Oktoberfest campagne').raffle
+        self.assertEqual(raffle.num_winners, 4)
+        gids = [p.discount_product_gid for p in raffle.prizes.all()]
+        self.assertEqual(gids, [
+            'gid://shopify/Product/111',
+            'gid://shopify/Product/222',
+            'gid://shopify/Product/333',
+        ])
+        # Types stay blank: the campaign's free_product is the fallback.
+        self.assertEqual([p.discount_type for p in raffle.prizes.all()], ['', '', ''])
+
+    def test_tier_inheriting_a_value_less_type_is_still_caught(self):
+        """Inheriting an incomplete campaign config must not pass silently."""
+        response = self.client.post(
+            reverse('studio:campaign_create'),
+            self.raffle_post_data(
+                [{'name': 'T-shirt', 'quantity': '1'}],
+                fulfillment_type='shopify_code',
+                discount_type='percentage', discount_value='',
+            ),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(
+            response, 'Vul de waarde van de prijscode voor &#x27;T-shirt&#x27; in'
+        )
 
     def test_edit_replaces_the_rows_and_prefills_the_form(self):
         campaign, raffle = self.make_raffle_campaign()
