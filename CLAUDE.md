@@ -285,8 +285,8 @@ remains only as historical reference.
 
 ### Phase 12: Pickup RSVP ✅
 - [x] Members announce their store pickup day on the orders screen (replaces the WhatsApp poll + hand-written warehouse list)
-- [x] `fulfillment/` backend app: schedule (Fri/Sat seeded), closures, RSVPs, action log with hob-sync health
-- [x] Server-to-server push to hob sets the warehouse queue (`Afhalen`) + priority (see Pickup RSVP section)
+- [x] `fulfillment/` backend app: schedule (Fri/Sat seeded), closures, RSVPs, action log with sync health
+- [x] Direct Shopify customer-metafield writes set the warehouse queue (`Afhalen`) + priority; hob pulls them from Shopify (see Pickup RSVP section)
 - [x] Orders screen renamed "Bestelgeschiedenis" → "Bestellingen"; `/pickup` deep link
 
 ---
@@ -795,26 +795,29 @@ during pickup, exactly as before.
   (TIME_ZONE is Europe/Amsterdam = store time). The POSTs are idempotent
   and return real JSON 200s (no 204s). Analytics events `pickup_rsvp` /
   `pickup_rsvp_cancel`.
-- **hob sync** (`fulfillment/services/hob_sync.py` + Celery task, 3 retries,
-  inline fallback without broker): every action row is POSTed to hob at
-  `{HOB_SERVICE_URL}/api/service/app/pickup-rsvp/`, HMAC-SHA256 over the
-  raw body (`X-Signature: sha256=<hex>`) — the outbound mirror of the
-  inbound loyalty service API. Settings `HOB_SERVICE_URL` +
-  `HOB_SERVICE_HMAC_SECRET`; either empty → rows are `skipped` and RSVPs
-  still work. Success requires 2xx AND `{"success": true}`; hob's
-  `customer_found: false` is a success (no retry loop for unlinked users).
-- **hob side** (hob repo `apps/order_management/app_service.py`): rsvp sets
-  customer queue `Afhalen` + priority `max(current, 80)` (metafield-first
-  via the shared `customer_queue.py` write path, audit row username `app`);
-  cancel reverts ONLY its own values (queue still `Afhalen`, priority
-  exactly 80 → back to auto). The `Afhalen` choice must exist in Shopify's
-  `custom.queue` customer-metafield definition. Secret env on hob:
-  `APP_SERVICE_HMAC_SECRET` (same value as the app's
-  `HOB_SERVICE_HMAC_SECRET`).
+- **Shopify sync** (`fulfillment/services/shopify_sync.py` + Celery task, 3
+  retries, dispatched from a background thread with inline fallback so the
+  RSVP request never waits — see `_dispatch_sync`): the app writes the
+  customer metafields `custom.queue` / `custom.priority` DIRECTLY on
+  Shopify (the agreed source of truth; hob re-reads them from Shopify —
+  nightly full sync + a 15-min incremental customer sync in the hob repo,
+  which works because metafield set AND delete both bump the customer's
+  `updatedAt`, verified live 2026-09-18). There is deliberately NO app↔hob
+  connection. rsvp: queue → `Afhalen`, priority → `max(current, 80)` —
+  never lowers a staff value. cancel: DELETES the metafields, and only
+  when they are still exactly ours (queue `Afhalen`, priority 80) —
+  deleting priority makes hob's sync fall back to its auto-calculation
+  (hob keeps Shopify priority only when >50), so the app never needs
+  hob's formula. Idempotent read-modify-write; unlinked users (no
+  `shopify_customer_id`) → `skipped`; customer-not-found or write error →
+  `failed` + task retry. ShopifyService methods:
+  `get_customer_queue_priority()`, `set_customer_metafield()`,
+  `delete_customer_metafield()` (metafieldsDelete — the singular
+  metafieldDelete does not exist in this API version).
 - **Admin**: schedule + closures editable; RSVP list with CSV export
   (`afhaal-aanmeldingen.csv` — the warehouse list, until the hob queue
   makes it redundant); action log read-only with an "Opnieuw
-  synchroniseren met hob" action to re-push after an outage.
+  synchroniseren met Shopify" action to re-push after an outage.
 - **Mobile**: `PickupSection` (`mobile/src/components/PickupSection.tsx`) at
   the top of the orders screen (title renamed Bestelgeschiedenis →
   "Bestellingen"): quiet collapsed Card row; expanded = one-tap toggle

@@ -1250,3 +1250,150 @@ class ShopifyService:
                 result[str(pid)] = product_data["metafield"]["value"]
 
         return result
+
+    # ============ Customer Metafields (warehouse queue/priority) ============
+
+    def get_customer_queue_priority(self, customer_id) -> Optional[dict]:
+        """
+        Read the warehouse queue metafields (`custom.queue` /
+        `custom.priority`) from a customer. Shopify is the source of truth
+        for these values (hob reads them from Shopify too); the pickup RSVP
+        sync reads them here before deciding what to write.
+
+        Args:
+            customer_id: Shopify customer ID (numeric, not GID)
+
+        Returns:
+            {'queue': str|None, 'priority': int|None} — each None when the
+            metafield is absent (a non-integer priority value also yields
+            None). Returns None when the request fails OR the customer does
+            not exist on Shopify; callers cannot distinguish the two and
+            should treat None as "no answer", never as "no metafields".
+        """
+        query = """
+        query getCustomerQueuePriority($id: ID!) {
+            customer(id: $id) {
+                queue: metafield(namespace: "custom", key: "queue") { value }
+                priority: metafield(namespace: "custom", key: "priority") { value }
+            }
+        }
+        """
+        variables = {"id": f"gid://shopify/Customer/{customer_id}"}
+
+        data = self._graphql_request(query, variables)
+        if not data:
+            return None
+        customer = data.get("customer")
+        if not customer:
+            # Deleted or unknown customer id.
+            return None
+
+        queue = (customer.get("queue") or {}).get("value")
+        raw_priority = (customer.get("priority") or {}).get("value")
+        try:
+            priority = int(raw_priority)
+        except (TypeError, ValueError):
+            priority = None
+        return {"queue": queue, "priority": priority}
+
+    def set_customer_metafield(
+        self, customer_id, key: str, value: str, mf_type: str
+    ) -> Optional[dict]:
+        """
+        Set one `custom.*` metafield on a customer via metafieldsSet.
+
+        Args:
+            customer_id: Shopify customer ID (numeric, not GID)
+            key: Metafield key (e.g., 'queue')
+            value: Metafield value as a string (number_integer values are
+                strings too, e.g. '80')
+            mf_type: Shopify metafield type (e.g., 'single_line_text_field',
+                'number_integer')
+
+        Returns:
+            The written metafield dict ({'id', 'value'}) on success, or None
+            on any GraphQL error or userError.
+        """
+        mutation = """
+        mutation setCustomerMetafield($metafields: [MetafieldsSetInput!]!) {
+            metafieldsSet(metafields: $metafields) {
+                metafields { id value }
+                userErrors { field message }
+            }
+        }
+        """
+        variables = {
+            "metafields": [{
+                "ownerId": f"gid://shopify/Customer/{customer_id}",
+                "namespace": "custom",
+                "key": key,
+                "type": mf_type,
+                "value": str(value),
+            }]
+        }
+
+        data = self._graphql_request(mutation, variables)
+        if not data:
+            return None
+
+        result = data.get("metafieldsSet") or {}
+        user_errors = result.get("userErrors") or []
+        if user_errors:
+            logger.error(
+                f"Customer metafield set failed "
+                f"(customer {customer_id}, custom.{key}): {user_errors}"
+            )
+            return None
+
+        metafields = result.get("metafields") or []
+        if metafields:
+            logger.info(f"Set custom.{key} on customer {customer_id}")
+            return metafields[0]
+        return None
+
+    def delete_customer_metafield(self, customer_id, key: str) -> bool:
+        """
+        Delete one `custom.*` metafield from a customer via metafieldsDelete
+        (the only delete mutation in this API version — there is no singular
+        metafieldDelete). Deleting a metafield that does not exist is fine:
+        Shopify reports no userErrors, so this stays idempotent.
+
+        Args:
+            customer_id: Shopify customer ID (numeric, not GID)
+            key: Metafield key (e.g., 'priority')
+
+        Returns:
+            True on success (including "was already absent"), False on any
+            GraphQL error or userError.
+        """
+        mutation = """
+        mutation deleteCustomerMetafield($metafields: [MetafieldIdentifierInput!]!) {
+            metafieldsDelete(metafields: $metafields) {
+                deletedMetafields { ownerId key }
+                userErrors { field message }
+            }
+        }
+        """
+        variables = {
+            "metafields": [{
+                "ownerId": f"gid://shopify/Customer/{customer_id}",
+                "namespace": "custom",
+                "key": key,
+            }]
+        }
+
+        data = self._graphql_request(mutation, variables)
+        if not data:
+            return False
+
+        result = data.get("metafieldsDelete") or {}
+        user_errors = result.get("userErrors") or []
+        if user_errors:
+            logger.error(
+                f"Customer metafield delete failed "
+                f"(customer {customer_id}, custom.{key}): {user_errors}"
+            )
+            return False
+
+        logger.info(f"Deleted custom.{key} from customer {customer_id}")
+        return True

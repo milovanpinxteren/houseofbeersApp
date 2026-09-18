@@ -13,14 +13,15 @@ logger = logging.getLogger(__name__)
              ignore_result=True)
 def sync_pickup_action(self, log_id):
     """
-    Push one PickupActionLog row to hob and record the outcome on the row.
+    Apply one PickupActionLog row to the customer's Shopify queue/priority
+    metafields and record the outcome on the row.
 
     Retries 3x with 60s delay on failure; after the last attempt the row
     stays 'failed' and shows up in the admin, where the "Opnieuw
-    synchroniseren met hob" action can re-dispatch it.
+    synchroniseren met Shopify" action can re-dispatch it.
     """
     from fulfillment.models import PickupActionLog
-    from fulfillment.services import hob_sync
+    from fulfillment.services import shopify_sync
 
     try:
         log = PickupActionLog.objects.get(id=log_id)
@@ -28,10 +29,10 @@ def sync_pickup_action(self, log_id):
         logger.warning(f"Pickup sync: log row {log_id} no longer exists")
         return
 
-    status, response_text = hob_sync.push_pickup_action(log)
+    status, response_text = shopify_sync.push_pickup_action(log)
 
     log.sync_status = status
-    log.sync_response = (response_text or '')[:hob_sync.MAX_RESPONSE_CHARS]
+    log.sync_response = (response_text or '')[:shopify_sync.MAX_RESPONSE_CHARS]
     if status != 'skipped':
         log.sync_attempts += 1
     log.save(update_fields=[

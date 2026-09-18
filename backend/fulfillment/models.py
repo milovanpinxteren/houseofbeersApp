@@ -96,9 +96,9 @@ class PickupRSVP(models.Model):
 class PickupActionLog(models.Model):
     """One row per user action (rsvp/cancel).
 
-    Doubles as the usage log AND the hob-sync health view: every action
-    must reach hob (which sets the customer's warehouse queue/priority),
-    and this row records whether that outbound call succeeded.
+    Doubles as the usage log AND the Shopify-sync health view: every action
+    must reach Shopify (the customer's warehouse queue/priority metafields,
+    which hob reads), and this row records whether that write succeeded.
     """
 
     ACTION_CHOICES = [

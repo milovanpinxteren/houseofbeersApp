@@ -72,7 +72,7 @@ def _parse_date(value):
 
 def _dispatch_sync(log):
     """
-    Hand the hob sync task to Celery from a background thread, falling back
+    Hand the Shopify sync task to Celery from a background thread, falling back
     to running it inline (same thread) when the broker is unreachable —
     local dev without Redis. The RSVP request never waits on any of this:
     with Redis down even a fast-failing .apply_async() blocks for seconds,

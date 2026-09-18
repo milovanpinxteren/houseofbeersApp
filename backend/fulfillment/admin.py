@@ -54,7 +54,7 @@ class PickupRSVPAdmin(admin.ModelAdmin):
 
 @admin.register(PickupActionLog)
 class PickupActionLogAdmin(admin.ModelAdmin):
-    """Read-only usage log + hob-sync health view."""
+    """Read-only usage log + Shopify-sync health view."""
     list_display = [
         'user', 'action', 'pickup_date', 'sync_status', 'sync_attempts',
         'created_at',
@@ -62,7 +62,7 @@ class PickupActionLogAdmin(admin.ModelAdmin):
     list_filter = ['sync_status', 'action']
     date_hierarchy = 'pickup_date'
     search_fields = ['user__email', 'user__first_name', 'user__last_name']
-    actions = ['resync_with_hob']
+    actions = ['resync_with_shopify']
 
     def has_add_permission(self, request):
         return False
@@ -70,9 +70,9 @@ class PickupActionLogAdmin(admin.ModelAdmin):
     def has_change_permission(self, request, obj=None):
         return False
 
-    @admin.action(description='Opnieuw synchroniseren met hob')
-    def resync_with_hob(self, request, queryset):
-        """Re-dispatch the hob sync for selected rows (after a broken link)."""
+    @admin.action(description='Opnieuw synchroniseren met Shopify')
+    def resync_with_shopify(self, request, queryset):
+        """Re-dispatch the Shopify sync for selected rows (after an outage)."""
         from .tasks import sync_pickup_action
 
         dispatched = 0
@@ -96,5 +96,5 @@ class PickupActionLogAdmin(admin.ModelAdmin):
         if dispatched:
             messages.success(
                 request,
-                f'{dispatched} logregel(s) opnieuw naar hob gestuurd.',
+                f'{dispatched} logregel(s) opnieuw naar Shopify gestuurd.',
             )
