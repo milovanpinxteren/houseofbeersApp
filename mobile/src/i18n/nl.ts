@@ -364,7 +364,7 @@ export default {
     tasteProfileSubtitle: 'Jouw biervoorkeuren',
     favorites: 'Favorieten',
     favoritesSubtitle: 'Bieren die je wilt proberen',
-    orders: 'Bestelgeschiedenis',
+    orders: 'Bestellingen',
     viewOrderHistory: 'Bekijk je eerdere bestellingen',
     linkShopifyFirst: 'Koppel Shopify om te bekijken',
     connectUntappd: 'Koppel Untappd',
@@ -703,5 +703,17 @@ export default {
     codeExpires: 'Geldig tot {{date}}',
     redeemCta: 'Korting verzilveren',
     redeemHint: 'We openen de winkel met je code al toegepast.',
+  },
+
+  // Ophaal-RSVP (bestellingenscherm)
+  pickup: {
+    prompt: 'Ophalen in Uden? Geef door wanneer je komt',
+    confirmed: 'Je komt {{date}} ✓',
+    plusMore: '+{{count}}',
+    rsvpSuccess: 'Doorgegeven — tot {{date}}!',
+    rsvpCanceled: 'Afgemeld voor {{date}}',
+    rsvpError: 'Doorgeven is niet gelukt, probeer het opnieuw',
+    address: 'Prior van Millstraat 2, Uden',
+    route: 'Route',
   },
 };

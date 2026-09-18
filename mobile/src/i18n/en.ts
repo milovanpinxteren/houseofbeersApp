@@ -365,7 +365,7 @@ export default {
     tasteProfileSubtitle: 'Your beer preferences',
     favorites: 'Favorites',
     favoritesSubtitle: 'Beers you want to try',
-    orders: 'Order History',
+    orders: 'Orders',
     viewOrderHistory: 'View your past orders',
     linkShopifyFirst: 'Link Shopify to view orders',
     connectUntappd: 'Connect Untappd',
@@ -704,5 +704,17 @@ export default {
     codeExpires: 'Valid until {{date}}',
     redeemCta: 'Use this code',
     redeemHint: 'We open the shop with your code already applied.',
+  },
+
+  // Pickup RSVP (orders screen)
+  pickup: {
+    prompt: "Picking up in Uden? Let us know when you're coming",
+    confirmed: "You're coming {{date}} ✓",
+    plusMore: '+{{count}}',
+    rsvpSuccess: 'Noted — see you {{date}}!',
+    rsvpCanceled: 'Canceled for {{date}}',
+    rsvpError: "That didn't work, please try again",
+    address: 'Prior van Millstraat 2, Uden',
+    route: 'Route',
   },
 };

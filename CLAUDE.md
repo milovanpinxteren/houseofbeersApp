@@ -283,6 +283,12 @@ remains only as historical reference.
 - [x] Campagne Studio at `/admin/campaign-studio/`: builder with live NL rule sentence + Shopify product search, async preview with near-misses, funnel monitor, CSV export
 - [x] Mobile: RaffleSection cards on Home + Loyalty, replayable draw-reveal animation, `/raffle/{id}` push deep link, full funnel tracking (entered → notified → opened → watched → redeemed)
 
+### Phase 12: Pickup RSVP ✅
+- [x] Members announce their store pickup day on the orders screen (replaces the WhatsApp poll + hand-written warehouse list)
+- [x] `fulfillment/` backend app: schedule (Fri/Sat seeded), closures, RSVPs, action log with hob-sync health
+- [x] Server-to-server push to hob sets the warehouse queue (`Afhalen`) + priority (see Pickup RSVP section)
+- [x] Orders screen renamed "Bestelgeschiedenis" → "Bestellingen"; `/pickup` deep link
+
 ---
 
 ## Current App Structure
@@ -291,6 +297,7 @@ remains only as historical reference.
 - `users/` - User model, authentication, Shopify service, account deletion
 - `loyalty/` - Points rules, rewards, balances, transactions, redemptions, notifications, campaigns & raffles, Campagne Studio, Celery sync tasks
 - `recommendations/` - Beer recommendations, Untappd integration, favorites, taste profiles
+- `fulfillment/` - Pickup RSVP (schedule, closures, RSVPs, hob sync); future home of other user fulfillment requests ("ship my orders", "check my orders")
 
 ### Mobile Tabs (redesigned Aug 2026)
 - **Home** - Editorial greeting, notifications, events, quick links to Ontdek/Loyalty
@@ -431,6 +438,13 @@ Key design decisions (`loyalty/models_grants.py`, `loyalty/services/grants.py`):
 | POST | `/api/recommendations/favorites/` | Add beer to favorites |
 | DELETE | `/api/recommendations/favorites/<id>/` | Remove from favorites |
 | POST | `/api/recommendations/favorites/cart-link/` | Generate Shopify cart URL |
+
+### Pickup
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/pickup/days/` | Offered pickup days (next 14 days) with the caller's RSVP status |
+| POST | `/api/pickup/rsvp/` | Announce pickup for a date (`{date}` → `{date, rsvp: true}`) |
+| POST | `/api/pickup/rsvp/cancel/` | Withdraw a pickup RSVP (`{date}` → `{date, rsvp: false}`) |
 
 ### Web Pages
 | URL | Description |
@@ -754,6 +768,63 @@ Staff-only custom admin at **`/admin/campaign-studio/`** (`loyalty/studio_views.
 - `backend/notifications/` — `raffle` kind + preference category (migration 0007)
 - `mobile/src/api/raffles.ts`, `mobile/src/components/RaffleCard.tsx`, `RaffleReveal.tsx`, `mobile/app/(tabs)/(profile)/raffle/[id].tsx`, `mobile/app/raffle/[id].tsx`
 - Tests: `backend/loyalty/test_campaigns.py`, `test_raffles.py`, `test_studio.py`, `test_campaign_e2e.py`
+
+---
+
+## Pickup RSVP (Afhalen)
+
+Members announce on the orders screen which store-open day (Fri 10:00–20:00 /
+Sat 10:00–17:00, Prior van Millstraat 2 Uden) they'll come pick up their
+order — replaces the occasional WhatsApp poll whose answers were hand-copied
+for the warehouse. Backend app `fulfillment/`, deliberately also the future
+home of other user fulfillment requests ("ship my orders", "check my
+orders"). Design rule: NO automation — no beat tasks, no auto queue
+clearing, no priority recalculation; staff clear the hob queue manually
+during pickup, exactly as before.
+
+- **Models** (`backend/fulfillment/models.py`): `PickupSchedule` (weekday +
+  open/close times; Fri/Sat seeded by migration 0002), `PickupClosure`
+  (date + reason removes a day), `PickupRSVP` (unique user+date,
+  active/cancelled, re-RSVP reactivates the same row), `PickupActionLog` —
+  one row per rsvp/cancel action, doubling as usage log AND hob-sync health
+  (`sync_status` pending/success/failed/skipped, attempts, response
+  snippet) so a broken hob link is visible in the appadmin.
+- **API**: `GET /api/pickup/days/` = next 14 days with an active schedule
+  minus closures; today is dropped once local time ≥ close_time
+  (TIME_ZONE is Europe/Amsterdam = store time). The POSTs are idempotent
+  and return real JSON 200s (no 204s). Analytics events `pickup_rsvp` /
+  `pickup_rsvp_cancel`.
+- **hob sync** (`fulfillment/services/hob_sync.py` + Celery task, 3 retries,
+  inline fallback without broker): every action row is POSTed to hob at
+  `{HOB_SERVICE_URL}/api/service/app/pickup-rsvp/`, HMAC-SHA256 over the
+  raw body (`X-Signature: sha256=<hex>`) — the outbound mirror of the
+  inbound loyalty service API. Settings `HOB_SERVICE_URL` +
+  `HOB_SERVICE_HMAC_SECRET`; either empty → rows are `skipped` and RSVPs
+  still work. Success requires 2xx AND `{"success": true}`; hob's
+  `customer_found: false` is a success (no retry loop for unlinked users).
+- **hob side** (hob repo `apps/order_management/app_service.py`): rsvp sets
+  customer queue `Afhalen` + priority `max(current, 80)` (metafield-first
+  via the shared `customer_queue.py` write path, audit row username `app`);
+  cancel reverts ONLY its own values (queue still `Afhalen`, priority
+  exactly 80 → back to auto). The `Afhalen` choice must exist in Shopify's
+  `custom.queue` customer-metafield definition. Secret env on hob:
+  `APP_SERVICE_HMAC_SECRET` (same value as the app's
+  `HOB_SERVICE_HMAC_SECRET`).
+- **Admin**: schedule + closures editable; RSVP list with CSV export
+  (`afhaal-aanmeldingen.csv` — the warehouse list, until the hob queue
+  makes it redundant); action log read-only with an "Opnieuw
+  synchroniseren met hob" action to re-push after an outage.
+- **Mobile**: `PickupSection` (`mobile/src/components/PickupSection.tsx`) at
+  the top of the orders screen (title renamed Bestelgeschiedenis →
+  "Bestellingen"): quiet collapsed Card row; expanded = one-tap toggle
+  chips per day ("vr 26 sep · 10:00–20:00") + address/route link; renders
+  NOTHING on empty/error (the normal state for the ~80% delivery
+  members). Deep link `/pickup` (`mobile/app/pickup.tsx`) opens the orders
+  screen with the section expanded — target for "geef het door in de app"
+  WhatsApp/push nudges. API layer `mobile/src/api/pickup.ts`; i18n under
+  `pickup.*`.
+- Tests: `backend/fulfillment/tests.py` (26); hob
+  `apps/order_management/tests_app_service.py` (31).
 
 ---
 

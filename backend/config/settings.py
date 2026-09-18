@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'community',
     'events',
     'notifications',
+    'fulfillment',
 ]
 
 MIDDLEWARE = [
@@ -186,6 +187,13 @@ RECOMMENDER_API_KEY = config('RECOMMENDER_API_KEY', default='')
 # Service-to-service API (/api/service/...) — shared secret for HMAC-signed
 # requests from trusted internal callers (hob). Empty = API disabled.
 SERVICE_API_HMAC_SECRET = config('SERVICE_API_HMAC_SECRET', default='')
+
+# Outbound service calls TO hob (pickup RSVP sync — hob sets the warehouse
+# queue/priority). Same HMAC convention as the inbound API above, but this
+# is our signature on requests we send. Either value empty = sync disabled
+# (log rows get sync_status='skipped'; RSVPs still succeed).
+HOB_SERVICE_URL = config('HOB_SERVICE_URL', default='')
+HOB_SERVICE_HMAC_SECRET = config('HOB_SERVICE_HMAC_SECRET', default='')
 
 # Email SMTP (Hostinger)
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'

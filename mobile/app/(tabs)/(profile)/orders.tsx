@@ -9,12 +9,14 @@ import {
   RefreshControl,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useLocalSearchParams } from 'expo-router';
 import { useAuth } from '../../../src/context/AuthContext';
 import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
 import { getOrders, Order } from '../../../src/api/orders';
 import { colors, spacing, borderRadius, fonts } from '../../../src/theme/colors';
 import { EmptyState, SkeletonCard } from '../../../src/components/ui';
+import { PickupSection } from '../../../src/components/PickupSection';
 import { tokenize, highlightRanges } from '../../../src/utils/fuzzySearch';
 import {
   buildOrderSearchIndex,
@@ -113,6 +115,8 @@ function FilterChip({
 export default function OrdersScreen() {
   const { user } = useAuth();
   const { language } = useLanguage();
+  // /pickup deep link lands here with ?pickup=1 → open the RSVP section.
+  const { pickup } = useLocalSearchParams<{ pickup?: string }>();
   const [orders, setOrders] = useState<Order[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -126,6 +130,8 @@ export default function OrdersScreen() {
   // While searching or filtering, matching items are shown automatically; this
   // tracks orders where the user asked to see the full item list instead.
   const [showAllItemsFor, setShowAllItemsFor] = useState<Set<number>>(new Set());
+  // Bumped on pull-to-refresh so the pickup section refetches with the orders.
+  const [pickupRefresh, setPickupRefresh] = useState(0);
 
   useEffect(() => {
     if (user?.shopify_customer_id) {
@@ -151,6 +157,7 @@ export default function OrdersScreen() {
 
   function handleRefresh() {
     setIsRefreshing(true);
+    setPickupRefresh((n) => n + 1);
     loadOrders();
   }
 
@@ -441,20 +448,33 @@ export default function OrdersScreen() {
     );
   }
 
+  const pickupSection = (
+    <PickupSection
+      language={language}
+      refreshSignal={pickupRefresh}
+      autoExpand={pickup != null}
+      style={styles.pickupSection}
+    />
+  );
+
   if (orders.length === 0) {
     return (
-      <View style={styles.centerContainer}>
-        <EmptyState
-          icon="receipt-outline"
-          title={t('orders.noOrdersTitle')}
-          message={t('orders.noOrdersText')}
-        />
+      <View style={styles.container}>
+        {pickupSection}
+        <View style={styles.centerContainer}>
+          <EmptyState
+            icon="receipt-outline"
+            title={t('orders.noOrdersTitle')}
+            message={t('orders.noOrdersText')}
+          />
+        </View>
       </View>
     );
   }
 
   return (
     <View style={styles.container}>
+      {pickupSection}
       <View style={styles.searchBar}>
         <Ionicons name="search" size={18} color={colors.textMuted} />
         <TextInput
@@ -777,6 +797,10 @@ const styles = StyleSheet.create({
   },
   listContent: {
     padding: spacing.md,
+  },
+  pickupSection: {
+    marginHorizontal: spacing.md,
+    marginTop: spacing.md,
   },
   searchBar: {
     flexDirection: 'row',
