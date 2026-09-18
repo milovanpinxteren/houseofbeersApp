@@ -804,16 +804,32 @@ during pickup, exactly as before.
   which works because metafield set AND delete both bump the customer's
   `updatedAt`, verified live 2026-09-18). There is deliberately NO app↔hob
   connection. rsvp: queue → `Afhalen`, priority → `max(current, 80)` —
-  never lowers a staff value. cancel: DELETES the metafields, and only
-  when they are still exactly ours (queue `Afhalen`, priority 80) —
-  deleting priority makes hob's sync fall back to its auto-calculation
-  (hob keeps Shopify priority only when >50), so the app never needs
-  hob's formula. Idempotent read-modify-write; unlinked users (no
-  `shopify_customer_id`) → `skipped`; customer-not-found or write error →
-  `failed` + task retry. ShopifyService methods:
-  `get_customer_queue_priority()`, `set_customer_metafield()`,
+  never lowers a staff value. Idempotent read-modify-write; unlinked
+  users (no `shopify_customer_id`) → `skipped`; customer-not-found or
+  write error → `failed` + task retry. ShopifyService methods:
+  `get_customer_pickup_state()`, `set_customer_metafield()`,
   `delete_customer_metafield()` (metafieldsDelete — the singular
   metafieldDelete does not exist in this API version).
+- **`custom.pickup_prior` snapshot**: staff (via hob) also set
+  queue/priority, so the FIRST rsvp of a cycle captures the pre-RSVP
+  values in a single-slot JSON metafield on the Shopify customer
+  (`{"queue", "priority", "captured_at"}`) — captured BEFORE our writes,
+  so retries can never record our own Afhalen/80 as "prior"; an existing
+  snapshot is never overwritten. It lives on Shopify so BOTH systems
+  restore from it: (a) the app on cancel of the user's LAST active
+  upcoming RSVP (earlier de-selects with other dates active touch
+  nothing) — each field restored only while still exactly ours (queue
+  `Afhalen` / priority 80; staff changes made mid-RSVP win), empty prior
+  = delete (hob then falls back to auto-priority — the app never needs
+  hob's formula), snapshot deleted last so a failed restore retries with
+  it intact; (b) hob when staff move the customer OUT of the Afhalen
+  queue after the pickup (hob repo `apps/order_management/
+  pickup_prior.py`, hooked into `update_customer_queue`) — restores the
+  prior PRIORITY only (staff's explicit new queue choice stands),
+  best-effort, then drops the snapshot. It is one object or absent,
+  never a history (~80 bytes; history lives in PickupActionLog). Full
+  cycle verified live 2026-09-18: 70 → rsvp (Afhalen/80 + snapshot) →
+  staff clear → 70 restored, snapshot dropped.
 - **Admin**: schedule + closures editable; RSVP list with CSV export
   (`afhaal-aanmeldingen.csv` — the warehouse list, until the hob queue
   makes it redundant); action log read-only with an "Opnieuw

@@ -1,3 +1,4 @@
+import json
 import logging
 import requests
 from typing import Optional
@@ -1253,28 +1254,32 @@ class ShopifyService:
 
     # ============ Customer Metafields (warehouse queue/priority) ============
 
-    def get_customer_queue_priority(self, customer_id) -> Optional[dict]:
+    def get_customer_pickup_state(self, customer_id) -> Optional[dict]:
         """
         Read the warehouse queue metafields (`custom.queue` /
-        `custom.priority`) from a customer. Shopify is the source of truth
-        for these values (hob reads them from Shopify too); the pickup RSVP
+        `custom.priority`) plus the pickup snapshot (`custom.pickup_prior`,
+        JSON) from a customer in one query. Shopify is the source of truth
+        for all three (hob reads them from Shopify too); the pickup RSVP
         sync reads them here before deciding what to write.
 
         Args:
             customer_id: Shopify customer ID (numeric, not GID)
 
         Returns:
-            {'queue': str|None, 'priority': int|None} — each None when the
-            metafield is absent (a non-integer priority value also yields
-            None). Returns None when the request fails OR the customer does
-            not exist on Shopify; callers cannot distinguish the two and
-            should treat None as "no answer", never as "no metafields".
+            {'queue': str|None, 'priority': int|None, 'pickup_prior':
+            dict|None} — each None when the metafield is absent (a
+            non-integer priority or unparseable pickup_prior also yields
+            None for that key). Returns None when the request fails OR the
+            customer does not exist on Shopify; callers cannot distinguish
+            the two and should treat None as "no answer", never as "no
+            metafields".
         """
         query = """
-        query getCustomerQueuePriority($id: ID!) {
+        query getCustomerPickupState($id: ID!) {
             customer(id: $id) {
                 queue: metafield(namespace: "custom", key: "queue") { value }
                 priority: metafield(namespace: "custom", key: "priority") { value }
+                pickupPrior: metafield(namespace: "custom", key: "pickup_prior") { value }
             }
         }
         """
@@ -1294,7 +1299,25 @@ class ShopifyService:
             priority = int(raw_priority)
         except (TypeError, ValueError):
             priority = None
-        return {"queue": queue, "priority": priority}
+
+        raw_prior = (customer.get("pickupPrior") or {}).get("value")
+        pickup_prior = None
+        if raw_prior:
+            try:
+                parsed = json.loads(raw_prior)
+                if isinstance(parsed, dict):
+                    pickup_prior = parsed
+                else:
+                    logger.warning(
+                        f"pickup_prior on customer {customer_id} is not an "
+                        f"object: {raw_prior[:100]}"
+                    )
+            except ValueError:
+                logger.warning(
+                    f"Unparseable pickup_prior on customer {customer_id}: "
+                    f"{raw_prior[:100]}"
+                )
+        return {"queue": queue, "priority": priority, "pickup_prior": pickup_prior}
 
     def set_customer_metafield(
         self, customer_id, key: str, value: str, mf_type: str
