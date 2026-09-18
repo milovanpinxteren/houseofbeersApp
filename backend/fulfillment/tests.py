@@ -1,10 +1,11 @@
 """Tests for the pickup RSVP feature: day generation, RSVP/cancel flows,
 the direct Shopify metafield sync, and the sync task."""
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from fulfillment.models import (
@@ -371,7 +372,13 @@ class ShopifySyncPushTest(PickupBaseTest):
     lowering a priority, never touching staff-set values."""
 
     def make_log(self, action='rsvp'):
-        rsvp = PickupRSVP.objects.create(user=self.user, date=date(2026, 9, 18))
+        # Mirror production: the view flips the RSVP row to 'cancelled'
+        # BEFORE dispatching a cancel sync, so the guard against other
+        # active RSVPs never counts the row being cancelled itself.
+        rsvp = PickupRSVP.objects.create(
+            user=self.user, date=date(2026, 9, 18),
+            status='cancelled' if action == 'cancel' else 'active',
+        )
         return PickupActionLog.objects.create(
             user=self.user, rsvp=rsvp, action=action,
             pickup_date=date(2026, 9, 18),
@@ -487,6 +494,31 @@ class ShopifySyncPushTest(PickupBaseTest):
         service.delete_customer_metafield.assert_called_once_with(
             123456789, 'queue',
         )
+
+    def test_cancel_with_other_active_rsvp_leaves_shopify_untouched(self):
+        # Coming Friday AND Saturday; de-selecting Friday must keep the
+        # customer in the queue for Saturday: zero Shopify calls.
+        log = self.make_log(action='cancel')
+        upcoming = timezone.localdate() + timedelta(days=1)
+        PickupRSVP.objects.create(user=self.user, date=upcoming)
+        service = self.mock_service(queue='Afhalen', priority=80)
+        (status, text), mock_cls = self.push(log, service)
+
+        self.assertEqual(status, 'success')
+        self.assertIn('other active RSVPs remain', text)
+        mock_cls.assert_not_called()
+
+    def test_cancel_with_only_past_active_rsvp_still_reverts(self):
+        # A spent RSVP (date passed, never cancelled) must not block the
+        # revert: its queue entry is staff's to clear during pickup.
+        log = self.make_log(action='cancel')
+        past = timezone.localdate() - timedelta(days=7)
+        PickupRSVP.objects.create(user=self.user, date=past)
+        service = self.mock_service(queue='Afhalen', priority=80)
+        (status, _), _ = self.push(log, service)
+
+        self.assertEqual(status, 'success')
+        self.assertEqual(service.delete_customer_metafield.call_count, 2)
 
     def test_customer_not_found_is_failed_for_retry(self):
         log = self.make_log()

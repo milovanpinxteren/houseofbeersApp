@@ -12,13 +12,18 @@ Semantics are read-modify-write and idempotent:
 - rsvp:   queue -> 'Afhalen' (only if different), priority ->
           max(current, 80) (only if different — an existing HIGHER priority
           is never lowered).
-- cancel: delete the queue metafield only if it is still exactly 'Afhalen',
-          delete the priority metafield only if it is still exactly 80 — a
-          staff-set queue or priority is never touched.
+- cancel: ONLY when the user has no other active upcoming RSVP (a member
+          coming both Friday and Saturday who de-selects Friday must stay in
+          the queue for Saturday). Then: delete the queue metafield only if
+          it is still exactly 'Afhalen', delete the priority metafield only
+          if it is still exactly 80 — a staff-set queue or priority is never
+          touched.
 
 A repeat call after success performs zero writes and still reports success.
 """
 import logging
+
+from django.utils import timezone
 
 from users.services.shopify import ShopifyService
 
@@ -53,6 +58,24 @@ def _customer_id(user):
         return None
 
 
+def _has_other_active_rsvps(user):
+    """
+    True while the user still has an active RSVP for today or later. Past
+    dates don't count: an RSVP whose day has passed is spent, and per the
+    no-automation rule its queue entry is staff's to clear — it should not
+    keep a fresh cancel from reverting Shopify. (The row being cancelled
+    was already flipped to 'cancelled' by the view before dispatch, so no
+    exclusion is needed here.)
+    """
+    from fulfillment.models import PickupRSVP
+
+    return PickupRSVP.objects.filter(
+        user=user,
+        status=PickupRSVP.STATUS_ACTIVE,
+        date__gte=timezone.localdate(),
+    ).exists()
+
+
 def push_pickup_action(log) -> tuple:
     """
     Apply one PickupActionLog row to the customer's Shopify queue/priority
@@ -74,6 +97,13 @@ def _push_pickup_action(log) -> tuple:
             'skipped',
             'No linked Shopify customer (shopify_customer_id empty or '
             'non-numeric); nothing to sync.',
+        )
+
+    if log.action == 'cancel' and _has_other_active_rsvps(log.user):
+        return (
+            'success',
+            f'Customer {customer_id}: other active RSVPs remain, '
+            f'Shopify untouched',
         )
 
     service = ShopifyService()
