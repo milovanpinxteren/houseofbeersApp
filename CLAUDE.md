@@ -830,6 +830,16 @@ during pickup, exactly as before.
   never a history (~80 bytes; history lives in PickupActionLog). Full
   cycle verified live 2026-09-18: 70 → rsvp (Afhalen/80 + snapshot) →
   staff clear → 70 restored, snapshot dropped.
+- **`custom.pickup_date`** (Shopify type `date`): the earliest active
+  upcoming RSVP date, reconciled on EVERY sync action (also on the
+  guarded cancel that leaves queue/priority alone — cancelling Friday
+  with Saturday still active moves the date to Saturday), deleted when
+  no upcoming RSVP remains. Purely ours: never snapshotted/restored;
+  hob deletes it together with the snapshot when staff finish the
+  pickup. hob syncs it into `ShopifyCustomer.pickup_date` and the
+  warehouse customer list shows/sorts on it (`sort=pickup_date`, nulls
+  last, priority tie-break) — the warehouse view is
+  `/orders/customers/list/?queue=Afhalen&sort=pickup_date`.
 - **Admin**: schedule + closures editable; RSVP list with CSV export
   (`afhaal-aanmeldingen.csv` — the warehouse list, until the hob queue
   makes it redundant); action log read-only with an "Opnieuw

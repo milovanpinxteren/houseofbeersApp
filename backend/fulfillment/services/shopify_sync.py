@@ -34,6 +34,12 @@ Semantics are read-modify-write and idempotent:
           snapshot itself is deleted. Without a snapshot (cycle started
           before this feature existed) our own values are simply deleted.
 
+Both actions also reconcile `custom.pickup_date` (Shopify type `date`):
+the earliest active upcoming RSVP date, deleted when none remains. hob
+shows/sorts the warehouse customer list on it. Purely ours — never
+snapshotted or restored; hob's staff-clear hook deletes it with the
+snapshot when the pickup is finished.
+
 A repeat call after success performs zero writes and still reports success.
 """
 import json
@@ -59,9 +65,14 @@ PICKUP_PRIORITY = 80
 QUEUE_KEY = 'queue'
 PRIORITY_KEY = 'priority'
 PRIOR_KEY = 'pickup_prior'
+# The earliest upcoming day the member announced; hob shows/sorts the
+# warehouse customer list on it. Purely ours: reconciled on every sync
+# action, deleted when no upcoming RSVP remains, never snapshotted.
+DATE_KEY = 'pickup_date'
 QUEUE_TYPE = 'single_line_text_field'
 PRIORITY_TYPE = 'number_integer'
 PRIOR_TYPE = 'json'
+DATE_TYPE = 'date'
 
 # Stored response texts are capped so the log table cannot bloat.
 MAX_RESPONSE_CHARS = 2000
@@ -95,6 +106,48 @@ def _has_other_active_rsvps(user):
     ).exists()
 
 
+def _next_pickup_date(user):
+    """
+    The earliest active upcoming RSVP date as 'YYYY-MM-DD', or None. This
+    is what custom.pickup_date must say after the current action.
+    """
+    from fulfillment.models import PickupRSVP
+
+    earliest = (
+        PickupRSVP.objects.filter(
+            user=user,
+            status=PickupRSVP.STATUS_ACTIVE,
+            date__gte=timezone.localdate(),
+        )
+        .order_by('date')
+        .values_list('date', flat=True)
+        .first()
+    )
+    return earliest.isoformat() if earliest else None
+
+
+def _reconcile_pickup_date(service, customer_id, user, current_date, changes):
+    """
+    Bring custom.pickup_date in line with the user's RSVP rows: set the
+    earliest upcoming date, or delete the metafield when none remains.
+    Returns False on a Shopify failure (caller reports 'failed').
+    """
+    desired = _next_pickup_date(user)
+    if desired == current_date:
+        return True
+    if desired:
+        if service.set_customer_metafield(
+            customer_id, DATE_KEY, desired, DATE_TYPE,
+        ) is None:
+            return False
+        changes.append(f'pickup_date {current_date} -> {desired}')
+    else:
+        if not service.delete_customer_metafield(customer_id, DATE_KEY):
+            return False
+        changes.append(f'pickup_date {current_date} removed')
+    return True
+
+
 def push_pickup_action(log) -> tuple:
     """
     Apply one PickupActionLog row to the customer's Shopify queue/priority
@@ -118,13 +171,6 @@ def _push_pickup_action(log) -> tuple:
             'non-numeric); nothing to sync.',
         )
 
-    if log.action == 'cancel' and _has_other_active_rsvps(log.user):
-        return (
-            'success',
-            f'Customer {customer_id}: other active RSVPs remain, '
-            f'Shopify untouched',
-        )
-
     service = ShopifyService()
 
     # Read current values first. A None here is either a transient Shopify
@@ -138,12 +184,26 @@ def _push_pickup_action(log) -> tuple:
             f'(Shopify error or customer not found)',
         )
 
+    if log.action == 'cancel' and _has_other_active_rsvps(log.user):
+        # Still coming on another day: queue/priority/snapshot stay, but
+        # pickup_date may move (e.g. Friday cancelled, Saturday remains).
+        changes = []
+        if not _reconcile_pickup_date(
+            service, customer_id, log.user, current.get('pickup_date'), changes,
+        ):
+            return (
+                'failed',
+                f'Updating pickup_date failed for customer {customer_id}',
+            )
+        changes.append('other active RSVPs remain, queue untouched')
+        return _summary(customer_id, changes)
+
     if log.action == 'rsvp':
-        return _apply_rsvp(service, customer_id, current)
-    return _apply_cancel(service, customer_id, current)
+        return _apply_rsvp(service, customer_id, log.user, current)
+    return _apply_cancel(service, customer_id, log.user, current)
 
 
-def _apply_rsvp(service, customer_id, current) -> tuple:
+def _apply_rsvp(service, customer_id, user, current) -> tuple:
     queue = current.get('queue')
     priority = current.get('priority')
     prior = current.get('pickup_prior')
@@ -193,10 +253,18 @@ def _apply_rsvp(service, customer_id, current) -> tuple:
             )
         changes.append(f'priority {priority} -> {target_priority}')
 
+    if not _reconcile_pickup_date(
+        service, customer_id, user, current.get('pickup_date'), changes,
+    ):
+        return (
+            'failed',
+            f'Updating pickup_date failed for customer {customer_id}',
+        )
+
     return _summary(customer_id, changes)
 
 
-def _apply_cancel(service, customer_id, current) -> tuple:
+def _apply_cancel(service, customer_id, user, current) -> tuple:
     queue = current.get('queue')
     priority = current.get('priority')
     prior = current.get('pickup_prior')
@@ -241,6 +309,14 @@ def _apply_cancel(service, customer_id, current) -> tuple:
                 f'Restoring priority failed for customer {customer_id}',
             )
         changes.append(desc)
+
+    if not _reconcile_pickup_date(
+        service, customer_id, user, current.get('pickup_date'), changes,
+    ):
+        return (
+            'failed',
+            f'Updating pickup_date failed for customer {customer_id}',
+        )
 
     # Drop the snapshot last: if a restore above failed we returned 'failed'
     # with the snapshot intact, so the retry can finish the job.

@@ -220,18 +220,20 @@ class CustomerMetafieldMethodsTest(TestCase):
 
     # ---- get_customer_pickup_state ----
 
-    def test_get_pickup_state_reads_all_three_metafields(self, mock_gql):
+    def test_get_pickup_state_reads_all_four_metafields(self, mock_gql):
         mock_gql.return_value = {
             'customer': {
                 'queue': {'value': 'Afhalen'},
                 'priority': {'value': '80'},
                 'pickupPrior': {'value': '{"queue": "Spoed", "priority": 70}'},
+                'pickupDate': {'value': '2026-09-26'},
             }
         }
         result = self.service.get_customer_pickup_state(123456789)
         self.assertEqual(result, {
             'queue': 'Afhalen', 'priority': 80,
             'pickup_prior': {'queue': 'Spoed', 'priority': 70},
+            'pickup_date': '2026-09-26',
         })
 
         query, variables = mock_gql.call_args.args
@@ -241,15 +243,22 @@ class CustomerMetafieldMethodsTest(TestCase):
         self.assertIn(
             'metafield(namespace: "custom", key: "pickup_prior")', query,
         )
+        self.assertIn(
+            'metafield(namespace: "custom", key: "pickup_date")', query,
+        )
 
     def test_get_pickup_state_absent_metafields_are_none(self, mock_gql):
         mock_gql.return_value = {
-            'customer': {'queue': None, 'priority': None, 'pickupPrior': None}
+            'customer': {
+                'queue': None, 'priority': None,
+                'pickupPrior': None, 'pickupDate': None,
+            }
         }
         result = self.service.get_customer_pickup_state(123456789)
-        self.assertEqual(
-            result, {'queue': None, 'priority': None, 'pickup_prior': None},
-        )
+        self.assertEqual(result, {
+            'queue': None, 'priority': None,
+            'pickup_prior': None, 'pickup_date': None,
+        })
 
     def test_get_pickup_state_non_int_priority_is_none(self, mock_gql):
         mock_gql.return_value = {
@@ -257,12 +266,14 @@ class CustomerMetafieldMethodsTest(TestCase):
                 'queue': {'value': 'Spoed'},
                 'priority': {'value': 'hoog'},
                 'pickupPrior': None,
+                'pickupDate': None,
             }
         }
         result = self.service.get_customer_pickup_state(123456789)
-        self.assertEqual(
-            result, {'queue': 'Spoed', 'priority': None, 'pickup_prior': None},
-        )
+        self.assertEqual(result, {
+            'queue': 'Spoed', 'priority': None,
+            'pickup_prior': None, 'pickup_date': None,
+        })
 
     def test_get_pickup_state_corrupt_prior_is_none(self, mock_gql):
         for raw in ['not json', '[1, 2]', '"just a string"']:
@@ -397,26 +408,33 @@ class ShopifySyncPushTest(PickupBaseTest):
     """push_pickup_action semantics: read-modify-write, idempotent, never
     lowering a priority, never touching staff-set values."""
 
+    @property
+    def pickup_day(self):
+        """A dynamic upcoming pickup day: sync logic compares RSVP rows
+        against the REAL local date, so fixed dates would rot."""
+        return timezone.localdate() + timedelta(days=2)
+
     def make_log(self, action='rsvp'):
         # Mirror production: the view flips the RSVP row to 'cancelled'
         # BEFORE dispatching a cancel sync, so the guard against other
         # active RSVPs never counts the row being cancelled itself.
         rsvp = PickupRSVP.objects.create(
-            user=self.user, date=date(2026, 9, 18),
+            user=self.user, date=self.pickup_day,
             status='cancelled' if action == 'cancel' else 'active',
         )
         return PickupActionLog.objects.create(
             user=self.user, rsvp=rsvp, action=action,
-            pickup_date=date(2026, 9, 18),
+            pickup_date=self.pickup_day,
         )
 
     def mock_service(self, queue=None, priority=None, prior=None,
-                     current=Ellipsis):
+                     pickup_date=None, current=Ellipsis):
         """A ShopifyService mock with a canned read and successful writes."""
         service = MagicMock()
         if current is Ellipsis:
             current = {
                 'queue': queue, 'priority': priority, 'pickup_prior': prior,
+                'pickup_date': pickup_date,
             }
         service.get_customer_pickup_state.return_value = current
         service.set_customer_metafield.return_value = {'id': 'x', 'value': 'y'}
@@ -464,7 +482,7 @@ class ShopifySyncPushTest(PickupBaseTest):
         calls = self.set_calls(service)
         # Capture-before-write: the snapshot MUST be the first write, so a
         # retry can never record our own values as "prior".
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 4)
         self.assertEqual(calls[0][0], 'pickup_prior')
         self.assertEqual(
             {'queue': None, 'priority': None},
@@ -473,6 +491,7 @@ class ShopifySyncPushTest(PickupBaseTest):
         )
         self.assertEqual(calls[1], ('queue', 'Afhalen'))
         self.assertEqual(calls[2], ('priority', '80'))
+        self.assertEqual(calls[3], ('pickup_date', self.pickup_day.isoformat()))
         service.delete_customer_metafield.assert_not_called()
         self.assertIn("queue None -> 'Afhalen'", text)
         self.assertIn('priority None -> 80', text)
@@ -492,6 +511,7 @@ class ShopifySyncPushTest(PickupBaseTest):
         self.assertEqual(snapshot['priority'], 70)
         self.assertEqual(calls[1], ('queue', 'Afhalen'))
         self.assertEqual(calls[2], ('priority', '80'))
+        self.assertEqual(calls[3], ('pickup_date', self.pickup_day.isoformat()))
 
     def test_rsvp_existing_prior_is_never_overwritten(self):
         # Second date / retry / unfinished earlier cycle: the snapshot in
@@ -500,6 +520,7 @@ class ShopifySyncPushTest(PickupBaseTest):
         service = self.mock_service(
             queue='Afhalen', priority=80,
             prior={'queue': 'Spoed', 'priority': 70},
+            pickup_date=self.pickup_day.isoformat(),
         )
         (status, text), _ = self.push(log, service)
 
@@ -513,10 +534,10 @@ class ShopifySyncPushTest(PickupBaseTest):
         (status, _), _ = self.push(log, service)
 
         self.assertEqual(status, 'success')
-        # Snapshot + queue are written, but priority 90 stays (max(90, 80)).
+        # Snapshot + queue + date are written, but priority 90 stays.
         self.assertEqual(
             [k for k, _ in self.set_calls(service)],
-            ['pickup_prior', 'queue'],
+            ['pickup_prior', 'queue', 'pickup_date'],
         )
 
     def test_rsvp_raises_low_priority_to_80(self):
@@ -524,6 +545,7 @@ class ShopifySyncPushTest(PickupBaseTest):
         service = self.mock_service(
             queue='Afhalen', priority=30,
             prior={'queue': None, 'priority': 30},
+            pickup_date=self.pickup_day.isoformat(),
         )
         (status, _), _ = self.push(log, service)
 
@@ -539,6 +561,7 @@ class ShopifySyncPushTest(PickupBaseTest):
         service = self.mock_service(
             queue='Afhalen', priority=80,
             prior={'queue': 'Spoed', 'priority': 70},
+            pickup_date=self.pickup_day.isoformat(),
         )
         (status, text), _ = self.push(log, service)
 
@@ -546,7 +569,9 @@ class ShopifySyncPushTest(PickupBaseTest):
         self.assertEqual(
             self.set_calls(service), [('queue', 'Spoed'), ('priority', '70')],
         )
-        self.assertEqual(self.delete_calls(service), ['pickup_prior'])
+        self.assertEqual(
+            self.delete_calls(service), ['pickup_date', 'pickup_prior'],
+        )
         self.assertIn("queue restored to 'Spoed'", text)
         self.assertIn('priority restored to 70', text)
 
@@ -556,23 +581,30 @@ class ShopifySyncPushTest(PickupBaseTest):
         service = self.mock_service(
             queue='Afhalen', priority=80,
             prior={'queue': None, 'priority': None},
+            pickup_date=self.pickup_day.isoformat(),
         )
         (status, _), _ = self.push(log, service)
 
         self.assertEqual(status, 'success')
         service.set_customer_metafield.assert_not_called()
         self.assertEqual(
-            self.delete_calls(service), ['queue', 'priority', 'pickup_prior'],
+            self.delete_calls(service),
+            ['queue', 'priority', 'pickup_date', 'pickup_prior'],
         )
 
     def test_cancel_without_snapshot_falls_back_to_delete(self):
         # Cycle started before the snapshot feature existed.
         log = self.make_log(action='cancel')
-        service = self.mock_service(queue='Afhalen', priority=80)
+        service = self.mock_service(
+            queue='Afhalen', priority=80,
+            pickup_date=self.pickup_day.isoformat(),
+        )
         (status, _), _ = self.push(log, service)
 
         self.assertEqual(status, 'success')
-        self.assertEqual(self.delete_calls(service), ['queue', 'priority'])
+        self.assertEqual(
+            self.delete_calls(service), ['queue', 'priority', 'pickup_date'],
+        )
         service.set_customer_metafield.assert_not_called()
 
     def test_cancel_leaves_staff_values_untouched(self):
@@ -604,18 +636,40 @@ class ShopifySyncPushTest(PickupBaseTest):
         service.set_customer_metafield.assert_not_called()
         self.assertEqual(self.delete_calls(service), ['queue', 'pickup_prior'])
 
-    def test_cancel_with_other_active_rsvp_leaves_shopify_untouched(self):
-        # Coming Friday AND Saturday; de-selecting Friday must keep the
-        # customer in the queue for Saturday: zero Shopify calls.
+    def test_cancel_with_other_active_rsvp_only_moves_pickup_date(self):
+        # Coming on two days; de-selecting the later one must keep
+        # queue/priority/snapshot but move pickup_date to the remaining day.
         log = self.make_log(action='cancel')
         upcoming = timezone.localdate() + timedelta(days=1)
         PickupRSVP.objects.create(user=self.user, date=upcoming)
-        service = self.mock_service(queue='Afhalen', priority=80)
-        (status, text), mock_cls = self.push(log, service)
+        service = self.mock_service(
+            queue='Afhalen', priority=80,
+            prior={'queue': None, 'priority': 70},
+            pickup_date=self.pickup_day.isoformat(),
+        )
+        (status, text), _ = self.push(log, service)
 
         self.assertEqual(status, 'success')
         self.assertIn('other active RSVPs remain', text)
-        mock_cls.assert_not_called()
+        self.assertEqual(
+            self.set_calls(service), [('pickup_date', upcoming.isoformat())],
+        )
+        service.delete_customer_metafield.assert_not_called()
+
+    def test_cancel_with_other_active_rsvp_same_date_is_noop(self):
+        # pickup_date already points at the remaining day: zero writes.
+        log = self.make_log(action='cancel')
+        upcoming = timezone.localdate() + timedelta(days=1)
+        PickupRSVP.objects.create(user=self.user, date=upcoming)
+        service = self.mock_service(
+            queue='Afhalen', priority=80,
+            pickup_date=upcoming.isoformat(),
+        )
+        (status, text), _ = self.push(log, service)
+
+        self.assertEqual(status, 'success')
+        service.set_customer_metafield.assert_not_called()
+        service.delete_customer_metafield.assert_not_called()
 
     def test_cancel_with_only_past_active_rsvp_still_reverts(self):
         # A spent RSVP (date passed, never cancelled) must not block the
@@ -623,11 +677,34 @@ class ShopifySyncPushTest(PickupBaseTest):
         log = self.make_log(action='cancel')
         past = timezone.localdate() - timedelta(days=7)
         PickupRSVP.objects.create(user=self.user, date=past)
-        service = self.mock_service(queue='Afhalen', priority=80)
+        service = self.mock_service(
+            queue='Afhalen', priority=80,
+            pickup_date=self.pickup_day.isoformat(),
+        )
         (status, _), _ = self.push(log, service)
 
         self.assertEqual(status, 'success')
-        self.assertEqual(service.delete_customer_metafield.call_count, 2)
+        self.assertEqual(
+            self.delete_calls(service), ['queue', 'priority', 'pickup_date'],
+        )
+
+    def test_rsvp_earliest_of_multiple_dates_wins(self):
+        # RSVP for a later day while an earlier one is active: pickup_date
+        # must say the EARLIEST upcoming day.
+        earlier = timezone.localdate() + timedelta(days=1)
+        PickupRSVP.objects.create(user=self.user, date=earlier)
+        log = self.make_log()  # active RSVP at +2 days
+        service = self.mock_service(
+            queue='Afhalen', priority=80,
+            prior={'queue': None, 'priority': None},
+            pickup_date=self.pickup_day.isoformat(),
+        )
+        (status, _), _ = self.push(log, service)
+
+        self.assertEqual(status, 'success')
+        self.assertEqual(
+            self.set_calls(service), [('pickup_date', earlier.isoformat())],
+        )
 
     def test_customer_not_found_is_failed_for_retry(self):
         log = self.make_log()

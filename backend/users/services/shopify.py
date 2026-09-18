@@ -1267,12 +1267,12 @@ class ShopifyService:
 
         Returns:
             {'queue': str|None, 'priority': int|None, 'pickup_prior':
-            dict|None} — each None when the metafield is absent (a
-            non-integer priority or unparseable pickup_prior also yields
-            None for that key). Returns None when the request fails OR the
-            customer does not exist on Shopify; callers cannot distinguish
-            the two and should treat None as "no answer", never as "no
-            metafields".
+            dict|None, 'pickup_date': str|None ('YYYY-MM-DD')} — each None
+            when the metafield is absent (a non-integer priority or
+            unparseable pickup_prior also yields None for that key).
+            Returns None when the request fails OR the customer does not
+            exist on Shopify; callers cannot distinguish the two and
+            should treat None as "no answer", never as "no metafields".
         """
         query = """
         query getCustomerPickupState($id: ID!) {
@@ -1280,6 +1280,7 @@ class ShopifyService:
                 queue: metafield(namespace: "custom", key: "queue") { value }
                 priority: metafield(namespace: "custom", key: "priority") { value }
                 pickupPrior: metafield(namespace: "custom", key: "pickup_prior") { value }
+                pickupDate: metafield(namespace: "custom", key: "pickup_date") { value }
             }
         }
         """
@@ -1317,7 +1318,13 @@ class ShopifyService:
                     f"Unparseable pickup_prior on customer {customer_id}: "
                     f"{raw_prior[:100]}"
                 )
-        return {"queue": queue, "priority": priority, "pickup_prior": pickup_prior}
+        pickup_date = (customer.get("pickupDate") or {}).get("value")
+        return {
+            "queue": queue,
+            "priority": priority,
+            "pickup_prior": pickup_prior,
+            "pickup_date": pickup_date,
+        }
 
     def set_customer_metafield(
         self, customer_id, key: str, value: str, mf_type: str
