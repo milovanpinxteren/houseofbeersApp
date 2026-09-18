@@ -19,8 +19,8 @@ from fulfillment.views import get_offered_days
 
 User = get_user_model()
 
-# A Wednesday morning. With a Friday + Saturday schedule the next 14 days
-# (Sep 16-29) offer Fri 18, Sat 19, Fri 25, Sat 26.
+# A Wednesday morning. With a Friday + Saturday schedule the next 21 days
+# (Sep 16 - Oct 6) offer Fri 18, Sat 19, Fri 25, Sat 26, Fri Oct 2, Sat Oct 3.
 WEDNESDAY_9AM = datetime(2026, 9, 16, 9, 0)
 
 
@@ -52,12 +52,13 @@ class PickupBaseTest(TestCase):
 
 class OfferedDaysTest(PickupBaseTest):
 
-    def test_offers_schedule_days_within_14_days(self):
+    def test_offers_schedule_days_within_21_days(self):
         with freeze_now(WEDNESDAY_9AM):
             days = [d['date'] for d in get_offered_days()]
         self.assertEqual(days, [
             date(2026, 9, 18), date(2026, 9, 19),
             date(2026, 9, 25), date(2026, 9, 26),
+            date(2026, 10, 2), date(2026, 10, 3),
         ])
 
     def test_inactive_schedule_is_ignored(self):
@@ -65,7 +66,9 @@ class OfferedDaysTest(PickupBaseTest):
         self.saturday.save()
         with freeze_now(WEDNESDAY_9AM):
             days = [d['date'] for d in get_offered_days()]
-        self.assertEqual(days, [date(2026, 9, 18), date(2026, 9, 25)])
+        self.assertEqual(
+            days, [date(2026, 9, 18), date(2026, 9, 25), date(2026, 10, 2)]
+        )
 
     def test_closure_removes_the_date(self):
         PickupClosure.objects.create(date=date(2026, 9, 19), reason='Feestdag')

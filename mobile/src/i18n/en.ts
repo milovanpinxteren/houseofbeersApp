@@ -708,7 +708,8 @@ export default {
 
   // Pickup RSVP (orders screen)
   pickup: {
-    prompt: "Picking up in Uden? Let us know when you're coming",
+    label: 'Pickup in Uden',
+    prompt: "Let us know when you're coming to collect your order",
     confirmed: "You're coming {{date}} ✓",
     plusMore: '+{{count}}',
     rsvpSuccess: 'Noted — see you {{date}}!',

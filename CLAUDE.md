@@ -442,7 +442,7 @@ Key design decisions (`loyalty/models_grants.py`, `loyalty/services/grants.py`):
 ### Pickup
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/pickup/days/` | Offered pickup days (next 14 days) with the caller's RSVP status |
+| GET | `/api/pickup/days/` | Offered pickup days (next 21 days ≈ 3 weekends) with the caller's RSVP status |
 | POST | `/api/pickup/rsvp/` | Announce pickup for a date (`{date}` → `{date, rsvp: true}`) |
 | POST | `/api/pickup/rsvp/cancel/` | Withdraw a pickup RSVP (`{date}` → `{date, rsvp: false}`) |
 
@@ -789,7 +789,8 @@ during pickup, exactly as before.
   one row per rsvp/cancel action, doubling as usage log AND hob-sync health
   (`sync_status` pending/success/failed/skipped, attempts, response
   snippet) so a broken hob link is visible in the appadmin.
-- **API**: `GET /api/pickup/days/` = next 14 days with an active schedule
+- **API**: `GET /api/pickup/days/` = next 21 days (3 weekends, shown as a
+  2x3 tile grid in the app) with an active schedule
   minus closures; today is dropped once local time ≥ close_time
   (TIME_ZONE is Europe/Amsterdam = store time). The POSTs are idempotent
   and return real JSON 200s (no 204s). Analytics events `pickup_rsvp` /

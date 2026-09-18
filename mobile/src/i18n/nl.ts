@@ -707,7 +707,8 @@ export default {
 
   // Ophaal-RSVP (bestellingenscherm)
   pickup: {
-    prompt: 'Ophalen in Uden? Geef door wanneer je komt',
+    label: 'Afhalen in Uden',
+    prompt: 'Geef door wanneer je je bestelling komt ophalen',
     confirmed: 'Je komt {{date}} ✓',
     plusMore: '+{{count}}',
     rsvpSuccess: 'Doorgegeven — tot {{date}}!',

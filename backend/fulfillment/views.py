@@ -11,8 +11,9 @@ from .models import PickupClosure, PickupRSVP, PickupSchedule, PickupActionLog
 
 logger = logging.getLogger(__name__)
 
-# How far ahead members can announce a pickup: today + the next 13 days.
-DAYS_AHEAD = 14
+# How far ahead members can announce a pickup. Three weekends (6 Fri/Sat
+# days) — the app shows them as a 2x3 grid of date tiles.
+DAYS_AHEAD = 21
 
 
 def _local_now():
@@ -71,20 +72,34 @@ def _parse_date(value):
 
 def _dispatch_sync(log):
     """
-    Dispatch the hob sync task; fall back to running it inline when the
-    broker is unreachable (local dev without Redis) — same idiom as the
-    Campagne Studio's _dispatch_task. A sync failure must never fail the
-    RSVP request: the log row keeps the failure visible.
+    Hand the hob sync task to Celery from a background thread, falling back
+    to running it inline (same thread) when the broker is unreachable —
+    local dev without Redis. The RSVP request never waits on any of this:
+    with Redis down even a fast-failing .apply_async() blocks for seconds,
+    and a sync failure must never fail the RSVP anyway — the log row keeps
+    the failure visible in the admin.
     """
+    import threading
+
+    from django.db import connections
+
     from .tasks import sync_pickup_action
-    try:
-        sync_pickup_action.delay(log.id)
-    except Exception as e:
-        logger.warning(f"Celery unavailable ({e}); running pickup sync inline")
+
+    log_id = log.id
+
+    def run():
         try:
-            sync_pickup_action(log.id)
-        except Exception as e2:
-            logger.error(f"Inline pickup sync failed for log {log.id}: {e2}")
+            sync_pickup_action.apply_async(args=[log_id], retry=False)
+        except Exception as e:
+            logger.warning(f"Celery unavailable ({e}); running pickup sync inline")
+            try:
+                sync_pickup_action(log_id)
+            except Exception as e2:
+                logger.error(f"Inline pickup sync failed for log {log_id}: {e2}")
+        finally:
+            connections.close_all()  # this thread's ORM connections
+
+    threading.Thread(target=run, daemon=True, name=f'pickup-sync-{log_id}').start()
 
 
 class PickupDaysView(APIView):

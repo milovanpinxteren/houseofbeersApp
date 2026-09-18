@@ -5,7 +5,12 @@ from celery import shared_task
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+# ignore_result: nobody reads the Celery result (the outcome lives on the
+# PickupActionLog row), and WITH a result backend configured but Redis down
+# (local dev) .delay() blocks ~2 minutes in the redis result-backend retry
+# loop before the inline fallback can run — freezing the RSVP request.
+@shared_task(bind=True, max_retries=3, default_retry_delay=60,
+             ignore_result=True)
 def sync_pickup_action(self, log_id):
     """
     Push one PickupActionLog row to hob and record the outcome on the row.
