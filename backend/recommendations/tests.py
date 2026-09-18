@@ -337,6 +337,30 @@ class ParseAppOnlyProductTests(APITestCase):
         node['variants']['edges'] = node['variants']['edges'][:1]  # Sale only
         self.assertIsNone(ShopifyService._parse_app_only_product(node))
 
+    @patch.object(ShopifyService, '_graphql_request')
+    def test_sorted_buyable_first_then_newest(self, mock_graphql):
+        def make(pid, created_at, tags=('app-only',)):
+            node = _app_only_node(
+                id=f'gid://shopify/Product/{pid}', legacyResourceId=str(pid),
+                createdAt=created_at, tags=list(tags))
+            if 'app-archived' in tags:
+                _set_app_inventory(node, 0)
+            return {'node': node}
+
+        mock_graphql.return_value = {'products': {
+            'pageInfo': {'hasNextPage': False, 'endCursor': None},
+            'edges': [
+                make(1, '2026-08-01T10:00:00Z'),
+                make(2, '2026-07-01T10:00:00Z', ('app-only', 'app-archived')),
+                make(3, '2026-08-15T10:00:00Z'),
+                make(4, '2026-07-20T10:00:00Z', ('app-only', 'app-archived')),
+            ],
+        }}
+
+        products = ShopifyService().get_app_only_products()
+
+        self.assertEqual([p['id'] for p in products], ['3', '1', '4', '2'])
+
 
 @override_settings(CACHES={
     'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}

@@ -382,7 +382,8 @@ class ShopifyService:
         window closed by a newer sale — they stay in the list with
         buyable=False as the "gemist" FOMO wall. Non-archived products whose
         App variant is out of stock are excluded (sold out mid-window is a
-        normal disappearance, not a missed deal). Buyable products sort first.
+        normal disappearance, not a missed deal). Buyable products sort
+        first, newest first within each batch.
         """
         query = """
         query appOnlyProducts($cursor: String) {
@@ -436,8 +437,11 @@ class ShopifyService:
                 break
             cursor = page_info.get('endCursor')
 
-        # Buyable batch first, archived (gemist) wall after
-        products.sort(key=lambda p: (not p['buyable'], p.get('title') or ''))
+        # Buyable batch first, archived (gemist) wall after; newest first
+        # within each batch (ISO timestamps compare lexicographically, and the
+        # stable buyable pass preserves the date order per batch)
+        products.sort(key=lambda p: p.get('created_at') or '', reverse=True)
+        products.sort(key=lambda p: not p['buyable'])
         return products
 
     @staticmethod
