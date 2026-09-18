@@ -409,14 +409,28 @@ export default function OrdersScreen() {
     }
   }
 
+  const pickupSection = (
+    <PickupSection
+      language={language}
+      refreshSignal={pickupRefresh}
+      autoExpand={pickup != null}
+      style={styles.pickupSection}
+    />
+  );
+
+  // Members without a Shopify link can still announce a pickup — the
+  // warehouse list flags them as unlinked.
   if (!user?.shopify_customer_id) {
     return (
-      <View style={styles.centerContainer}>
-        <EmptyState
-          icon="link-outline"
-          title={t('orders.noShopifyTitle')}
-          message={t('orders.noShopifyText')}
-        />
+      <View style={styles.container}>
+        {pickupSection}
+        <View style={styles.centerContainer}>
+          <EmptyState
+            icon="link-outline"
+            title={t('orders.noShopifyTitle')}
+            message={t('orders.noShopifyText')}
+          />
+        </View>
       </View>
     );
   }
@@ -447,15 +461,6 @@ export default function OrdersScreen() {
       </View>
     );
   }
-
-  const pickupSection = (
-    <PickupSection
-      language={language}
-      refreshSignal={pickupRefresh}
-      autoExpand={pickup != null}
-      style={styles.pickupSection}
-    />
-  );
 
   if (orders.length === 0) {
     return (
