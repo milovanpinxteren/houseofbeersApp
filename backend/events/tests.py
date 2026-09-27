@@ -623,6 +623,79 @@ class WinnerNotificationTests(TestCase):
         )
 
 
+class WinnersCsvExportTests(TestCase):
+    """The winners CSV is the prize-fulfillment handover: it must carry the
+    Shopify match key (email) and the already-linked customer id."""
+
+    def setUp(self):
+        self.event = make_event(title='Oktober Livestream')
+        self.winner_user = make_user(1)
+        self.winner_user.first_name = 'Koen'
+        self.winner_user.last_name = 'de Vries'
+        self.winner_user.shopify_customer_id = '556677'
+        self.winner_user.save()
+        EventViewer.objects.create(event=self.event, user=self.winner_user)
+        self.raffle = Raffle.objects.create(
+            event=self.event, prize_name='Bierpakket', num_winners=1,
+        )
+        (self.winner,) = self.raffle.draw_winners()
+
+    def export_via_event_action(self):
+        from django.contrib.admin.sites import AdminSite
+        from .admin import EventAdmin
+
+        event_admin = EventAdmin(Event, AdminSite())
+        return event_admin.export_winners_csv(
+            None, Event.objects.filter(pk=self.event.pk)
+        )
+
+    def test_event_action_exports_winner_row(self):
+        response = self.export_via_event_action()
+        content = response.content.decode('utf-8-sig')
+        lines = content.strip().splitlines()
+
+        self.assertEqual(
+            lines[0].strip(),
+            'Event,Prize,Email,First name,Last name,'
+            'Shopify customer ID,Drawn at,Push status,Email status',
+        )
+        self.assertEqual(len(lines), 2)
+        row = lines[1]
+        self.assertIn('Oktober Livestream', row)
+        self.assertIn('Bierpakket', row)
+        self.assertIn(self.winner_user.email, row)
+        self.assertIn('Koen', row)
+        self.assertIn('de Vries', row)
+        self.assertIn('556677', row)
+
+    def test_notification_status_included(self):
+        response = self.export_via_event_action()
+        row = response.content.decode('utf-8-sig').strip().splitlines()[1]
+        # draw_winners sent the outbox notification; locally push is skipped
+        self.assertIn('skipped', row)
+
+    def test_unlinked_winner_exports_blank_shopify_id(self):
+        self.winner_user.shopify_customer_id = None
+        self.winner_user.save()
+        response = self.export_via_event_action()
+        row = response.content.decode('utf-8-sig').strip().splitlines()[1]
+        self.assertIn(f'{self.winner_user.email},Koen,de Vries,,', row)
+
+    def test_event_without_winners_returns_message_not_csv(self):
+        from django.contrib.admin.sites import AdminSite
+        from unittest.mock import MagicMock
+        from .admin import EventAdmin
+
+        empty_event = make_event(title='Nog geen trekking')
+        event_admin = EventAdmin(Event, AdminSite())
+        event_admin.message_user = MagicMock()
+        response = event_admin.export_winners_csv(
+            None, Event.objects.filter(pk=empty_event.pk)
+        )
+        self.assertIsNone(response)
+        event_admin.message_user.assert_called_once()
+
+
 class ViewerNameFallbackTests(APITestCase):
     """Viewers without a display name or first name must never leak their
     email prefix onto the raffle overlay."""

@@ -5,6 +5,51 @@ from django.utils import timezone
 from .models import Event, EventViewer, EventMessage, Raffle, RaffleWinner, AuctionItem
 
 
+def _winners_csv_response(winners):
+    """CSV built for prize follow-up: `Email` is the Shopify match key,
+    `Shopify customer ID` is pre-filled for accounts the app already linked
+    (blank = match on email later). Notification columns show whether the
+    winner already got the in-app "je hebt gewonnen" message."""
+    from notifications.models import NotificationDelivery
+
+    winners = list(winners.select_related('raffle__event', 'user'))
+    dedupe_keys = [
+        f'event-raffle:{w.raffle_id}:{w.user_id}:won' for w in winners
+    ]
+    deliveries = {
+        d.dedupe_key: d
+        for d in NotificationDelivery.objects.filter(dedupe_key__in=dedupe_keys)
+    }
+
+    response = HttpResponse(content_type='text/csv; charset=utf-8')
+    response['Content-Disposition'] = (
+        f'attachment; filename="raffle_winners_{timezone.localdate()}.csv"'
+    )
+    response.write('﻿')  # BOM: Excel misreads plain UTF-8 CSV names
+
+    writer = csv.writer(response)
+    writer.writerow([
+        'Event', 'Prize', 'Email', 'First name', 'Last name',
+        'Shopify customer ID', 'Drawn at', 'Push status', 'Email status',
+    ])
+    for winner in winners:
+        delivery = deliveries.get(
+            f'event-raffle:{winner.raffle_id}:{winner.user_id}:won'
+        )
+        writer.writerow([
+            winner.raffle.event.title,
+            winner.raffle.prize_name,
+            winner.user.email,
+            winner.user.first_name,
+            winner.user.last_name,
+            winner.user.shopify_customer_id or '',
+            timezone.localtime(winner.drawn_at).strftime('%Y-%m-%d %H:%M'),
+            delivery.push_status if delivery else '',
+            delivery.email_status if delivery else '',
+        ])
+    return response
+
+
 class AuctionItemInline(admin.TabularInline):
     model = AuctionItem
     extra = 1
@@ -29,7 +74,7 @@ class EventAdmin(admin.ModelAdmin):
     readonly_fields = ['created_at', 'updated_at']
     ordering = ['-scheduled_at']
     inlines = [AuctionItemInline, RaffleInline]
-    actions = ['set_live', 'set_ended']
+    actions = ['set_live', 'set_ended', 'export_winners_csv']
 
     def viewer_count_display(self, obj):
         return obj.viewers.count()
@@ -46,6 +91,20 @@ class EventAdmin(admin.ModelAdmin):
     @admin.action(description='Set selected events to ENDED')
     def set_ended(self, request, queryset):
         queryset.update(status='ended')
+
+    @admin.action(description='Export ALL raffle winners of selected events as CSV')
+    def export_winners_csv(self, request, queryset):
+        winners = RaffleWinner.objects.filter(
+            raffle__event__in=queryset,
+        ).order_by('raffle__event_id', 'drawn_at')
+        if not winners.exists():
+            self.message_user(
+                request,
+                'No raffle winners yet for the selected event(s).',
+                level='warning',
+            )
+            return None
+        return _winners_csv_response(winners)
 
 
 @admin.register(Raffle)
@@ -132,22 +191,7 @@ class RaffleWinnerAdmin(admin.ModelAdmin):
 
     @admin.action(description='Export selected winners as CSV')
     def export_winners_csv(self, request, queryset):
-        response = HttpResponse(content_type='text/csv')
-        response['Content-Disposition'] = 'attachment; filename="raffle_winners.csv"'
-
-        writer = csv.writer(response)
-        writer.writerow(['Event', 'Prize', 'Winner Email', 'Winner Name', 'Drawn At'])
-
-        for winner in queryset.select_related('raffle__event', 'user'):
-            writer.writerow([
-                winner.raffle.event.title,
-                winner.raffle.prize_name,
-                winner.user.email,
-                winner.user.first_name or winner.user.email.split('@')[0],
-                winner.drawn_at.strftime('%Y-%m-%d %H:%M'),
-            ])
-
-        return response
+        return _winners_csv_response(queryset.order_by('raffle__event_id', 'drawn_at'))
 
 
 @admin.register(AuctionItem)

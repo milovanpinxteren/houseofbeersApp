@@ -946,7 +946,11 @@ on the Event (default on) = one win per person per event.
   dedupe `event-raffle:{raffle_id}:{user_id}:won`, url
   `/livestream?eventId={event_id}`): the 5s overlay is ephemeral and a
   locked phone stops polling. Body says staff will contact them — prize
-  fulfillment is manual (RaffleWinner admin CSV export), no codes minted.
+  fulfillment is manual via CSV export (action on BOTH the Event admin —
+  all winners of an event in one click — and the RaffleWinner admin;
+  columns include email as the Shopify match key, `shopify_customer_id`
+  for already-linked accounts, and the win-notification push/email
+  status). No codes minted.
   Sends run after the draw transaction commits and never break the draw.
 - Viewer/winner name fallback is `'Member'` (same as community's
   AuthorSerializer) — email prefixes never appear on the raffle overlay.
