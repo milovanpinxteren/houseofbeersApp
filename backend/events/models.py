@@ -1,7 +1,10 @@
+import logging
 import random
 from django.db import models, transaction
 from django.conf import settings
 from django.utils import timezone
+
+logger = logging.getLogger(__name__)
 
 # Single presence window used for both the active viewer count and raffle
 # eligibility. Matches the client heartbeat (~60s) with margin.
@@ -112,6 +115,9 @@ class Raffle(models.Model):
         Atomic: locks the raffle row and re-checks status so a concurrent
         (double-clicked) draw can't run twice. Returns None if the raffle
         was already drawn, a (possibly empty) list of RaffleWinner otherwise.
+
+        Winner notifications go out after the transaction commits: they do
+        network I/O and their failure must never undo the draw.
         """
         with transaction.atomic():
             raffle = Raffle.objects.select_for_update().get(pk=self.pk)
@@ -155,7 +161,38 @@ class Raffle(models.Model):
             self.status = raffle.status
             self.drawn_at = raffle.drawn_at
 
-            return created_winners
+        self._notify_winners(created_winners)
+        return created_winners
+
+    def _notify_winners(self, winners):
+        """One "je hebt gewonnen" per winner via the notifications outbox.
+
+        The in-stream overlay is ephemeral (5s, and a locked phone stops
+        polling entirely), so a winner needs a durable record that they won
+        and that staff will contact them about the prize. Failures are
+        logged per user and never abort the rest of the fan-out.
+        """
+        for winner in winners:
+            try:
+                from notifications.services import send_notification
+
+                send_notification(
+                    winner.user,
+                    kind='raffle',
+                    title='Je hebt gewonnen!',
+                    body=(
+                        f'Gefeliciteerd! Je hebt gewonnen: {self.prize_name}. '
+                        'We nemen contact met je op over je prijs.'
+                    ),
+                    data={'url': f'/livestream?eventId={self.event_id}'},
+                    dedupe_key=f'event-raffle:{self.pk}:{winner.user_id}:won',
+                )
+            except Exception as e:
+                logger.error(
+                    f"Winner notification failed for raffle {self.pk}, "
+                    f"user {winner.user.email}: {e}",
+                    exc_info=True,
+                )
 
 
 class AuctionItem(models.Model):

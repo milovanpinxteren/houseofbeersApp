@@ -51,7 +51,9 @@ class AuctionItemSerializer(serializers.ModelSerializer):
         profile = getattr(obj.winner, 'community_profile', None)
         if profile and profile.display_name:
             return profile.display_name
-        return obj.winner.first_name or obj.winner.email.split('@')[0]
+        # Same fallback as community's AuthorSerializer: email prefixes must
+        # never appear on screen.
+        return obj.winner.first_name or 'Member'
 
 
 class EventViewerNameSerializer(serializers.Serializer):
@@ -63,7 +65,9 @@ class EventViewerNameSerializer(serializers.Serializer):
         profile = getattr(obj, 'community_profile', None)
         if profile and profile.display_name:
             return profile.display_name
-        return obj.first_name or obj.email.split('@')[0]
+        # Same fallback as community's AuthorSerializer: email prefixes must
+        # never appear on the raffle overlay.
+        return obj.first_name or 'Member'
 
 
 class RaffleWinnerSerializer(serializers.ModelSerializer):

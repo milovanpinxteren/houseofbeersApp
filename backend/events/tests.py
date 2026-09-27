@@ -9,6 +9,9 @@ Covers the fixes for:
 - Chat: live-only posting + per-user throttle
 - Unified 90s presence window (viewer count + raffle eligibility)
 - Poll query count guard (must not scale with message volume)
+- Presence refresh on every poll + on (re)join (raffle eligibility)
+- Winner outbox notifications (sent per winner, draw survives send failures)
+- Viewer name fallback (no email prefixes on the raffle overlay)
 
 NOTE on concurrency: the test DB is SQLite, where SELECT ... FOR UPDATE is a
 no-op and true parallel transactions are unreliable. The atomicity tests
@@ -442,7 +445,9 @@ class PresenceWindowTests(APITestCase):
             f'/api/events/{self.event.id}/poll/?known_winner_count=0'
         )
         names = [v['display_name'] for v in response.data['viewer_names']]
-        self.assertEqual(len(names), 1)
+        # The recent viewer plus the polling user itself (every poll now
+        # refreshes presence); the stale viewer stays outside the window.
+        self.assertEqual(len(names), 2)
 
     def test_viewers_endpoint_uses_same_window(self):
         response = self.client.get(f'/api/events/{self.event.id}/viewers/')
@@ -459,6 +464,9 @@ class PollQueryCountTests(APITestCase):
         self.client.force_authenticate(user=self.user)
         self.event = make_event()
         self.url = f'/api/events/{self.event.id}/poll/?known_winner_count=0'
+        # Pre-create the presence row so every measured poll takes the
+        # steady-state update path instead of create-then-update.
+        EventViewer.objects.create(event=self.event, user=self.user)
 
     def seed_messages(self, count, offset=0):
         EventMessage.objects.bulk_create([
@@ -483,14 +491,12 @@ class PollQueryCountTests(APITestCase):
             count_with_10, count_with_100,
             "Poll query count must be identical regardless of message volume",
         )
-        # Sanity bound: event + messages + winner count (+ a little headroom)
-        self.assertLessEqual(count_with_100, 6)
+        # Sanity bound: event + presence update_or_create (in its own
+        # savepoint) + messages + winner count (+ a little headroom)
+        self.assertLessEqual(count_with_100, 10)
 
     def test_heartbeat_poll_query_count_does_not_scale(self):
         url = self.url + '&heartbeat=1'
-        # Pre-create the presence row so both measured heartbeats take the
-        # (steady-state) update path instead of create-then-update.
-        EventViewer.objects.create(event=self.event, user=self.user)
         self.seed_messages(10)
         with CaptureQueriesContext(connection) as ctx:
             self.client.get(url)
@@ -502,3 +508,137 @@ class PollQueryCountTests(APITestCase):
         count_with_100 = len(ctx.captured_queries)
 
         self.assertEqual(count_with_10, count_with_100)
+
+
+class PollPresenceTests(APITestCase):
+    """Every poll must refresh presence (not just the ~60s heartbeat), so a
+    single dropped heartbeat can't make an actively-polling viewer
+    raffle-ineligible."""
+
+    def setUp(self):
+        self.user = make_user(0)
+        self.client.force_authenticate(user=self.user)
+        self.event = make_event()
+
+    def test_non_heartbeat_poll_refreshes_presence(self):
+        viewer = EventViewer.objects.create(event=self.event, user=self.user)
+        set_last_seen(viewer, timezone.now() - timedelta(minutes=5))
+
+        response = self.client.get(f'/api/events/{self.event.id}/poll/')
+        self.assertEqual(response.status_code, 200)
+
+        viewer.refresh_from_db()
+        self.assertGreater(
+            viewer.last_seen_at,
+            timezone.now() - timedelta(seconds=PRESENCE_WINDOW_SECONDS),
+        )
+        self.assertEqual(self.event.active_viewer_count(), 1)
+
+    def test_poll_creates_presence_row_for_new_viewer(self):
+        self.client.get(f'/api/events/{self.event.id}/poll/')
+        self.assertTrue(
+            EventViewer.objects.filter(event=self.event, user=self.user).exists()
+        )
+
+    def test_rejoin_refreshes_presence(self):
+        viewer = EventViewer.objects.create(event=self.event, user=self.user)
+        set_last_seen(viewer, timezone.now() - timedelta(minutes=5))
+
+        response = self.client.post(f'/api/events/{self.event.id}/join/')
+        self.assertEqual(response.status_code, 200)
+
+        viewer.refresh_from_db()
+        self.assertGreater(
+            viewer.last_seen_at,
+            timezone.now() - timedelta(seconds=PRESENCE_WINDOW_SECONDS),
+        )
+        # Join reports the ACTIVE viewer count, and the joiner counts
+        self.assertEqual(response.data['viewer_count'], 1)
+
+
+class WinnerNotificationTests(TestCase):
+    """Drawn winners get a durable outbox notification: the in-stream
+    overlay is ephemeral and a locked phone misses it entirely."""
+
+    def setUp(self):
+        self.event = make_event()
+        self.users = [make_user(i) for i in range(3)]
+        for user in self.users:
+            EventViewer.objects.create(event=self.event, user=user)
+
+    def test_draw_sends_notification_per_winner(self):
+        from notifications.models import NotificationDelivery
+
+        raffle = Raffle.objects.create(
+            event=self.event, prize_name='Bierpakket', num_winners=2,
+        )
+        winners = raffle.draw_winners()
+        self.assertEqual(len(winners), 2)
+
+        deliveries = NotificationDelivery.objects.filter(
+            dedupe_key__startswith=f'event-raffle:{raffle.id}:'
+        )
+        self.assertEqual(deliveries.count(), 2)
+        for winner in winners:
+            delivery = deliveries.get(
+                dedupe_key=f'event-raffle:{raffle.id}:{winner.user_id}:won'
+            )
+            self.assertEqual(delivery.user_id, winner.user_id)
+            self.assertEqual(delivery.kind, 'raffle')
+            self.assertIn('Bierpakket', delivery.body)
+            self.assertEqual(
+                delivery.data.get('url'), f'/livestream?eventId={self.event.id}'
+            )
+
+    def test_notification_failure_does_not_break_draw(self):
+        from unittest.mock import patch
+
+        raffle = Raffle.objects.create(
+            event=self.event, prize_name='Bierpakket', num_winners=2,
+        )
+        with patch(
+            'notifications.services.send_notification',
+            side_effect=RuntimeError('push service down'),
+        ):
+            winners = raffle.draw_winners()
+
+        # The draw itself committed despite every notification failing
+        self.assertEqual(len(winners), 2)
+        raffle.refresh_from_db()
+        self.assertEqual(raffle.status, 'drawn')
+        self.assertEqual(RaffleWinner.objects.filter(raffle=raffle).count(), 2)
+
+    def test_no_notifications_without_eligible_viewers(self):
+        from notifications.models import NotificationDelivery
+
+        EventViewer.objects.all().delete()
+        raffle = Raffle.objects.create(
+            event=self.event, prize_name='Bierpakket', num_winners=1,
+        )
+        self.assertEqual(raffle.draw_winners(), [])
+        self.assertFalse(
+            NotificationDelivery.objects.filter(
+                dedupe_key__startswith='event-raffle:'
+            ).exists()
+        )
+
+
+class ViewerNameFallbackTests(APITestCase):
+    """Viewers without a display name or first name must never leak their
+    email prefix onto the raffle overlay."""
+
+    def setUp(self):
+        self.user = make_user(0)
+        self.client.force_authenticate(user=self.user)
+        self.event = make_event()
+
+    def test_nameless_viewer_shows_generic_fallback(self):
+        nameless = make_user(1)  # no first_name, no community profile
+        EventViewer.objects.create(event=self.event, user=nameless)
+        EventViewer.objects.create(event=self.event, user=self.user)
+
+        response = self.client.get(f'/api/events/{self.event.id}/viewers/')
+        names = [v['display_name'] for v in response.data['viewers']]
+        self.assertIn('Member', names)
+        for name in names:
+            self.assertNotIn('user1', name)

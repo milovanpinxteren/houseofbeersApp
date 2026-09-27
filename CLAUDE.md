@@ -931,6 +931,30 @@ dokku config:unset houseofbeers-api WEB_CONCURRENCY
 
 The bottleneck is gunicorn workers, not the database. Each poll is ~5-15ms DB time.
 
+### Livestream Raffle (events app)
+Separate from the loyalty campaign raffles — `Raffle`/`RaffleWinner` in
+`backend/events/models.py`, drawn from the Django admin (Raffle action
+"Draw winners") during the stream. Unweighted `random.sample` over viewers
+seen in the last 90s (`PRESENCE_WINDOW_SECONDS`); `exclude_past_winners`
+on the Event (default on) = one win per person per event.
+
+- **Presence is refreshed on EVERY poll and on (re)join** (2026-09-27), not
+  just the ~60s heartbeat — one dropped heartbeat must not make an
+  actively-watching viewer raffle-ineligible. The `heartbeat=1` param now
+  only controls whether the response includes `active_viewer_count`.
+- **Winners get a durable outbox notification** on draw (kind `raffle`,
+  dedupe `event-raffle:{raffle_id}:{user_id}:won`, url
+  `/livestream?eventId={event_id}`): the 5s overlay is ephemeral and a
+  locked phone stops polling. Body says staff will contact them — prize
+  fulfillment is manual (RaffleWinner admin CSV export), no codes minted.
+  Sends run after the draw transaction commits and never break the draw.
+- Viewer/winner name fallback is `'Member'` (same as community's
+  AuthorSerializer) — email prefixes never appear on the raffle overlay.
+- Day-of-event: scale `WEB_CONCURRENCY` up before, unset after (see
+  Capacity above). Eligibility tip for hosts: announce the draw ~1 min
+  ahead so viewers wake their screens (locked phone = no polling = not
+  eligible after 90s).
+
 ---
 
 ## Planned Features (Not Yet Implemented)

@@ -97,14 +97,20 @@ class EventJoinView(APIView):
         except Event.DoesNotExist:
             return Response({'error': 'Event not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        EventViewer.objects.get_or_create(event=event, user=request.user)
+        # update_or_create (not get_or_create): rejoining after a break must
+        # refresh last_seen_at, or the viewer stays raffle-ineligible until
+        # their first poll lands.
+        EventViewer.objects.update_or_create(
+            event=event, user=request.user,
+            defaults={'last_seen_at': timezone.now()},
+        )
 
         from analytics.tracker import track
         track('event_join', user=request.user, event_id=event_id)
 
         return Response({
             'success': True,
-            'viewer_count': event.viewers.count(),
+            'viewer_count': event.active_viewer_count(),
         })
 
 
@@ -229,7 +235,7 @@ class EventPollView(APIView):
 
     Query params:
         after       - ISO timestamp for chat messages since
-        heartbeat   - "1" to update presence and get viewer count (every ~60s)
+        heartbeat   - "1" to include the viewer count in the response (every ~60s)
         known_winner_count - client's current winner count; full winner data + viewer
                              names returned only when server count differs
     """
@@ -243,12 +249,14 @@ class EventPollView(APIView):
 
         is_heartbeat = request.query_params.get('heartbeat') == '1'
 
-        # Update presence only on heartbeat (every ~60s from client)
-        if is_heartbeat:
-            EventViewer.objects.update_or_create(
-                event=event, user=request.user,
-                defaults={'last_seen_at': timezone.now()},
-            )
+        # Update presence on EVERY poll, not just the ~60s heartbeat: raffle
+        # eligibility rides on last_seen_at, and with a 90s window a single
+        # missed heartbeat would silently drop an actively-polling viewer
+        # out of a draw.
+        EventViewer.objects.update_or_create(
+            event=event, user=request.user,
+            defaults={'last_seen_at': timezone.now()},
+        )
 
         # Chat messages
         messages = (
