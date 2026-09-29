@@ -536,6 +536,22 @@ class BirthdayReward(models.Model):
     expires_at = models.DateTimeField(null=True, blank=True)
     issued_at = models.DateTimeField(auto_now_add=True)
 
+    # The offer as it stood when this gift was issued. BirthdayRewardConfig is
+    # a mutable singleton, so reading the label off the live config would show
+    # last year's code at this year's amount. Null on rows issued before these
+    # fields existed - the API falls back to the config for those.
+    discount_type = models.CharField(
+        max_length=20,
+        choices=BirthdayRewardConfig.DISCOUNT_TYPE_CHOICES,
+        blank=True,
+    )
+    discount_value = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+
     # Deliberately not a ForeignKey: keeps loyalty and notifications
     # decoupled so either app can be deployed or dropped independently.
     delivery_id = models.IntegerField(

@@ -4,12 +4,12 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
-from .models import PointsBalance, Redemption
+from .models import PointsBalance, Redemption, BirthdayReward, BirthdayRewardConfig
 from .services import LoyaltyService
 from .serializers import (
     RewardSerializer, PointsBalanceSerializer, PointsTransactionSerializer,
     RedemptionSerializer, RedeemRewardSerializer, LoyaltySummarySerializer,
-    PointsRuleSerializer
+    PointsRuleSerializer, serialize_birthday_reward
 )
 
 logger = logging.getLogger(__name__)
@@ -121,14 +121,34 @@ class RedeemRewardView(APIView):
 
 
 class RedemptionsListView(APIView):
-    """List user's redemptions."""
+    """
+    List the user's discount codes: reward redemptions plus birthday gifts.
+
+    Birthday gifts ride along here rather than on their own endpoint because
+    they land in the same "Codes" tab - one request, one list to render.
+    """
     permission_classes = [IsAuthenticated]
+
+    # One gift per year, so this is five years of history.
+    BIRTHDAY_HISTORY_LIMIT = 5
 
     def get(self, request):
         service = LoyaltyService()
         redemptions = service.get_user_redemptions(request.user)
         serializer = RedemptionSerializer(redemptions, many=True)
-        return Response({'redemptions': serializer.data})
+
+        config = BirthdayRewardConfig.load()
+        birthday_rewards = [
+            serialize_birthday_reward(reward, config)
+            for reward in BirthdayReward.objects.filter(
+                user=request.user
+            ).order_by('-year', '-issued_at')[:self.BIRTHDAY_HISTORY_LIMIT]
+        ]
+
+        return Response({
+            'redemptions': serializer.data,
+            'birthday_rewards': birthday_rewards,
+        })
 
 
 class SyncPointsView(APIView):

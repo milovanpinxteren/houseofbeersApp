@@ -80,6 +80,26 @@ export interface Redemption {
   expires_at: string | null;
 }
 
+export interface BirthdayReward {
+  id: number;
+  year: number;
+  discount_code: string;
+  /** 'fixed_amount' | 'percentage' — snapshotted at issue time, not live config. */
+  discount_type: string;
+  /** Decimal string, e.g. "10.00". Formatted for display by the caller. */
+  discount_value: string | null;
+  /** Storefront link that applies the code; null if none could be built. */
+  cart_url: string | null;
+  issued_at: string;
+  expires_at: string | null;
+  expired: boolean;
+}
+
+export interface CodesResponse {
+  redemptions: Redemption[];
+  birthday_rewards: BirthdayReward[];
+}
+
 export interface RedeemResult {
   success: boolean;
   error?: string;
@@ -127,9 +147,16 @@ export async function getRewards(): Promise<RewardsResponse> {
   return apiFetch<RewardsResponse>('/loyalty/rewards/');
 }
 
-export async function getRedemptions(): Promise<Redemption[]> {
-  const response = await apiFetch<{ redemptions: Redemption[] }>('/loyalty/redemptions/');
-  return response.redemptions;
+/**
+ * Everything that belongs in the Codes tab. Birthday gifts come from the same
+ * endpoint as redemptions — older backends omit the key, hence the fallback.
+ */
+export async function getCodes(): Promise<CodesResponse> {
+  const response = await apiFetch<CodesResponse>('/loyalty/redemptions/');
+  return {
+    redemptions: response.redemptions ?? [],
+    birthday_rewards: response.birthday_rewards ?? [],
+  };
 }
 
 export async function redeemReward(rewardId: number): Promise<RedeemResult> {

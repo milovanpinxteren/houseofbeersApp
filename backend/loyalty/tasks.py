@@ -180,6 +180,9 @@ def _issue_birthday_gift(user, year: int, config) -> bool:
                 year=year,
                 discount_code=code,
                 expires_at=expires_at,
+                # Snapshot the offer: the config is editable, the gift is not.
+                discount_type=config.discount_type,
+                discount_value=config.discount_value,
             )
     except IntegrityError:
         # Another worker won the race; the unique constraint did its job.
@@ -189,7 +192,12 @@ def _issue_birthday_gift(user, year: int, config) -> bool:
     offer = _offer_label(config)
     name = user.first_name or 'there'
     title = 'Happy birthday from House of Beers!'
-    body = f"Here is {offer} as a birthday gift. Use code {code} before {expires_at.date()}."
+    # "in the app" matters: push is the only channel (email is off for this
+    # kind), so the body has to say where the code lives if this is missed.
+    body = (
+        f"Here is {offer} as a birthday gift. Use code {code} before "
+        f"{expires_at.date()} — you can always find it under Loyalty > Codes."
+    )
 
     try:
         # Imported here, not at module level, so loyalty does not hard-depend
@@ -201,7 +209,7 @@ def _issue_birthday_gift(user, year: int, config) -> bool:
             kind='birthday_gift',
             title=title,
             body=body,
-            data={'url': '/loyalty', 'discount_code': code},
+            data={'url': '/loyalty?tab=codes', 'discount_code': code},
             dedupe_key=f'birthday:{user.id}:{year}',
             email_subject=title,
             email_body=(

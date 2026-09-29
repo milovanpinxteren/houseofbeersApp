@@ -13,6 +13,7 @@ import {
   Dimensions,
   Pressable,
   LayoutAnimation,
+  Linking,
   Platform,
   UIManager,
 } from 'react-native';
@@ -21,6 +22,7 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 import * as Clipboard from 'expo-clipboard';
+import { useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/context/AuthContext';
 import { useLanguage } from '../../src/context/LanguageContext';
@@ -29,7 +31,7 @@ import {
   getLoyaltySummary,
   getRewards,
   getTransactions,
-  getRedemptions,
+  getCodes,
   getPointsRules,
   redeemReward,
   syncPoints,
@@ -39,6 +41,7 @@ import {
   PointsTransaction,
   PointsRule,
   Redemption,
+  BirthdayReward,
 } from '../../src/api/loyalty';
 import { colors, spacing, borderRadius, fonts, type } from '../../src/theme/colors';
 import { useToast } from '../../src/components/ui';
@@ -49,12 +52,18 @@ type TabType = 'rewards' | 'history' | 'redemptions';
 export default function LoyaltyScreen() {
   const { user } = useAuth();
   const { language } = useLanguage();
-  const [activeTab, setActiveTab] = useState<TabType>('rewards');
+  // The birthday-gift push links to /loyalty?tab=codes — the gift's code lives
+  // in the Codes tab, and landing on Rewards is how people conclude it's gone.
+  const { tab } = useLocalSearchParams<{ tab?: string }>();
+  const [activeTab, setActiveTab] = useState<TabType>(
+    tab === 'codes' ? 'redemptions' : 'rewards'
+  );
   const [summary, setSummary] = useState<LoyaltySummary | null>(null);
   const [rewardsData, setRewardsData] = useState<RewardsResponse>({ categories: [], uncategorized: [] });
   const [collapsedCategories, setCollapsedCategories] = useState<Set<number>>(new Set());
   const [transactions, setTransactions] = useState<PointsTransaction[]>([]);
   const [redemptions, setRedemptions] = useState<Redemption[]>([]);
+  const [birthdayRewards, setBirthdayRewards] = useState<BirthdayReward[]>([]);
   const [raffleHistoryCount, setRaffleHistoryCount] = useState(0);
   const [rules, setRules] = useState<PointsRule[]>([]);
   const [showEarnInfo, setShowEarnInfo] = useState(false);
@@ -74,17 +83,18 @@ export default function LoyaltyScreen() {
   const loadData = useCallback(async () => {
     try {
       setLoadError('');
-      const [summaryData, rewardsResult, transactionsData, redemptionsData, rulesData] = await Promise.all([
+      const [summaryData, rewardsResult, transactionsData, codesData, rulesData] = await Promise.all([
         getLoyaltySummary(),
         getRewards(),
         getTransactions(),
-        getRedemptions(),
+        getCodes(),
         getPointsRules(),
       ]);
       setSummary(summaryData);
       setRewardsData(rewardsResult);
       setTransactions(transactionsData);
-      setRedemptions(redemptionsData);
+      setRedemptions(codesData.redemptions);
+      setBirthdayRewards(codesData.birthday_rewards);
       setRules(rulesData);
 
       // Default all categories to collapsed on first load
@@ -104,6 +114,12 @@ export default function LoyaltyScreen() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // A push arriving while the tab is already mounted only changes the param,
+  // so the initial state above would never see it.
+  useEffect(() => {
+    if (tab === 'codes') setActiveTab('redemptions');
+  }, [tab]);
 
   function handleRefresh() {
     setIsRefreshing(true);
@@ -155,6 +171,20 @@ export default function LoyaltyScreen() {
     await Clipboard.setStringAsync(code);
     setCopiedCode(code);
     setTimeout(() => setCopiedCode(null), 2000);
+  }
+
+  /** "€10 korting" / "15% off" — built here so the offer follows the UI language. */
+  function offerLabel(gift: BirthdayReward): string {
+    if (!gift.discount_value) return '';
+    const value = parseFloat(gift.discount_value);
+    if (Number.isNaN(value)) return '';
+    const amount = Number.isInteger(value) ? String(value) : value.toFixed(2);
+    const prefix = gift.discount_type === 'percentage' ? `${amount}%` : `€${amount}`;
+    return `${prefix} ${t('loyalty.offerOff')}`;
+  }
+
+  function openUrl(url: string) {
+    Linking.openURL(url).catch((err) => console.log('[Loyalty] Open URL error:', err));
   }
 
   function toggleCategory(categoryId: number) {
@@ -596,11 +626,69 @@ export default function LoyaltyScreen() {
           )
         )}
 
+        {/* Birthday gifts first: they arrive once a year, expire, and their
+            only other delivery is a single push that is easily missed. */}
+        {activeTab === 'redemptions' && birthdayRewards.map((gift) => (
+          <View
+            key={`bday-${gift.id}`}
+            style={[styles.redemptionCard, styles.birthdayCard, gift.expired && styles.birthdayCardExpired]}
+          >
+            <View style={styles.redemptionInfo}>
+              <View style={styles.birthdayTitleRow}>
+                <Ionicons name="gift" size={18} color={gift.expired ? colors.textMuted : colors.primary} />
+                <Text style={styles.redemptionName}>
+                  {t('loyalty.birthdayGift')} {gift.year}
+                </Text>
+              </View>
+              {offerLabel(gift) ? (
+                <Text style={styles.birthdayOffer}>{offerLabel(gift)}</Text>
+              ) : null}
+              {gift.expires_at ? (
+                <Text style={gift.expired ? styles.redemptionDate : styles.redemptionExpires}>
+                  {gift.expired ? t('loyalty.expiredOn') : t('loyalty.expires')}: {formatDate(gift.expires_at)}
+                </Text>
+              ) : null}
+            </View>
+            <TouchableOpacity
+              style={styles.codeContainer}
+              onPress={() => copyToClipboard(gift.discount_code)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.codeLeft}>
+                <Text style={styles.discountCode}>{gift.discount_code}</Text>
+                <Text style={styles.copyHint}>
+                  {copiedCode === gift.discount_code ? t('loyalty.copiedToClipboard') : t('loyalty.tapToCopy')}
+                </Text>
+              </View>
+              <View style={styles.codeRight}>
+                <Ionicons
+                  name={copiedCode === gift.discount_code ? 'checkmark-circle' : 'copy-outline'}
+                  size={20}
+                  color={copiedCode === gift.discount_code ? colors.success : colors.primary}
+                />
+                <Text style={[styles.codeStatus, gift.expired && styles.codeUsed]}>
+                  {gift.expired ? t('loyalty.codeExpired') : t('loyalty.codeValid')}
+                </Text>
+              </View>
+            </TouchableOpacity>
+            {gift.cart_url && !gift.expired ? (
+              <TouchableOpacity
+                style={styles.birthdayRedeem}
+                onPress={() => openUrl(gift.cart_url!)}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="cart-outline" size={16} color={colors.background} />
+                <Text style={styles.birthdayRedeemText}>{t('loyalty.redeemCode')}</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        ))}
+
         {activeTab === 'redemptions' && (
           redemptions.length === 0 ? (
-            // With draw history below, "no codes" would read oddly next to a
-            // won prize code — the history rows carry the tab on their own.
-            raffleHistoryCount > 0 ? null : (
+            // With gifts and draw history below, "no codes" would read oddly
+            // next to a real code — those rows carry the tab on their own.
+            raffleHistoryCount > 0 || birthdayRewards.length > 0 ? null : (
               <View style={styles.emptyState}>
                 <Ionicons name="ticket-outline" size={48} color={colors.textMuted} />
                 <Text style={styles.emptyText}>{t('loyalty.noCodes')}</Text>
@@ -1196,6 +1284,42 @@ const styles = StyleSheet.create({
   },
   codeUsed: {
     color: colors.textMuted,
+  },
+  birthdayCard: {
+    borderColor: colors.primary + '55',
+  },
+  birthdayCardExpired: {
+    borderColor: colors.tertiary + '30',
+    opacity: 0.6,
+  },
+  birthdayTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  birthdayOffer: {
+    fontFamily: fonts.heading,
+    fontSize: 20,
+    letterSpacing: 0.4,
+    color: colors.primary,
+    marginTop: 2,
+  },
+  birthdayRedeem: {
+    marginTop: spacing.sm,
+    backgroundColor: colors.primary,
+    borderRadius: borderRadius.sm,
+    paddingVertical: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+  },
+  birthdayRedeemText: {
+    fontFamily: fonts.heading,
+    fontSize: 14,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    color: colors.background,
   },
   overlay: {
     flex: 1,

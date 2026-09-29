@@ -103,7 +103,7 @@ class BirthdayGiftIssuingTests(BirthdayScanTestCase):
         notify_kwargs = mock_notify.call_args.kwargs
         self.assertEqual(notify_kwargs['kind'], 'birthday_gift')
         self.assertEqual(notify_kwargs['dedupe_key'], f'birthday:{user.id}:2026')
-        self.assertEqual(notify_kwargs['data']['url'], '/loyalty')
+        self.assertEqual(notify_kwargs['data']['url'], '/loyalty?tab=codes')
         self.assertIn(reward.discount_code, notify_kwargs['body'])
 
     def test_user_without_shopify_customer_still_gets_a_code(self):
@@ -450,3 +450,130 @@ class BirthdayRewardModelTests(TestCase):
         with self.assertRaises(IntegrityError):
             with transaction.atomic():
                 BirthdayReward.objects.create(user=user, year=2026, discount_code='BDAY-TWO')
+
+
+class BirthdayRewardApiTests(BirthdayScanTestCase):
+    """
+    The gift's only other delivery is one push notification, so the Codes tab
+    is the member's single durable way back to the code. These tests guard it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.user = self.make_user(
+            'codes@example.com',
+            birthdate=date(1990, 7, 29),
+            set_at=datetime(2025, 1, 1, 12, 0, tzinfo=AMS),
+        )
+        from rest_framework.test import APIClient
+
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def get_codes(self):
+        response = self.client.get('/api/loyalty/redemptions/')
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def test_issued_gift_appears_in_the_codes_response(self):
+        self.run_scan(datetime(2026, 7, 29, 9, 30, tzinfo=AMS))
+        reward = BirthdayReward.objects.get(user=self.user)
+
+        gifts = self.get_codes()['birthday_rewards']
+
+        self.assertEqual(len(gifts), 1)
+        gift = gifts[0]
+        self.assertEqual(gift['discount_code'], reward.discount_code)
+        self.assertEqual(gift['year'], 2026)
+        self.assertEqual(gift['discount_type'], 'fixed_amount')
+        self.assertEqual(gift['discount_value'], '5.00')
+        # Cart-wide discount: a /discount/ link, and no Shopify call to build it.
+        self.assertIn(f"/discount/{reward.discount_code}", gift['cart_url'])
+
+    def test_unexpired_gift_is_not_flagged_expired(self):
+        from django.utils import timezone
+
+        BirthdayReward.objects.create(
+            user=self.user, year=2026, discount_code='BDAY-LIVE',
+            expires_at=timezone.now() + timedelta(days=10),
+            discount_type='fixed_amount', discount_value=Decimal('5.00'),
+        )
+
+        self.assertFalse(self.get_codes()['birthday_rewards'][0]['expired'])
+
+    def test_no_gift_yields_an_empty_list_not_an_error(self):
+        self.assertEqual(self.get_codes()['birthday_rewards'], [])
+
+    def test_offer_is_snapshotted_not_read_from_live_config(self):
+        """A config change must not restate an old gift at the new amount."""
+        self.run_scan(datetime(2026, 7, 29, 9, 30, tzinfo=AMS))
+
+        self.config.discount_value = Decimal('25.00')
+        self.config.discount_type = 'percentage'
+        self.config.save()
+
+        gift = self.get_codes()['birthday_rewards'][0]
+        self.assertEqual(gift['discount_type'], 'fixed_amount')
+        self.assertEqual(gift['discount_value'], '5.00')
+
+    def test_legacy_gift_without_snapshot_falls_back_to_config(self):
+        BirthdayReward.objects.create(
+            user=self.user, year=2025, discount_code='BDAY-LEGACY',
+        )
+
+        gift = self.get_codes()['birthday_rewards'][0]
+
+        self.assertEqual(gift['discount_type'], 'fixed_amount')
+        self.assertEqual(gift['discount_value'], '5.00')
+
+    def test_expired_gift_is_still_listed_and_flagged(self):
+        from django.utils import timezone
+
+        BirthdayReward.objects.create(
+            user=self.user, year=2025, discount_code='BDAY-OLD',
+            expires_at=timezone.now() - timedelta(days=1),
+            discount_type='fixed_amount', discount_value=Decimal('5.00'),
+        )
+
+        gift = self.get_codes()['birthday_rewards'][0]
+
+        self.assertEqual(gift['discount_code'], 'BDAY-OLD')
+        self.assertTrue(gift['expired'])
+
+    def test_another_members_gift_is_never_returned(self):
+        other = self.make_user(
+            'other@example.com',
+            birthdate=date(1990, 1, 1),
+            set_at=datetime(2025, 1, 1, 12, 0, tzinfo=AMS),
+            shopify_customer_id='999',
+        )
+        BirthdayReward.objects.create(user=other, year=2026, discount_code='BDAY-THEIRS')
+
+        self.assertEqual(self.get_codes()['birthday_rewards'], [])
+
+    def test_history_is_capped_and_newest_first(self):
+        for year in range(2019, 2027):
+            BirthdayReward.objects.create(
+                user=self.user, year=year, discount_code=f'BDAY-{year}',
+            )
+
+        gifts = self.get_codes()['birthday_rewards']
+
+        self.assertEqual(len(gifts), 5)
+        self.assertEqual([g['year'] for g in gifts], [2026, 2025, 2024, 2023, 2022])
+
+    def test_percentage_gift_label(self):
+        BirthdayReward.objects.create(
+            user=self.user, year=2026, discount_code='BDAY-PCT',
+            discount_type='percentage', discount_value=Decimal('10.00'),
+        )
+
+        gift = self.get_codes()['birthday_rewards'][0]
+        self.assertEqual(gift['discount_type'], 'percentage')
+        self.assertEqual(gift['discount_value'], '10.00')
+
+    def test_notification_links_to_the_codes_tab(self):
+        _, _, mock_notify = self.run_scan(datetime(2026, 7, 29, 9, 30, tzinfo=AMS))
+
+        data = mock_notify.call_args.kwargs['data']
+        self.assertEqual(data['url'], '/loyalty?tab=codes')

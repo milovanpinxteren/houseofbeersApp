@@ -374,7 +374,7 @@ function MyComponent() {
 | GET | `/api/loyalty/rules/` | Active points rules (used by the app's "How do I earn points?" section) |
 | GET | `/api/loyalty/rewards/` | Available rewards |
 | POST | `/api/loyalty/redeem/` | Redeem a reward |
-| GET | `/api/loyalty/redemptions/` | User's redemptions |
+| GET | `/api/loyalty/redemptions/` | Everything in the "Codes" tab: `redemptions` + `birthday_rewards` (see Birthday Gift below) |
 | POST | `/api/loyalty/sync/` | Sync points (intermediate sync) |
 | GET | `/api/loyalty/sync/status/` | Check sync status |
 | GET | `/api/loyalty/campaigns/` | Non-raffle campaigns for the in-app "Acties" cards (teaser / qualified state) |
@@ -770,6 +770,38 @@ Staff-only custom admin at **`/admin/campaign-studio/`** (`loyalty/studio_views.
 - Tests: `backend/loyalty/test_campaigns.py`, `test_raffles.py`, `test_studio.py`, `test_campaign_e2e.py`
 
 ---
+
+## Birthday Gift
+
+A discount code issued once per calendar year on the member's birthday.
+`birthday_scan` (hourly, acts at `BirthdayRewardConfig.send_hour`) mints a
+`BDAY-XXXXXXXX` Shopify code and sends one `birthday_gift` notification.
+
+**The gift must be reachable in the app, not only in that notification**
+(2026-09-29). Email is off for this kind (`NotificationKindSetting`
+`send_email=False`) and push reaches a minority of members, so for a long time
+a missed push meant the code was gone: `BirthdayReward` had no serializer,
+view or URL at all, and members reported "no birthday gift" for codes that had
+in fact been issued. Now:
+
+- `GET /api/loyalty/redemptions/` returns `birthday_rewards` alongside
+  `redemptions` — newest first, capped at `RedemptionsListView.
+  BIRTHDAY_HISTORY_LIMIT` (5, i.e. five years). `serialize_birthday_reward()`
+  emits `discount_type` + `discount_value` (NOT a formatted label — the app
+  localizes it), `cart_url`, and an `expired` flag; expired gifts stay listed,
+  dimmed.
+- `BirthdayReward.discount_type`/`discount_value` **snapshot the offer at
+  issue time**. `BirthdayRewardConfig` is a mutable singleton, so reading the
+  live config would restate an old gift at today's amount.
+- `cart_url` costs no Shopify call: birthday gifts are always fixed_amount or
+  percentage, and `build_cart_url()` only queries Shopify for `free_product`.
+- The push links to `/loyalty?tab=codes` — the Loyalty screen reads the `tab`
+  param (initial state AND a `useEffect`, for a push arriving while the tab is
+  already mounted). Landing on Rewards is how members concluded it was gone.
+- Mobile: birthday cards render above redemptions in the Codes tab of
+  `mobile/app/(tabs)/loyalty.tsx`, with copyable code and a "Korting
+  verzilveren" button. i18n keys under `loyalty.*`.
+- Tests: `backend/loyalty/tests.py` (`BirthdayRewardApiTests`).
 
 ## Pickup RSVP (Afhalen)
 

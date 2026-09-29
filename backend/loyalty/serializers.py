@@ -68,6 +68,38 @@ class RedemptionSerializer(serializers.ModelSerializer):
                   'discount_code', 'discount_code_used', 'created_at', 'expires_at']
 
 
+def serialize_birthday_reward(reward, config):
+    """
+    One birthday gift for the loyalty "Codes" tab.
+
+    The gift's only other delivery channel is a single push notification, so a
+    member who missed it has no way back to the code - this is that way back.
+    `cart_url` costs no Shopify call: birthday gifts are always fixed_amount or
+    percentage, and build_cart_url only queries Shopify for free_product.
+    """
+    from django.utils import timezone
+    from .services.discounts import build_cart_url
+
+    # Type and value, not a formatted label: the app renders the offer in the
+    # member's own language, same as it does for points and transactions.
+    discount_type = reward.discount_type or config.discount_type
+    discount_value = reward.discount_value
+    if discount_value is None:
+        discount_value = config.discount_value
+
+    return {
+        'id': reward.id,
+        'year': reward.year,
+        'discount_code': reward.discount_code,
+        'discount_type': discount_type,
+        'discount_value': str(discount_value) if discount_value is not None else None,
+        'cart_url': build_cart_url(reward, reward.discount_code) or None,
+        'issued_at': reward.issued_at,
+        'expires_at': reward.expires_at,
+        'expired': bool(reward.expires_at and reward.expires_at <= timezone.now()),
+    }
+
+
 class RedeemRewardSerializer(serializers.Serializer):
     reward_id = serializers.IntegerField()
 
