@@ -15,6 +15,12 @@ logger = logging.getLogger(__name__)
 # days) — the app shows them as a 2x3 grid of date tiles.
 DAYS_AHEAD = 21
 
+# A pickup must be announced by this local hour on the DAY BEFORE: same-day
+# announcements (and late next-day ones) left the warehouse no time to
+# prepare the order (2026-10-01). So a date disappears from the offer at
+# noon the day before, and "today" is never offered at all.
+RSVP_CUTOFF_HOUR = 12
+
 
 def _local_now():
     """
@@ -28,8 +34,9 @@ def _local_now():
 def get_offered_days():
     """
     The pickup days currently on offer: the next DAYS_AHEAD calendar days
-    whose weekday has an active PickupSchedule, minus closure dates. Today
-    only counts while the store is still open (before close_time, local).
+    whose weekday has an active PickupSchedule, minus closure dates. A day
+    is offered until RSVP_CUTOFF_HOUR local on the day before it; today is
+    never offered (the warehouse needs the lead time).
     """
     now = _local_now()
     today = now.date()
@@ -50,8 +57,10 @@ def get_offered_days():
         schedule = schedules.get(day.weekday())
         if not schedule or day in closures:
             continue
-        if offset == 0 and now.time() >= schedule.close_time:
-            continue  # store already closed today
+        if offset == 0:
+            continue  # same-day announcements are not accepted
+        if offset == 1 and now.hour >= RSVP_CUTOFF_HOUR:
+            continue  # past the noon-the-day-before cutoff
         days.append({
             'date': day,
             'open_time': schedule.open_time,

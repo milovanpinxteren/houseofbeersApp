@@ -238,6 +238,8 @@ export function PickupSection({
             ))}
           </View>
 
+          <Text style={styles.cutoffHint}>{t('pickup.cutoffHint')}</Text>
+
           <View style={styles.divider} />
 
           <View style={styles.addressRow}>
@@ -365,6 +367,11 @@ const styles = StyleSheet.create({
   tileTimeSelected: {
     color: colors.background,
     opacity: 0.75,
+  },
+  cutoffHint: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginTop: spacing.sm,
   },
   divider: {
     height: StyleSheet.hairlineWidth,

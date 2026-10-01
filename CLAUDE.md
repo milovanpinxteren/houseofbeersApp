@@ -823,9 +823,11 @@ which sends a message and never touches Shopify.
   (`sync_status` pending/success/failed/skipped, attempts, response
   snippet) so a broken hob link is visible in the appadmin.
 - **API**: `GET /api/pickup/days/` = next 21 days (3 weekends, shown as a
-  2x3 tile grid in the app) with an active schedule
-  minus closures; today is dropped once local time ≥ close_time
-  (TIME_ZONE is Europe/Amsterdam = store time). The POSTs are idempotent
+  2x3 tile grid in the app) with an active schedule minus closures. A day
+  is offerable until 12:00 local the day before it (`RSVP_CUTOFF_HOUR`,
+  since 2026-10-01 — same-day RSVPs left the warehouse no prep time, so
+  today is never offered; TIME_ZONE is Europe/Amsterdam = store time).
+  Cancels are NOT deadline-bound. The POSTs are idempotent
   and return real JSON 200s (no 204s). Analytics events `pickup_rsvp` /
   `pickup_rsvp_cancel`.
 - **Shopify sync** (`fulfillment/services/shopify_sync.py` + Celery task, 3
@@ -896,7 +898,7 @@ which sends a message and never touches Shopify.
   screen with the section expanded — target for "geef het door in de app"
   WhatsApp/push nudges. API layer `mobile/src/api/pickup.ts`; i18n under
   `pickup.*`.
-- Tests: `backend/fulfillment/tests.py` (61); hob
+- Tests: `backend/fulfillment/tests.py` (64); hob
   `apps/order_management/tests_app_service.py` (31).
 
 ---

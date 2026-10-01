@@ -721,6 +721,7 @@ export default {
     rsvpSuccess: 'Noted — see you {{date}}!',
     rsvpCanceled: 'Canceled for {{date}}',
     rsvpError: "That didn't work, please try again",
+    cutoffHint: 'Announce your pickup by 12:00 noon the day before',
     address: 'Prior van Millstraat 2, Uden',
     route: 'Route',
   },

@@ -720,6 +720,7 @@ export default {
     rsvpSuccess: 'Doorgegeven — tot {{date}}!',
     rsvpCanceled: 'Afgemeld voor {{date}}',
     rsvpError: 'Doorgeven is niet gelukt, probeer het opnieuw',
+    cutoffHint: 'Doorgeven kan tot 12:00 uur de dag ervoor',
     address: 'Prior van Millstraat 2, Uden',
     route: 'Route',
   },

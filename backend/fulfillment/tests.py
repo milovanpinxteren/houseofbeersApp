@@ -77,17 +77,26 @@ class OfferedDaysTest(PickupBaseTest):
         self.assertNotIn(date(2026, 9, 19), days)
         self.assertIn(date(2026, 9, 26), days)
 
-    def test_today_offered_before_close_time(self):
-        # Friday 2026-09-18, store closes 20:00.
-        with freeze_now(datetime(2026, 9, 18, 19, 59)):
+    def test_today_is_never_offered(self):
+        # Friday 2026-09-18, early morning: the store will be open all day,
+        # but same-day announcements give the warehouse no prep time.
+        with freeze_now(datetime(2026, 9, 18, 8, 0)):
+            days = [d['date'] for d in get_offered_days()]
+        self.assertNotIn(date(2026, 9, 18), days)
+        self.assertIn(date(2026, 9, 19), days)
+
+    def test_tomorrow_offered_before_noon_cutoff(self):
+        # Thursday 11:59 — Friday is still announceable.
+        with freeze_now(datetime(2026, 9, 17, 11, 59)):
             days = [d['date'] for d in get_offered_days()]
         self.assertIn(date(2026, 9, 18), days)
 
-    def test_today_dropped_at_close_time(self):
-        with freeze_now(datetime(2026, 9, 18, 20, 0)):
+    def test_tomorrow_dropped_at_noon_cutoff(self):
+        # Thursday 12:00 — Friday is gone; Saturday (2 days out) remains.
+        with freeze_now(datetime(2026, 9, 17, 12, 0)):
             days = [d['date'] for d in get_offered_days()]
         self.assertNotIn(date(2026, 9, 18), days)
-        # The next Friday is still offered.
+        self.assertIn(date(2026, 9, 19), days)
         self.assertIn(date(2026, 9, 25), days)
 
     def test_days_endpoint_shape_and_rsvp_flag(self):
@@ -155,6 +164,30 @@ class RSVPFlowTest(PickupBaseTest):
     def test_rsvp_rejects_closure_date(self, mock_dispatch):
         PickupClosure.objects.create(date=date(2026, 9, 18))
         self.assertEqual(self.rsvp('2026-09-18').status_code, 400)
+
+    def test_rsvp_rejected_past_the_noon_cutoff(self, mock_dispatch):
+        # Thursday 12:00 — Friday can no longer be announced.
+        with freeze_now(datetime(2026, 9, 17, 12, 0)):
+            response = self.client.post(
+                '/api/pickup/rsvp/', {'date': '2026-09-18'}, format='json',
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(PickupRSVP.objects.exists())
+        mock_dispatch.assert_not_called()
+
+    def test_cancel_still_allowed_past_the_cutoff(self, mock_dispatch):
+        # A no-show heads-up is welcome at any time; only announcing is
+        # deadline-bound.
+        PickupRSVP.objects.create(user=self.user, date=date(2026, 9, 18))
+        with freeze_now(datetime(2026, 9, 18, 9, 0)):
+            response = self.client.post(
+                '/api/pickup/rsvp/cancel/', {'date': '2026-09-18'},
+                format='json',
+            )
+        self.assertEqual(response.status_code, 200)
+        rsvp = PickupRSVP.objects.get()
+        self.assertEqual(rsvp.status, PickupRSVP.STATUS_CANCELLED)
+        mock_dispatch.assert_called_once()
 
     def test_rsvp_rejects_malformed_date(self, mock_dispatch):
         self.assertEqual(self.rsvp('vrijdag').status_code, 400)
