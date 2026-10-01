@@ -269,6 +269,13 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'loyalty.tasks.birthday_scan',
         'schedule': crontab(minute=5),  # every hour at :05
     },
+    # Day-before pickup reminder. Hourly, but only acts from
+    # fulfillment.tasks.REMINDER_HOUR (18:00 local) onwards, so an outage at
+    # 18:00 is caught up by the next run; dedupe keys prevent repeats.
+    'pickup-reminders': {
+        'task': 'fulfillment.tasks.send_pickup_reminders',
+        'schedule': crontab(minute=10),  # every hour at :10
+    },
     # Retires push subscriptions that the push service reports as gone.
     'prune-push-subscriptions': {
         'task': 'notifications.tasks.prune_push_subscriptions',

@@ -791,3 +791,116 @@ class SyncTaskTest(PickupBaseTest):
 
     def test_missing_log_row_is_a_noop(self):
         sync_pickup_action(999999)  # must not raise
+
+
+class PickupReminderTest(PickupBaseTest):
+    """The day-before reminder task. Uses the real send_notification: without
+    VAPID keys or push subscriptions the channels are skipped, but the
+    NotificationDelivery outbox row (the dedupe guard) is still written."""
+
+    # Thursday evening at the send hour; tomorrow is Friday 18 Sep.
+    THURSDAY_18 = datetime(2026, 9, 17, 18, 5)
+
+    def freeze_task_now(self, dt):
+        return patch('fulfillment.tasks._local_now', return_value=dt)
+
+    def make_rsvp(self, day, user=None, **kwargs):
+        return PickupRSVP.objects.create(
+            user=user or self.user, date=day, **kwargs,
+        )
+
+    def deliveries(self):
+        from notifications.models import NotificationDelivery
+        return NotificationDelivery.objects.filter(
+            dedupe_key__startswith='pickup:',
+        )
+
+    def test_reminder_sent_day_before_from_send_hour(self):
+        from fulfillment.tasks import send_pickup_reminders
+        self.make_rsvp(date(2026, 9, 18))
+        with self.freeze_task_now(self.THURSDAY_18):
+            result = send_pickup_reminders()
+        self.assertEqual(result['sent'], 1)
+        delivery = self.deliveries().get()
+        self.assertEqual(delivery.user, self.user)
+        self.assertEqual(delivery.kind, 'transactional')
+        self.assertEqual(
+            delivery.dedupe_key,
+            f'pickup:{self.user.id}:2026-09-18:reminder',
+        )
+        self.assertEqual(delivery.data['url'], '/pickup')
+        self.assertIn('vrijdag 18 september', delivery.body)
+        self.assertIn('10:00', delivery.body)
+        self.assertIn('20:00', delivery.body)
+        self.assertIsNotNone(delivery.sent_at)
+
+    def test_nothing_sent_before_send_hour(self):
+        from fulfillment.tasks import send_pickup_reminders
+        self.make_rsvp(date(2026, 9, 18))
+        with self.freeze_task_now(datetime(2026, 9, 17, 17, 55)):
+            result = send_pickup_reminders()
+        self.assertEqual(result, {'skipped': 'before send hour'})
+        self.assertEqual(self.deliveries().count(), 0)
+
+    def test_later_runs_do_not_repeat(self):
+        from fulfillment.tasks import send_pickup_reminders
+        self.make_rsvp(date(2026, 9, 18))
+        with self.freeze_task_now(self.THURSDAY_18):
+            send_pickup_reminders()
+        with self.freeze_task_now(datetime(2026, 9, 17, 21, 10)):
+            result = send_pickup_reminders()
+        self.assertEqual(result['sent'], 0)
+        self.assertEqual(self.deliveries().count(), 1)
+
+    def test_cancelled_rsvp_not_reminded(self):
+        from fulfillment.tasks import send_pickup_reminders
+        self.make_rsvp(
+            date(2026, 9, 18), status=PickupRSVP.STATUS_CANCELLED,
+        )
+        with self.freeze_task_now(self.THURSDAY_18):
+            result = send_pickup_reminders()
+        self.assertEqual(result['sent'], 0)
+        self.assertEqual(self.deliveries().count(), 0)
+
+    def test_rsvp_for_a_later_date_not_reminded_yet(self):
+        from fulfillment.tasks import send_pickup_reminders
+        self.make_rsvp(date(2026, 9, 19))  # Saturday, not tomorrow
+        with self.freeze_task_now(self.THURSDAY_18):
+            result = send_pickup_reminders()
+        self.assertEqual(result['sent'], 0)
+        self.assertEqual(self.deliveries().count(), 0)
+
+    def test_closure_tomorrow_sends_nothing_and_reports_stranded(self):
+        from fulfillment.tasks import send_pickup_reminders
+        self.make_rsvp(date(2026, 9, 18))
+        PickupClosure.objects.create(date=date(2026, 9, 18), reason='Feestdag')
+        with self.freeze_task_now(self.THURSDAY_18):
+            result = send_pickup_reminders()
+        self.assertEqual(result['skipped'], 'store closed tomorrow')
+        self.assertEqual(result['stranded_rsvps'], 1)
+        self.assertEqual(self.deliveries().count(), 0)
+
+    def test_no_schedule_tomorrow_sends_nothing(self):
+        from fulfillment.tasks import send_pickup_reminders
+        # Saturday evening: tomorrow is Sunday, which has no schedule. The
+        # RSVP row is created directly - the API would never offer Sunday.
+        self.make_rsvp(date(2026, 9, 20))
+        with self.freeze_task_now(datetime(2026, 9, 19, 18, 5)):
+            result = send_pickup_reminders()
+        self.assertEqual(result['skipped'], 'store closed tomorrow')
+        self.assertEqual(self.deliveries().count(), 0)
+
+    def test_each_rsvper_gets_their_own_reminder(self):
+        from fulfillment.tasks import send_pickup_reminders
+        other = User.objects.create_user(
+            username='joke', email='joke@example.com', password='x',
+        )
+        self.make_rsvp(date(2026, 9, 18))
+        self.make_rsvp(date(2026, 9, 18), user=other)
+        with self.freeze_task_now(self.THURSDAY_18):
+            result = send_pickup_reminders()
+        self.assertEqual(result['sent'], 2)
+        self.assertEqual(
+            set(self.deliveries().values_list('user__email', flat=True)),
+            {'piet@example.com', 'joke@example.com'},
+        )

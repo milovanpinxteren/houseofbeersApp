@@ -810,9 +810,10 @@ Sat 10:00–17:00, Prior van Millstraat 2 Uden) they'll come pick up their
 order — replaces the occasional WhatsApp poll whose answers were hand-copied
 for the warehouse. Backend app `fulfillment/`, deliberately also the future
 home of other user fulfillment requests ("ship my orders", "check my
-orders"). Design rule: NO automation — no beat tasks, no auto queue
-clearing, no priority recalculation; staff clear the hob queue manually
-during pickup, exactly as before.
+orders"). Design rule: NO queue automation — no auto queue clearing, no
+priority recalculation; staff clear the hob queue manually during pickup,
+exactly as before. The only beat task is the day-before reminder (below),
+which sends a message and never touches Shopify.
 
 - **Models** (`backend/fulfillment/models.py`): `PickupSchedule` (weekday +
   open/close times; Fri/Sat seeded by migration 0002), `PickupClosure`
@@ -872,6 +873,16 @@ during pickup, exactly as before.
   warehouse customer list shows/sorts on it (`sort=pickup_date`, nulls
   last, priority tie-break) — the warehouse view is
   `/orders/customers/list/?queue=Afhalen&sort=pickup_date`.
+- **Day-before reminder** (`fulfillment/tasks.py:send_pickup_reminders`,
+  user-requested 2026-10-01): hourly beat task that from 18:00 local
+  (`REMINDER_HOUR`) reminds everyone with an active RSVP for tomorrow —
+  kind `transactional` (RSVPing is the opt-in; no marketing category),
+  NL body with open hours + address, url `/pickup`, dedupe
+  `pickup:{user_id}:{date}:reminder` (later evening runs double as outage
+  catch-up; an outbox pre-check keeps them cheap and the logs truthful).
+  If tomorrow turns out closed (closure added after RSVPs, schedule
+  edit), nothing is sent and the stranded-RSVP count is logged loudly —
+  staff must reach out. Reminders never touch the Shopify queue.
 - **Admin**: schedule + closures editable; RSVP list with CSV export
   (`afhaal-aanmeldingen.csv` — the warehouse list, until the hob queue
   makes it redundant); action log read-only with an "Opnieuw
@@ -885,7 +896,7 @@ during pickup, exactly as before.
   screen with the section expanded — target for "geef het door in de app"
   WhatsApp/push nudges. API layer `mobile/src/api/pickup.ts`; i18n under
   `pickup.*`.
-- Tests: `backend/fulfillment/tests.py` (26); hob
+- Tests: `backend/fulfillment/tests.py` (61); hob
   `apps/order_management/tests_app_service.py` (31).
 
 ---
