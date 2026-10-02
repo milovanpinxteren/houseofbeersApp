@@ -8,7 +8,7 @@ onto loyalty.tasks with create=True so these tests pass before that code
 exists.
 """
 import json
-from datetime import datetime, timezone as dt_timezone
+from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
@@ -24,10 +24,10 @@ from loyalty.models import (
 
 User = get_user_model()
 
-UTC = dt_timezone.utc
-
-WINDOW_START = datetime(2026, 9, 1, 0, 0, tzinfo=UTC)
-WINDOW_END = datetime(2026, 9, 30, 20, 0, tzinfo=UTC)
+# Relative, not hardcoded: activation refuses a campaign whose window_end is
+# already past, so fixed dates rot the suite (it broke on 2026-10-01).
+WINDOW_START = (timezone.now() - timedelta(days=30)).replace(microsecond=0)
+WINDOW_END = (timezone.now() + timedelta(days=14)).replace(microsecond=0)
 
 BACKFILL_TARGET = 'loyalty.studio_views.campaign_backfill'
 NOTIFY_TARGET = 'notifications.services.send_notification'
@@ -83,8 +83,8 @@ class StudioTestCase(TestCase):
             'name': 'Oktoberfest campagne',
             'description': '',
             'action_type': 'points',
-            'window_start': '2026-10-01T00:00',
-            'window_end': '2026-10-31T23:59',
+            'window_start': WINDOW_START.strftime('%Y-%m-%dT%H:%M'),
+            'window_end': WINDOW_END.strftime('%Y-%m-%dT%H:%M'),
             'product_matchers': '[]',
             'min_distinct_products': '1',
             'min_total_quantity': '1',
