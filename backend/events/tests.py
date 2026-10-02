@@ -19,12 +19,13 @@ simulate the admin double-click race by invoking the draw path from two stale
 model instances; the status re-check inside the locked transaction is what is
 being exercised. True parallel row locking is only exercised on Postgres.
 """
+import json
 from datetime import timedelta
 from urllib.parse import quote
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.db import connection
 from django.utils import timezone
@@ -694,6 +695,309 @@ class WinnersCsvExportTests(TestCase):
         )
         self.assertIsNone(response)
         event_admin.message_user.assert_called_once()
+
+
+class WinnerPolicyTests(TestCase):
+    """Per-raffle winner policy: inherit follows the event flag, exclude and
+    allow override it in either direction."""
+
+    def setUp(self):
+        self.event = make_event(exclude_past_winners=True)
+        self.users = [make_user(i) for i in range(5)]
+        for user in self.users:
+            EventViewer.objects.create(event=self.event, user=user)
+
+    def draw(self, policy, num_winners=3):
+        raffle = Raffle.objects.create(
+            event=self.event, prize_name=f'Prize {policy}',
+            num_winners=num_winners, winner_policy=policy,
+        )
+        return {w.user_id for w in raffle.draw_winners()}
+
+    def test_inherit_follows_event_flag(self):
+        first = self.draw('inherit')
+        second = self.draw('inherit')
+        self.assertEqual(first & second, set())
+
+        self.event.exclude_past_winners = False
+        self.event.save()
+        # 5 viewers, 5 already won: with inherit->allow the pool is full again
+        third = self.draw('inherit', num_winners=5)
+        self.assertEqual(len(third), 5)
+
+    def test_allow_overrides_event_exclusion(self):
+        first = self.draw('exclude', num_winners=5)
+        self.assertEqual(len(first), 5)
+        # Every viewer already won, but this raffle lets everyone back in
+        finale = self.draw('allow', num_winners=2)
+        self.assertEqual(len(finale), 2)
+
+    def test_exclude_overrides_event_inclusion(self):
+        self.event.exclude_past_winners = False
+        self.event.save()
+        first = self.draw('exclude')
+        second = self.draw('exclude')
+        self.assertEqual(first & second, set())
+        self.assertEqual(len(second), 2)  # only 2 of 5 left
+
+
+class PointsAwardTests(TestCase):
+    """A raffle with points_award credits each winner inside the draw, with
+    the same sync-safe transaction shape as service grants."""
+
+    def setUp(self):
+        self.event = make_event()
+        self.users = [make_user(i) for i in range(3)]
+        for user in self.users:
+            EventViewer.objects.create(event=self.event, user=user)
+
+    def test_points_credited_to_each_winner(self):
+        from loyalty.models import PointsBalance, PointsTransaction
+
+        raffle = Raffle.objects.create(
+            event=self.event, prize_name='2000 Punten',
+            num_winners=2, points_award=2000,
+        )
+        winners = raffle.draw_winners()
+        self.assertEqual(len(winners), 2)
+
+        for winner in winners:
+            balance = PointsBalance.objects.get(user=winner.user)
+            self.assertEqual(balance.balance, 2000)
+            self.assertEqual(balance.lifetime_earned, 2000)
+            self.assertEqual(balance.lifetime_spent, 0)
+
+            txn = PointsTransaction.objects.get(user=winner.user)
+            self.assertEqual(txn.transaction_type, 'earned')
+            self.assertEqual(txn.points, 2000)
+            self.assertEqual(txn.balance_after, 2000)
+            self.assertIsNone(txn.rule)
+            self.assertFalse(txn.shopify_order_id)
+            self.assertEqual(txn.description, 'Livestream prijs: 2000 Punten')
+            self.assertEqual(txn.breakdown[0]['source'], 'livestream_raffle')
+            self.assertEqual(txn.breakdown[0]['event_raffle_id'], raffle.pk)
+
+    def test_points_added_on_top_of_existing_balance(self):
+        from loyalty.models import PointsBalance, PointsTransaction
+
+        user = self.users[0]
+        PointsBalance.objects.create(
+            user=user, balance=150, lifetime_earned=500, lifetime_spent=350,
+        )
+        # Only this user is an eligible viewer
+        EventViewer.objects.exclude(user=user).delete()
+
+        raffle = Raffle.objects.create(
+            event=self.event, prize_name='500 Punten',
+            num_winners=1, points_award=500,
+        )
+        raffle.draw_winners()
+
+        balance = PointsBalance.objects.get(user=user)
+        self.assertEqual(balance.balance, 650)
+        self.assertEqual(balance.lifetime_earned, 1000)
+        self.assertEqual(
+            balance.balance, balance.lifetime_earned - balance.lifetime_spent)
+        self.assertEqual(
+            PointsTransaction.objects.get(user=user).balance_after, 650)
+
+    def test_physical_prize_creates_no_transaction(self):
+        from loyalty.models import PointsTransaction
+
+        raffle = Raffle.objects.create(
+            event=self.event, prize_name='Bierpakket', num_winners=2,
+        )
+        raffle.draw_winners()
+        self.assertEqual(PointsTransaction.objects.count(), 0)
+
+    def test_notification_body_mentions_points(self):
+        from notifications.models import NotificationDelivery
+
+        raffle = Raffle.objects.create(
+            event=self.event, prize_name='1000 Punten',
+            num_winners=1, points_award=1000,
+        )
+        (winner,) = raffle.draw_winners()
+        delivery = NotificationDelivery.objects.get(
+            dedupe_key=f'event-raffle:{raffle.pk}:{winner.user_id}:won'
+        )
+        self.assertIn('1000 punten zijn direct toegevoegd', delivery.body)
+        self.assertNotIn('nemen contact met je op', delivery.body)
+
+    def test_physical_notification_body_unchanged(self):
+        from notifications.models import NotificationDelivery
+
+        raffle = Raffle.objects.create(
+            event=self.event, prize_name='Bierpakket', num_winners=1,
+        )
+        (winner,) = raffle.draw_winners()
+        delivery = NotificationDelivery.objects.get(
+            dedupe_key=f'event-raffle:{raffle.pk}:{winner.user_id}:won'
+        )
+        self.assertIn('We nemen contact met je op', delivery.body)
+
+
+# The production manifest storage needs collectstatic output; plain storage
+# lets the admin-based regie template render inside tests (same as test_studio).
+@override_settings(STORAGES={
+    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+    'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+})
+class RegieViewTests(TestCase):
+    """The livestream regie page: staff-only control room with per-raffle
+    draw buttons and live policy switching."""
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(
+            username='admin', email='admin@test.com', password='adminpass123',
+        )
+        self.event = make_event(title='Oktober Stream')
+        self.viewer_user = make_user(1)
+        EventViewer.objects.create(event=self.event, user=self.viewer_user)
+        self.raffle = Raffle.objects.create(
+            event=self.event, prize_name='Bierpakket', num_winners=1,
+        )
+        self.url = f'/admin/events/event/{self.event.pk}/regie/'
+
+    def test_requires_staff(self):
+        self.client.force_login(make_user(2))  # not staff
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/admin/login/', response.url)
+
+    def test_page_renders_rundown(self):
+        self.client.force_login(self.admin)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Oktober Stream')
+        self.assertContains(response, 'Bierpakket')
+        self.assertContains(response, 'Trek nu')
+
+    def test_draw_post_draws_and_redirects(self):
+        self.client.force_login(self.admin)
+        response = self.client.post(f'{self.url}draw/{self.raffle.pk}/')
+        self.assertRedirects(response, self.url)
+        self.raffle.refresh_from_db()
+        self.assertEqual(self.raffle.status, 'drawn')
+        self.assertEqual(self.raffle.winners.count(), 1)
+
+    def test_draw_get_rejected(self):
+        self.client.force_login(self.admin)
+        response = self.client.get(f'{self.url}draw/{self.raffle.pk}/')
+        self.assertEqual(response.status_code, 405)
+        self.raffle.refresh_from_db()
+        self.assertEqual(self.raffle.status, 'pending')
+
+    def test_draw_raffle_of_other_event_is_404(self):
+        other_event = make_event(title='Ander event')
+        other_raffle = Raffle.objects.create(
+            event=other_event, prize_name='Prijs', num_winners=1,
+        )
+        self.client.force_login(self.admin)
+        response = self.client.post(f'{self.url}draw/{other_raffle.pk}/')
+        self.assertEqual(response.status_code, 404)
+
+    def test_policy_post_updates_pending_raffle(self):
+        self.client.force_login(self.admin)
+        response = self.client.post(
+            f'{self.url}policy/{self.raffle.pk}/', {'winner_policy': 'allow'},
+        )
+        self.assertRedirects(response, self.url)
+        self.raffle.refresh_from_db()
+        self.assertEqual(self.raffle.winner_policy, 'allow')
+
+    def test_policy_rejected_on_drawn_raffle(self):
+        self.raffle.draw_winners()
+        self.client.force_login(self.admin)
+        self.client.post(
+            f'{self.url}policy/{self.raffle.pk}/', {'winner_policy': 'allow'},
+        )
+        self.raffle.refresh_from_db()
+        self.assertEqual(self.raffle.winner_policy, 'inherit')
+
+    def test_invalid_policy_rejected(self):
+        self.client.force_login(self.admin)
+        self.client.post(
+            f'{self.url}policy/{self.raffle.pk}/', {'winner_policy': 'bogus'},
+        )
+        self.raffle.refresh_from_db()
+        self.assertEqual(self.raffle.winner_policy, 'inherit')
+
+    def test_stats_endpoint(self):
+        self.client.force_login(self.admin)
+        response = self.client.get(f'{self.url}stats/')
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['active_viewer_count'], 1)
+        self.assertEqual(data['winner_count'], 0)
+
+
+class ImportRafflesCommandTests(TestCase):
+    def setUp(self):
+        self.event = make_event()
+
+    def run_command(self, *args, **kwargs):
+        import io
+        from django.core.management import call_command
+
+        out = io.StringIO()
+        call_command('import_raffles', *args, stdout=out, **kwargs)
+        return out.getvalue()
+
+    def test_dry_run_creates_nothing(self):
+        output = self.run_command(
+            '--event', str(self.event.pk),
+            '--json', '[{"prize": "Pet", "winners": 2}]',
+        )
+        self.assertIn('DRY-RUN', output)
+        self.assertEqual(self.event.raffles.count(), 0)
+
+    def test_apply_creates_in_list_order(self):
+        import base64
+        payload = json.dumps([
+            {'prize': '2000 Punten', 'points': 2000},
+            {'prize': 'Bourbon County Pet', 'winners': 5},
+            {'prize': 'King Henry II', 'policy': 'allow'},
+        ])
+        self.run_command(
+            '--event', str(self.event.pk),
+            '--json-b64', base64.b64encode(payload.encode()).decode(),
+            '--apply',
+        )
+        raffles = list(self.event.raffles.order_by('id'))
+        self.assertEqual(
+            [r.prize_name for r in raffles],
+            ['2000 Punten', 'Bourbon County Pet', 'King Henry II'],
+        )
+        self.assertEqual(raffles[0].points_award, 2000)
+        self.assertEqual(raffles[1].num_winners, 5)
+        self.assertEqual(raffles[2].winner_policy, 'allow')
+
+    def test_rerun_skips_existing_prizes(self):
+        payload = '[{"prize": "Pet"}, {"prize": "Muts"}]'
+        self.run_command('--event', str(self.event.pk), '--json', payload, '--apply')
+        output = self.run_command(
+            '--event', str(self.event.pk),
+            '--json', '[{"prize": "Pet"}, {"prize": "Glas"}]', '--apply',
+        )
+        self.assertIn('overgeslagen', output)
+        self.assertEqual(self.event.raffles.count(), 3)
+
+    def test_invalid_policy_rejected(self):
+        from django.core.management.base import CommandError
+
+        with self.assertRaises(CommandError):
+            self.run_command(
+                '--event', str(self.event.pk),
+                '--json', '[{"prize": "Pet", "policy": "nope"}]',
+            )
+        self.assertEqual(self.event.raffles.count(), 0)
+
+    def test_unknown_event_rejected(self):
+        from django.core.management.base import CommandError
+
+        with self.assertRaises(CommandError):
+            self.run_command('--event', '99999', '--json', '[{"prize": "Pet"}]')
 
 
 class ViewerNameFallbackTests(APITestCase):

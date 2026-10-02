@@ -95,10 +95,30 @@ class Raffle(models.Model):
         ('drawn', 'Drawn'),
     ]
 
+    WINNER_POLICY_CHOICES = [
+        ('inherit', 'Event default'),
+        ('exclude', 'Exclude past winners'),
+        ('allow', 'Everyone can win'),
+    ]
+
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='raffles')
     prize_name = models.CharField(max_length=200)
     shopify_product_id = models.CharField(max_length=255, blank=True)
     num_winners = models.PositiveIntegerField(default=1)
+    winner_policy = models.CharField(
+        max_length=10, choices=WINNER_POLICY_CHOICES, default='inherit',
+        help_text=(
+            "Per-raffle override of the event's exclude_past_winners flag "
+            "(can still be changed while the raffle is pending)"
+        ),
+    )
+    points_award = models.PositiveIntegerField(
+        default=0,
+        help_text=(
+            "Loyalty points credited to EACH winner automatically on draw "
+            "(0 = physical prize, manual fulfillment)"
+        ),
+    )
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     drawn_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -108,6 +128,14 @@ class Raffle(models.Model):
 
     def __str__(self):
         return f"{self.prize_name} ({self.get_status_display()}) - {self.event.title}"
+
+    def excludes_past_winners(self):
+        """Effective winner policy: per-raffle override, else the event flag."""
+        if self.winner_policy == 'exclude':
+            return True
+        if self.winner_policy == 'allow':
+            return False
+        return self.event.exclude_past_winners
 
     def draw_winners(self):
         """Draw random winners from active viewers.
@@ -132,7 +160,7 @@ class Raffle(models.Model):
             )
 
             # Optionally exclude users who already won in this event
-            if raffle.event.exclude_past_winners:
+            if raffle.excludes_past_winners():
                 existing_winner_ids = set(
                     RaffleWinner.objects
                     .filter(raffle__event=raffle.event)
@@ -153,6 +181,11 @@ class Raffle(models.Model):
                 [RaffleWinner(raffle=raffle, user=user) for user in winners]
             )
 
+            # Points prizes are credited INSIDE the draw transaction: a draw
+            # whose points can't land must roll back whole, never produce
+            # winners without their prize. DB-only, so safe in the lock.
+            raffle._award_points_locked(created_winners)
+
             raffle.status = 'drawn'
             raffle.drawn_at = timezone.now()
             raffle.save(update_fields=['status', 'drawn_at'])
@@ -164,6 +197,44 @@ class Raffle(models.Model):
         self._notify_winners(created_winners)
         return created_winners
 
+    def _award_points_locked(self, winners):
+        """Credit `points_award` to each winner's balance. Caller must hold
+        the draw transaction. Same transaction shape as service grants
+        (`earned`, rule=None, no shopify_order_id): the app renders the
+        description verbatim and every sync tier leaves it alone."""
+        if not self.points_award or not winners:
+            return
+        from loyalty.models import PointsBalance, PointsTransaction
+
+        description = f'Livestream prijs: {self.prize_name}'
+        for winner in winners:
+            balance, _ = (
+                PointsBalance.objects.select_for_update()
+                .get_or_create(user=winner.user)
+            )
+            balance.balance += self.points_award
+            # lifetime_spent only tracks reward redemptions; prizes land in
+            # lifetime_earned, keeping balance == earned - spent intact.
+            balance.lifetime_earned += self.points_award
+            balance.save()
+            PointsTransaction.objects.create(
+                user=winner.user,
+                transaction_type='earned',
+                points=self.points_award,
+                balance_after=balance.balance,
+                description=description,
+                breakdown=[{
+                    'event_raffle_id': self.pk,
+                    'source': 'livestream_raffle',
+                    'rule_name': description,
+                    'points': self.points_award,
+                }],
+            )
+            logger.info(
+                f"Raffle {self.pk} ({self.prize_name}): {self.points_award} "
+                f"points credited to {winner.user.email}"
+            )
+
     def _notify_winners(self, winners):
         """One "je hebt gewonnen" per winner via the notifications outbox.
 
@@ -172,6 +243,13 @@ class Raffle(models.Model):
         and that staff will contact them about the prize. Failures are
         logged per user and never abort the rest of the fan-out.
         """
+        if self.points_award:
+            follow_up = (
+                f'De {self.points_award} punten zijn direct toegevoegd '
+                'aan je saldo.'
+            )
+        else:
+            follow_up = 'We nemen contact met je op over je prijs.'
         for winner in winners:
             try:
                 from notifications.services import send_notification
@@ -182,7 +260,7 @@ class Raffle(models.Model):
                     title='Je hebt gewonnen!',
                     body=(
                         f'Gefeliciteerd! Je hebt gewonnen: {self.prize_name}. '
-                        'We nemen contact met je op over je prijs.'
+                        f'{follow_up}'
                     ),
                     data={'url': f'/livestream?eventId={self.event_id}'},
                     dedupe_key=f'event-raffle:{self.pk}:{winner.user_id}:won',

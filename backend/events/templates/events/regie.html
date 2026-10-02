@@ -1,0 +1,172 @@
+{% extends "admin/base_site.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block extrastyle %}
+{{ block.super }}
+<style>
+  .regie { max-width: 1100px; }
+  .regie-head {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 16px;
+    margin: 12px 0 20px;
+  }
+  .regie-head h1 { margin: 0; }
+  .regie-stat {
+    background: var(--darkened-bg, #f8f8f8);
+    border: 1px solid var(--border-color, #ccc);
+    border-radius: 6px; padding: 6px 14px; font-size: 14px;
+  }
+  .regie-stat b { font-size: 18px; }
+  .regie-stat.live b { color: #2e7d32; }
+  .regie table { width: 100%; border-collapse: collapse; }
+  .regie th, .regie td {
+    padding: 10px 8px; border-bottom: 1px solid var(--hairline-color, var(--border-color, #e0e0e0));
+    text-align: left; vertical-align: middle;
+  }
+  .regie tr.drawn { opacity: 0.65; }
+  .regie .prize { font-weight: 600; font-size: 15px; }
+  .regie .points-chip {
+    display: inline-block; background: var(--message-success-bg, #e8f5e9);
+    border-radius: 10px; padding: 1px 8px; font-size: 12px;
+  }
+  .regie .winners { font-size: 13px; max-width: 320px; }
+  .regie .draw-btn {
+    background: var(--button-bg, #417690); color: var(--button-fg, #fff);
+    border: none; border-radius: 5px; padding: 10px 22px;
+    font-size: 15px; font-weight: 600; cursor: pointer;
+  }
+  .regie .draw-btn:hover { background: var(--button-hover-bg, #205067); }
+  .regie .draw-btn[disabled] { opacity: 0.5; cursor: wait; }
+  .regie select { padding: 4px; }
+  .regie .muted { color: var(--body-quiet-color, #777); font-size: 12px; }
+  .regie .status-drawn { color: var(--body-quiet-color, #777); font-weight: 600; }
+</style>
+{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">Home</a>
+  &rsaquo; <a href="{% url 'admin:events_event_changelist' %}">Events</a>
+  &rsaquo; Livestream regie
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="regie">
+  <div class="regie-head">
+    <h1>{{ event.title }}</h1>
+    <span class="regie-stat {% if event.status == 'live' %}live{% endif %}">
+      Status: <b id="event-status">{{ event.get_status_display }}</b>
+    </span>
+    <span class="regie-stat live">
+      Kijkers nu: <b id="viewer-count">{{ active_viewer_count }}</b>
+    </span>
+    <span class="regie-stat">
+      Getrokken: <b id="drawn-count">{{ drawn_count }}</b> / {{ total_count }}
+      <span class="muted">({{ prize_unit_count }} prijzen)</span>
+    </span>
+  </div>
+
+  <p class="muted">
+    Kondig een trekking ±1 minuut vooraf aan — alleen kijkers die in de
+    afgelopen 90 seconden gepolld hebben (app open, scherm aan) doen mee.
+    Het winnaar-beleid is per loting aan te passen zolang die open is.
+  </p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Prijs</th>
+        <th>Winnaars</th>
+        <th>Punten</th>
+        <th>Winnaar-beleid</th>
+        <th>Resultaat</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for raffle in raffles %}
+      <tr class="{{ raffle.status }}">
+        <td class="muted">{{ forloop.counter }}</td>
+        <td class="prize">{{ raffle.prize_name }}</td>
+        <td>{{ raffle.num_winners }}×</td>
+        <td>
+          {% if raffle.points_award %}
+            <span class="points-chip">+{{ raffle.points_award }} punten p.p.</span>
+          {% else %}
+            <span class="muted">fysiek</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if raffle.status == 'pending' %}
+          <form method="post"
+                action="{% url 'admin:events_event_regie_policy' event.pk raffle.pk %}">
+            {% csrf_token %}
+            <select name="winner_policy" onchange="this.form.submit()">
+              {% for value, label in policy_choices %}
+              <option value="{{ value }}"
+                      {% if raffle.winner_policy == value %}selected{% endif %}>
+                {{ label }}{% if value == 'inherit' %}
+                  ({% if event.exclude_past_winners %}exclude{% else %}allow{% endif %}){% endif %}
+              </option>
+              {% endfor %}
+            </select>
+          </form>
+          {% else %}
+            <span class="muted">{{ raffle.get_winner_policy_display }}</span>
+          {% endif %}
+        </td>
+        <td class="winners">
+          {% if raffle.winner_names %}
+            🏆 {{ raffle.winner_names|join:", " }}
+          {% elif raffle.status == 'drawn' %}
+            <span class="muted">getrokken, geen winnaars</span>
+          {% else %}
+            <span class="muted">—</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if raffle.status == 'pending' %}
+          <form method="post"
+                action="{% url 'admin:events_event_regie_draw' event.pk raffle.pk %}"
+                onsubmit="return regieConfirmDraw(this, '{{ raffle.prize_name|escapejs }}')">
+            {% csrf_token %}
+            <button type="submit" class="draw-btn">Trek nu</button>
+          </form>
+          {% else %}
+            <span class="status-drawn">✔ {{ raffle.drawn_at|date:"H:i" }}</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="7">Nog geen lotingen — voeg ze toe op het Event of via
+        <code>manage.py import_raffles</code>.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<script>
+  function regieConfirmDraw(form, prize) {
+    if (!window.confirm('Nu trekken: ' + prize + '?')) return false;
+    // Double-click guard: the backend is idempotent, but a disabled button
+    // avoids the confusing "was al getrokken" message.
+    form.querySelector('button').disabled = true;
+    return true;
+  }
+  (function pollStats() {
+    const url = "{% url 'admin:events_event_regie_stats' event.pk %}";
+    setInterval(function () {
+      fetch(url, {credentials: 'same-origin'})
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (data) {
+          if (!data) return;
+          document.getElementById('viewer-count').textContent =
+            data.active_viewer_count;
+        })
+        .catch(function () {});
+    }, 10000);
+  })();
+</script>
+{% endblock %}

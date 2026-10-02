@@ -1,8 +1,21 @@
 import csv
-from django.contrib import admin
-from django.http import HttpResponse
+from django.contrib import admin, messages
+from django.core.exceptions import PermissionDenied
+from django.http import HttpResponse, JsonResponse
+from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import path, reverse
 from django.utils import timezone
+from django.utils.html import format_html
+from django.views.decorators.http import require_POST
 from .models import Event, EventViewer, EventMessage, Raffle, RaffleWinner, AuctionItem
+
+
+def _winner_display(user):
+    """Same fallback chain as the raffle overlay, plus the email for staff."""
+    profile = getattr(user, 'community_profile', None)
+    name = (profile.display_name if profile and profile.display_name
+            else user.first_name) or 'Member'
+    return f'{name} ({user.email})'
 
 
 def _winners_csv_response(winners):
@@ -60,14 +73,16 @@ class AuctionItemInline(admin.TabularInline):
 class RaffleInline(admin.TabularInline):
     model = Raffle
     extra = 1
-    fields = ['prize_name', 'num_winners', 'status', 'drawn_at']
+    fields = ['prize_name', 'num_winners', 'winner_policy', 'points_award',
+              'status', 'drawn_at']
     readonly_fields = ['status', 'drawn_at']
 
 
 @admin.register(Event)
 class EventAdmin(admin.ModelAdmin):
     list_display = ['title', 'event_type', 'status', 'scheduled_at', 'exclude_past_winners',
-                    'viewer_count_display', 'raffle_count_display', 'created_at']
+                    'viewer_count_display', 'raffle_count_display', 'regie_link',
+                    'created_at']
     list_filter = ['status', 'event_type', 'scheduled_at']
     list_editable = ['status', 'exclude_past_winners']
     search_fields = ['title', 'description']
@@ -75,6 +90,117 @@ class EventAdmin(admin.ModelAdmin):
     ordering = ['-scheduled_at']
     inlines = [AuctionItemInline, RaffleInline]
     actions = ['set_live', 'set_ended', 'export_winners_csv']
+
+    def get_urls(self):
+        # Custom URLs must precede the default ones or <pk>/change/ wins.
+        custom = [
+            path('<int:event_id>/regie/',
+                 self.admin_site.admin_view(self.regie_view),
+                 name='events_event_regie'),
+            path('<int:event_id>/regie/stats/',
+                 self.admin_site.admin_view(self.regie_stats_view),
+                 name='events_event_regie_stats'),
+            path('<int:event_id>/regie/draw/<int:raffle_id>/',
+                 self.admin_site.admin_view(require_POST(self.regie_draw_view)),
+                 name='events_event_regie_draw'),
+            path('<int:event_id>/regie/policy/<int:raffle_id>/',
+                 self.admin_site.admin_view(require_POST(self.regie_policy_view)),
+                 name='events_event_regie_policy'),
+        ]
+        return custom + super().get_urls()
+
+    def regie_link(self, obj):
+        return format_html(
+            '<a class="button" href="{}">Regie</a>',
+            reverse('admin:events_event_regie', args=[obj.pk]),
+        )
+    regie_link.short_description = 'Livestream regie'
+
+    def _regie_context(self, request, event):
+        raffles = list(
+            event.raffles
+            .prefetch_related('winners__user__community_profile')
+            .order_by('id')
+        )
+        for raffle in raffles:
+            raffle.winner_names = [
+                _winner_display(w.user) for w in raffle.winners.all()
+            ]
+        drawn = sum(1 for r in raffles if r.status == 'drawn')
+        return {
+            **self.admin_site.each_context(request),
+            'title': f'Livestream regie — {event.title}',
+            'event': event,
+            'raffles': raffles,
+            'drawn_count': drawn,
+            'total_count': len(raffles),
+            'prize_unit_count': sum(r.num_winners for r in raffles),
+            'active_viewer_count': event.active_viewer_count(),
+            'policy_choices': Raffle.WINNER_POLICY_CHOICES,
+        }
+
+    def regie_view(self, request, event_id):
+        event = get_object_or_404(Event, pk=event_id)
+        return render(request, 'events/regie.html',
+                      self._regie_context(request, event))
+
+    def regie_stats_view(self, request, event_id):
+        event = get_object_or_404(Event, pk=event_id)
+        return JsonResponse({
+            'active_viewer_count': event.active_viewer_count(),
+            'status': event.status,
+            'winner_count': RaffleWinner.objects.filter(
+                raffle__event=event
+            ).count(),
+        })
+
+    def regie_draw_view(self, request, event_id, raffle_id):
+        if not request.user.has_perm('events.change_raffle'):
+            raise PermissionDenied
+        raffle = get_object_or_404(Raffle, pk=raffle_id, event_id=event_id)
+        winners = raffle.draw_winners()
+        if winners is None:
+            messages.warning(
+                request, f"'{raffle.prize_name}' was al getrokken.")
+        elif winners:
+            names = ', '.join(_winner_display(w.user) for w in winners)
+            suffix = (
+                f' — {raffle.points_award} punten per winnaar toegevoegd'
+                if raffle.points_award else ''
+            )
+            messages.success(
+                request,
+                f"'{raffle.prize_name}': {len(winners)} winnaar(s) — "
+                f"{names}{suffix}",
+            )
+        else:
+            messages.warning(
+                request,
+                f"'{raffle.prize_name}': geen kijkers in de afgelopen 90s "
+                "om uit te trekken. De loting blijft open.",
+            )
+        return redirect('admin:events_event_regie', event_id)
+
+    def regie_policy_view(self, request, event_id, raffle_id):
+        if not request.user.has_perm('events.change_raffle'):
+            raise PermissionDenied
+        raffle = get_object_or_404(Raffle, pk=raffle_id, event_id=event_id)
+        policy = request.POST.get('winner_policy', '')
+        valid = {value for value, _ in Raffle.WINNER_POLICY_CHOICES}
+        if raffle.status != 'pending':
+            messages.warning(
+                request, f"'{raffle.prize_name}' is al getrokken.")
+        elif policy not in valid:
+            messages.error(request, 'Ongeldig winnaar-beleid.')
+        else:
+            raffle.winner_policy = policy
+            raffle.save(update_fields=['winner_policy'])
+            messages.success(
+                request,
+                f"'{raffle.prize_name}': beleid is nu "
+                f"“{raffle.get_winner_policy_display()}”.",
+            )
+        return redirect('admin:events_event_regie', event_id)
 
     def viewer_count_display(self, obj):
         return obj.viewers.count()
@@ -109,9 +235,10 @@ class EventAdmin(admin.ModelAdmin):
 
 @admin.register(Raffle)
 class RaffleAdmin(admin.ModelAdmin):
-    list_display = ['event', 'prize_name', 'num_winners', 'status',
-                    'winner_list_display', 'drawn_at']
+    list_display = ['event', 'prize_name', 'num_winners', 'winner_policy',
+                    'points_award', 'status', 'winner_list_display', 'drawn_at']
     list_filter = ['status', 'event']
+    list_editable = ['winner_policy', 'points_award']
     search_fields = ['prize_name', 'event__title']
     readonly_fields = ['drawn_at']
     ordering = ['-created_at']

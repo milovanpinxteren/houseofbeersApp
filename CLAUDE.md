@@ -978,10 +978,33 @@ The bottleneck is gunicorn workers, not the database. Each poll is ~5-15ms DB ti
 
 ### Livestream Raffle (events app)
 Separate from the loyalty campaign raffles — `Raffle`/`RaffleWinner` in
-`backend/events/models.py`, drawn from the Django admin (Raffle action
-"Draw winners") during the stream. Unweighted `random.sample` over viewers
-seen in the last 90s (`PRESENCE_WINDOW_SECONDS`); `exclude_past_winners`
-on the Event (default on) = one win per person per event.
+`backend/events/models.py`, drawn during the stream from the **Livestream
+regie** page (below) or the Raffle admin action "Draw winners". Unweighted
+`random.sample` over viewers seen in the last 90s (`PRESENCE_WINDOW_SECONDS`);
+`exclude_past_winners` on the Event (default on) = one win per person per
+event, overridable **per raffle** via `Raffle.winner_policy`
+(`inherit`/`exclude`/`allow`, 2026-10-02) — e.g. keep small prizes exclusive
+but open the finale to everyone including earlier winners.
+
+- **Points prizes** (2026-10-02): `Raffle.points_award` > 0 credits that many
+  points to EACH winner **inside the draw transaction** (draw rolls back
+  whole if the credit fails). Same sync-safe transaction shape as service
+  grants: `earned`, `rule=None`, no `shopify_order_id`, description
+  `Livestream prijs: <prize_name>` rendered verbatim by the app, breakdown
+  `source: livestream_raffle`. The win notification then says the points
+  were added instead of "we nemen contact met je op".
+- **Livestream regie** (2026-10-02): staff control room at
+  `/admin/events/event/<id>/regie/` ("Regie" button on the Event changelist;
+  views live in `EventAdmin.get_urls`, template
+  `events/templates/events/regie.html`, admin-theme CSS vars). Shows live
+  viewer count (10s poll), drawn/total progress, and the raffle rundown in
+  id order with per-raffle "Trek nu" buttons (confirm + double-click guard)
+  and a winner-policy dropdown that stays editable while a raffle is
+  pending. Draw results land as Django messages with winner names.
+- **Bulk prize import**: `python manage.py import_raffles --event <id>
+  (--json|--json-b64|--file) [--apply]` — dry-run by default, idempotent on
+  exact prize_name per event, creates rows sequentially so regie order =
+  list order. Use `--json-b64` through `dokku run` (it strips quotes).
 
 - **Presence is refreshed on EVERY poll and on (re)join** (2026-09-27), not
   just the ~60s heartbeat — one dropped heartbeat must not make an
