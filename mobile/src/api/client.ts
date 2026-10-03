@@ -3,6 +3,22 @@ import * as SecureStore from 'expo-secure-store';
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000/api';
 
+// Error subclass that preserves the HTTP status so callers can branch on
+// it (e.g. 429 throttle vs 400 validation) instead of parsing messages.
+// `body` keeps the parsed error payload for endpoints that return extra
+// fields next to the message (e.g. the auction bid `minimum`).
+export class ApiError extends Error {
+  status: number;
+  body?: unknown;
+
+  constructor(message: string, status: number, body?: unknown) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.body = body;
+  }
+}
+
 interface TokenPair {
   access: string;
   refresh: string;
@@ -173,13 +189,13 @@ export async function apiFetch<T>(
         }
       }
       if (messages.length > 0) {
-        throw new Error(messages.join('\n'));
+        throw new ApiError(messages.join('\n'), response.status, error);
       }
       if (error.detail) {
-        throw new Error(String(error.detail));
+        throw new ApiError(String(error.detail), response.status, error);
       }
     }
-    throw new Error('Request failed with status ' + response.status);
+    throw new ApiError('Request failed with status ' + response.status, response.status);
   }
 
   return response.json();

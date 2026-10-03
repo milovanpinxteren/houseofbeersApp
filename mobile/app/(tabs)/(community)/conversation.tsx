@@ -3,6 +3,7 @@ import { useLocalSearchParams } from 'expo-router';
 import ChatScreen from '../../../src/components/ChatScreen';
 import {
   getMessages, sendMessage, deleteMessage, markConversationRead,
+  toggleMessageReaction,
 } from '../../../src/api/community';
 
 export default function ConversationScreen() {
@@ -12,6 +13,10 @@ export default function ConversationScreen() {
   const fetchMessages = useCallback((page: number) => getMessages(convId, page), [convId]);
   const handleSend = useCallback((content: string) => sendMessage(convId, { content }), [convId]);
   const handleDelete = useCallback((messageId: number) => deleteMessage(convId, messageId), [convId]);
+  const handleReact = useCallback(
+    (messageId: number, emoji: string) => toggleMessageReaction(convId, messageId, emoji),
+    [convId]
+  );
   const markRead = useCallback(() => markConversationRead(convId), [convId]);
 
   return (
@@ -20,6 +25,7 @@ export default function ConversationScreen() {
       fetchMessages={fetchMessages}
       onSend={handleSend}
       onDeleteMessage={handleDelete}
+      onReact={handleReact}
       markRead={markRead}
     />
   );

@@ -1,5 +1,7 @@
 import json
 import logging
+import time
+import uuid
 import requests
 from typing import Optional
 from django.conf import settings
@@ -336,34 +338,60 @@ class ShopifyService:
     def graphql_url(self) -> str:
         return f"{self.store_url}/admin/api/{self.api_version}/graphql.json"
 
-    def _graphql_request(self, query: str, variables: dict = None) -> Optional[dict]:
-        """Make a GraphQL request to Shopify API."""
+    def _graphql_request(self, query: str, variables: dict = None,
+                         api_version: str = None, retries: int = 0) -> Optional[dict]:
+        """Make a GraphQL request to Shopify API.
+
+        api_version overrides the service default for this one call — the
+        fulfillment methods need 2026-04 input shapes (UNLISTED status,
+        @idempotent) that the pinned default predates. retries > 0 enables
+        throttle handling: HTTP 429 and GraphQL THROTTLED errors are retried
+        with a growing sleep; every other failure still returns None at once.
+        """
+        url = (
+            f"{self.store_url}/admin/api/{api_version}/graphql.json"
+            if api_version else self.graphql_url
+        )
+        payload = {"query": query}
+        if variables:
+            payload["variables"] = variables
+
         logger.info(f"Shopify GraphQL request")
-        try:
-            payload = {"query": query}
-            if variables:
-                payload["variables"] = variables
+        attempt = 0
+        while True:
+            try:
+                response = requests.post(
+                    url,
+                    headers=self.headers,
+                    json=payload,
+                    timeout=30,
+                )
+                logger.info(f"Shopify GraphQL response: {response.status_code}")
+                if response.status_code == 429 and attempt < retries:
+                    attempt += 1
+                    time.sleep(1.5 * attempt)
+                    continue
+                response.raise_for_status()
+                data = response.json()
 
-            response = requests.post(
-                self.graphql_url,
-                headers=self.headers,
-                json=payload,
-                timeout=30,
-            )
-            logger.info(f"Shopify GraphQL response: {response.status_code}")
-            response.raise_for_status()
-            data = response.json()
+                if "errors" in data:
+                    throttled = any(
+                        'THROTTLED' in str(err).upper()
+                        for err in data["errors"]
+                    )
+                    if throttled and attempt < retries:
+                        attempt += 1
+                        time.sleep(1.5 * attempt)
+                        continue
+                    logger.error(f"GraphQL errors: {data['errors']}")
+                    return None
 
-            if "errors" in data:
-                logger.error(f"GraphQL errors: {data['errors']}")
+                return data.get("data")
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Shopify GraphQL error: {e}")
+                if hasattr(e, "response") and e.response is not None:
+                    logger.error(f"Response body: {e.response.text}")
                 return None
-
-            return data.get("data")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Shopify GraphQL error: {e}")
-            if hasattr(e, "response") and e.response is not None:
-                logger.error(f"Response body: {e.response.text}")
-            return None
 
     def get_app_only_products(self) -> list:
         """
@@ -1427,3 +1455,710 @@ class ShopifyService:
 
         logger.info(f"Deleted custom.{key} from customer {customer_id}")
         return True
+
+    # ============ Prize fulfillment (livestream raffles & auctions) ============
+    #
+    # The app creates prize/auction products itself and attaches them to the
+    # winner's draft order. Products are created with status UNLISTED and then
+    # published to every sales channel: unlisted products never appear in shop
+    # listings, search or collections, but their variants stay purchasable via
+    # draft orders, order edits and cart permalinks — DRAFT status would break
+    # all three. These mutations use input shapes introduced after the
+    # service's pinned API version, so every call here passes
+    # FULFILLMENT_API_VERSION explicitly.
+
+    FULFILLMENT_API_VERSION = '2026-04'
+    LIVESTREAM_PRIZE_TAG = 'livestream-prize'
+    _FULFILLMENT_RETRIES = 3
+
+    def _fulfillment_request(self, query: str, variables: dict = None) -> Optional[dict]:
+        return self._graphql_request(
+            query, variables,
+            api_version=self.FULFILLMENT_API_VERSION,
+            retries=self._FULFILLMENT_RETRIES,
+        )
+
+    @staticmethod
+    def _as_gid(value, resource: str) -> str:
+        """gid://shopify/<resource>/<id> from a bare numeric id or a GID."""
+        value = str(value)
+        if value.startswith('gid://'):
+            return value
+        return f'gid://shopify/{resource}/{value}'
+
+    def _location_gid(self) -> Optional[str]:
+        raw = str(getattr(settings, 'SHOPIFY_LOCATION_ID', '') or '').strip()
+        if not raw:
+            return None
+        return self._as_gid(raw, 'Location')
+
+    def _get_publication_ids(self) -> Optional[list]:
+        """Publication GIDs of all sales channels, resolved at runtime and
+        cached per service instance (never hardcode publication GIDs — they
+        differ per store, which makes dev-store testing impossible).
+        Returns None when the lookup fails (distinct from a store that
+        genuinely has no publications)."""
+        cached = getattr(self, '_publication_ids', None)
+        if cached is not None:
+            return cached
+        query = """
+        query publications {
+            publications(first: 20) {
+                edges { node { id name } }
+            }
+        }
+        """
+        data = self._fulfillment_request(query)
+        if data is None:
+            return None
+        publications = [
+            edge['node']['id']
+            for edge in ((data.get('publications') or {}).get('edges') or [])
+            if (edge.get('node') or {}).get('id')
+        ]
+        self._publication_ids = publications
+        return publications
+
+    def _find_prize_product(self, title: str) -> Optional[dict]:
+        """Exact-title match among livestream-prize-tagged products, so a
+        re-run (double-click, retried task) reuses the product instead of
+        minting a duplicate. Returns the id dict, {'error': ...} when the
+        search itself failed (callers must NOT create on a failed search —
+        that is how duplicates happen), or None when there is no match."""
+        safe = title.replace('\\', '').replace('"', '')
+        query = """
+        query findPrizeProduct($query: String!) {
+            products(first: 5, query: $query) {
+                edges {
+                    node {
+                        id
+                        title
+                        tags
+                        variants(first: 1) {
+                            nodes { id inventoryItem { id } }
+                        }
+                    }
+                }
+            }
+        }
+        """
+        data = self._fulfillment_request(query, {"query": f'title:"{safe}"'})
+        if data is None:
+            return {'error': 'product search failed'}
+        for edge in ((data.get('products') or {}).get('edges') or []):
+            node = edge.get('node') or {}
+            if (node.get('title') or '').strip().lower() != title.strip().lower():
+                continue
+            if self.LIVESTREAM_PRIZE_TAG not in (node.get('tags') or []):
+                continue
+            variants = (node.get('variants') or {}).get('nodes') or []
+            if not variants:
+                continue
+            return {
+                'product_gid': node['id'],
+                'variant_gid': variants[0]['id'],
+                'inventory_item_gid': (variants[0].get('inventoryItem') or {}).get('id'),
+            }
+        return None
+
+    def create_unlisted_product(
+        self,
+        title: str,
+        price,
+        quantity: int,
+        description: str = None,
+        image_url: str = None,
+        tags: list = None,
+    ) -> Optional[dict]:
+        """
+        Create (or reuse) an UNLISTED prize product, fully configured:
+        variant priced/taxable/tracked, inventory set absolutely at the
+        configured location, published to every sales channel.
+
+        Idempotent by exact title: an existing livestream-prize-tagged
+        product with this title is reused and RE-configured (price,
+        inventory, publish are all absolute/idempotent writes), so a retry
+        after a half-failed earlier run self-heals instead of duplicating.
+        The image is only attached on a fresh create — productCreateMedia is
+        the one non-idempotent step and a duplicate image is worse than a
+        missing one.
+
+        Without SHOPIFY_LOCATION_ID the variant is left untracked and the
+        inventory step is skipped (an untracked variant stays purchasable).
+
+        Returns {'product_gid', 'variant_gid', 'inventory_item_gid',
+        'reused', 'published'} or None.
+        """
+        existing = self._find_prize_product(title)
+        if existing and existing.get('error'):
+            logger.error(f"Prize product search failed for '{title}'; not creating")
+            return None
+
+        if existing:
+            logger.info(f"Reusing existing prize product for '{title}'")
+            ids = existing
+            reused = True
+        else:
+            all_tags = [self.LIVESTREAM_PRIZE_TAG] + [
+                t for t in (tags or []) if t and t != self.LIVESTREAM_PRIZE_TAG
+            ]
+            product_input = {
+                "title": title,
+                "status": "UNLISTED",
+                "tags": all_tags,
+            }
+            if description:
+                product_input["descriptionHtml"] = description
+
+            mutation = """
+            mutation createPrizeProduct($product: ProductCreateInput!) {
+                productCreate(product: $product) {
+                    product {
+                        id
+                        variants(first: 1) {
+                            nodes { id inventoryItem { id } }
+                        }
+                    }
+                    userErrors { field message }
+                }
+            }
+            """
+            data = self._fulfillment_request(mutation, {"product": product_input})
+            if not data:
+                return None
+            result = data.get("productCreate") or {}
+            user_errors = result.get("userErrors") or []
+            if user_errors:
+                logger.error(f"Prize product create failed for '{title}': {user_errors}")
+                return None
+            product = result.get("product") or {}
+            variants = (product.get("variants") or {}).get("nodes") or []
+            if not product.get("id") or not variants:
+                logger.error(f"Prize product create returned no product/variant for '{title}'")
+                return None
+            ids = {
+                'product_gid': product['id'],
+                'variant_gid': variants[0]['id'],
+                'inventory_item_gid': (variants[0].get('inventoryItem') or {}).get('id'),
+            }
+            reused = False
+            logger.info(f"Created prize product '{title}' ({ids['product_gid']})")
+
+        configured = self._configure_prize_product(ids, price, quantity)
+        if configured is None:
+            # Price/tracking is what makes the product correct; the orphan
+            # (if freshly created) is reused and re-configured on retry.
+            return None
+
+        if not reused and image_url:
+            self._attach_product_image(ids['product_gid'], image_url)
+
+        return {**ids, 'reused': reused, 'published': configured['published']}
+
+    def _configure_prize_product(self, ids: dict, price, quantity: int) -> Optional[dict]:
+        """Variant update + absolute inventory set + publish. All three are
+        idempotent, so this runs on fresh creates AND on reuse. Returns
+        {'published': bool} on success (publish/inventory failures are
+        logged but non-fatal — a retry heals them), None when the variant
+        update failed (a prize product without its price is wrong)."""
+        location_gid = self._location_gid()
+        tracked = location_gid is not None
+
+        mutation = """
+        mutation updatePrizeVariant($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+            productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+                productVariants { id inventoryItem { id } }
+                userErrors { field message }
+            }
+        }
+        """
+        variables = {
+            "productId": ids['product_gid'],
+            "variants": [{
+                "id": ids['variant_gid'],
+                "price": str(price),
+                "taxable": True,
+                "inventoryItem": {"tracked": tracked},
+            }],
+        }
+        data = self._fulfillment_request(mutation, variables)
+        if not data:
+            return None
+        result = data.get("productVariantsBulkUpdate") or {}
+        if result.get("userErrors"):
+            logger.error(
+                f"Prize variant update failed ({ids['variant_gid']}): "
+                f"{result['userErrors']}"
+            )
+            return None
+        updated = result.get("productVariants") or []
+        if updated and (updated[0].get("inventoryItem") or {}).get("id"):
+            ids['inventory_item_gid'] = updated[0]['inventoryItem']['id']
+
+        if tracked:
+            if not self._set_inventory_absolute(
+                ids['inventory_item_gid'], location_gid, quantity
+            ):
+                logger.error(
+                    f"Prize inventory set failed for {ids['product_gid']} "
+                    f"(continuing; retry will re-set it)"
+                )
+        else:
+            logger.warning(
+                "SHOPIFY_LOCATION_ID not configured — prize product left "
+                "untracked, no inventory set"
+            )
+
+        published = self._publish_to_all_channels(ids['product_gid'])
+        return {'published': published}
+
+    def _set_inventory_absolute(self, inventory_item_gid: str,
+                                location_gid: str, quantity: int) -> bool:
+        """Absolute available-quantity set. @idempotent + a uuid key are
+        required on this mutation from API 2026-04; omitting
+        changeFromQuantity bypasses the compare-and-swap (we always own
+        these products, nobody else writes their stock)."""
+        mutation = """
+        mutation setPrizeInventory($input: InventorySetQuantitiesInput!, $idempotencyKey: String!) {
+            inventorySetQuantities(input: $input) @idempotent(key: $idempotencyKey) {
+                inventoryAdjustmentGroup { reason }
+                userErrors { field message }
+            }
+        }
+        """
+        variables = {
+            "input": {
+                "reason": "correction",
+                "name": "available",
+                "quantities": [{
+                    "inventoryItemId": inventory_item_gid,
+                    "locationId": location_gid,
+                    "quantity": int(quantity),
+                }],
+            },
+            "idempotencyKey": str(uuid.uuid4()),
+        }
+        data = self._fulfillment_request(mutation, variables)
+        if not data:
+            return False
+        result = data.get("inventorySetQuantities") or {}
+        if result.get("userErrors"):
+            logger.error(f"inventorySetQuantities userErrors: {result['userErrors']}")
+            return False
+        return True
+
+    def _publish_to_all_channels(self, product_gid: str) -> bool:
+        """publishablePublish to every publication. Publishing an already-
+        published product is a no-op, so this is safe to re-run."""
+        publications = self._get_publication_ids()
+        if publications is None:
+            logger.error("Could not resolve publications; prize product not published")
+            return False
+        if not publications:
+            logger.warning("Store reports no publications; nothing to publish to")
+            return False
+        mutation = """
+        mutation publishPrizeProduct($id: ID!, $input: [PublicationInput!]!) {
+            publishablePublish(id: $id, input: $input) {
+                userErrors { field message }
+            }
+        }
+        """
+        variables = {
+            "id": product_gid,
+            "input": [{"publicationId": pid} for pid in publications],
+        }
+        data = self._fulfillment_request(mutation, variables)
+        if not data:
+            return False
+        result = data.get("publishablePublish") or {}
+        if result.get("userErrors"):
+            logger.error(f"publishablePublish userErrors: {result['userErrors']}")
+            return False
+        logger.info(f"Published {product_gid} to {len(publications)} channels")
+        return True
+
+    def _attach_product_image(self, product_gid: str, image_url: str) -> bool:
+        """URL-sourced media attach. Best effort: a prize without its photo
+        is still fulfillable, so failures are logged and swallowed. NOTE:
+        productCreateMedia checks mediaUserErrors, not userErrors."""
+        mutation = """
+        mutation attachPrizeImage($productId: ID!, $media: [CreateMediaInput!]!) {
+            productCreateMedia(productId: $productId, media: $media) {
+                media { alt }
+                mediaUserErrors { field message }
+            }
+        }
+        """
+        variables = {
+            "productId": product_gid,
+            "media": [{"originalSource": image_url, "mediaContentType": "IMAGE"}],
+        }
+        data = self._fulfillment_request(mutation, variables)
+        if not data:
+            return False
+        result = data.get("productCreateMedia") or {}
+        if result.get("mediaUserErrors"):
+            logger.error(f"productCreateMedia errors: {result['mediaUserErrors']}")
+            return False
+        return True
+
+    def find_open_draft_order(self, customer_id) -> Optional[dict]:
+        """
+        The customer's newest OPEN or INVOICE_SENT draft order, or None when
+        they have none. Returns {'error': ...} when the lookup itself failed
+        — the attach router must abort then, NOT create a fresh draft (that
+        is how a flaky connection turns into duplicate drafts).
+
+        Line items with no variant (custom lines) are omitted from
+        line_items but preserved by add_to_draft_order's merge.
+        """
+        query = """
+        query openDrafts($query: String!) {
+            draftOrders(first: 10, query: $query, reverse: true) {
+                edges {
+                    node {
+                        id
+                        status
+                        invoiceUrl
+                        lineItems(first: 100) {
+                            edges {
+                                node {
+                                    quantity
+                                    variant { id }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        """
+        numeric_id = str(customer_id).rsplit('/', 1)[-1]
+        data = self._fulfillment_request(query, {"query": f"customer_id:{numeric_id}"})
+        if data is None:
+            return {'error': 'draft order lookup failed'}
+        for edge in ((data.get('draftOrders') or {}).get('edges') or []):
+            node = edge.get('node') or {}
+            if node.get('status') not in ('OPEN', 'INVOICE_SENT'):
+                continue
+            line_items = []
+            for li_edge in ((node.get('lineItems') or {}).get('edges') or []):
+                li = li_edge.get('node') or {}
+                variant = li.get('variant') or {}
+                if variant.get('id'):
+                    line_items.append({
+                        'variant_gid': variant['id'],
+                        'quantity': li.get('quantity') or 0,
+                    })
+            return {
+                'draft_gid': node['id'],
+                'status': node['status'],
+                'invoice_url': node.get('invoiceUrl'),
+                'line_items': line_items,
+            }
+        return None
+
+    def create_draft_order(self, customer_id, line_items: list,
+                           note: str = None, tags: list = None) -> Optional[dict]:
+        """
+        draftOrderCreate for a customer. line_items: [{'variant_gid',
+        'quantity'}]. Line prices come from the variant itself — prize
+        products are created AT the winner's price (free prize = €0 product,
+        auction win = the winning bid), so no appliedDiscount juggling here.
+
+        Returns {'draft_gid', 'invoice_url'} or None. Creating the draft
+        sends nothing to the customer; send_draft_invoice does that.
+        """
+        mutation = """
+        mutation createPrizeDraft($input: DraftOrderInput!) {
+            draftOrderCreate(input: $input) {
+                draftOrder { id invoiceUrl status }
+                userErrors { field message }
+            }
+        }
+        """
+        draft_input = {
+            "customerId": self._as_gid(customer_id, 'Customer'),
+            "lineItems": [
+                {"variantId": li['variant_gid'], "quantity": int(li['quantity'])}
+                for li in line_items
+            ],
+            "allowDiscountCodesInCheckout": True,
+        }
+        if note:
+            draft_input["note"] = note
+        if tags:
+            draft_input["tags"] = tags
+
+        data = self._fulfillment_request(mutation, {"input": draft_input})
+        if not data:
+            return None
+        result = data.get("draftOrderCreate") or {}
+        if result.get("userErrors"):
+            logger.error(f"draftOrderCreate failed: {result['userErrors']}")
+            return None
+        draft = result.get("draftOrder") or {}
+        if not draft.get("id"):
+            return None
+        logger.info(f"Created draft order {draft['id']} for customer {customer_id}")
+        return {'draft_gid': draft['id'], 'invoice_url': draft.get('invoiceUrl')}
+
+    def add_to_draft_order(self, draft_gid: str, variant_gid: str,
+                           quantity: int = 1) -> Optional[dict]:
+        """
+        Add a variant to an existing draft order.
+
+        draftOrderUpdate REPLACES the whole line-item list, so this reads
+        the current lines first and writes back the merge: the variant's
+        quantity is bumped when it is already on the draft, custom lines
+        (no variant) are carried over by title/price so they survive the
+        replacement. Returns {'draft_gid'} or None.
+        """
+        query = """
+        query draftLines($id: ID!) {
+            node(id: $id) {
+                ... on DraftOrder {
+                    id
+                    status
+                    lineItems(first: 100) {
+                        edges {
+                            node {
+                                quantity
+                                title
+                                originalUnitPriceSet { shopMoney { amount } }
+                                variant { id }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        """
+        data = self._fulfillment_request(query, {"id": draft_gid})
+        if not data or not data.get('node'):
+            logger.error(f"Could not read draft order {draft_gid}")
+            return None
+
+        merged = []
+        found = False
+        for li_edge in ((data['node'].get('lineItems') or {}).get('edges') or []):
+            li = li_edge.get('node') or {}
+            variant = li.get('variant') or {}
+            if variant.get('id'):
+                qty = li.get('quantity') or 0
+                if variant['id'] == variant_gid:
+                    qty += quantity
+                    found = True
+                merged.append({"variantId": variant['id'], "quantity": qty})
+            else:
+                # Custom line: must be re-sent or the update drops it.
+                amount = ((li.get('originalUnitPriceSet') or {})
+                          .get('shopMoney') or {}).get('amount') or '0'
+                merged.append({
+                    "title": li.get('title') or 'Custom item',
+                    "originalUnitPrice": str(amount),
+                    "quantity": li.get('quantity') or 1,
+                })
+        if not found:
+            merged.append({"variantId": variant_gid, "quantity": int(quantity)})
+
+        mutation = """
+        mutation updatePrizeDraft($id: ID!, $input: DraftOrderInput!) {
+            draftOrderUpdate(id: $id, input: $input) {
+                draftOrder { id invoiceUrl }
+                userErrors { field message }
+            }
+        }
+        """
+        data = self._fulfillment_request(
+            mutation, {"id": draft_gid, "input": {"lineItems": merged}}
+        )
+        if not data:
+            return None
+        result = data.get("draftOrderUpdate") or {}
+        if result.get("userErrors"):
+            logger.error(f"draftOrderUpdate failed for {draft_gid}: {result['userErrors']}")
+            return None
+        draft = result.get("draftOrder") or {}
+        logger.info(f"Added {variant_gid} x{quantity} to draft {draft_gid}")
+        return {'draft_gid': draft.get('id') or draft_gid,
+                'invoice_url': draft.get('invoiceUrl')}
+
+    def edit_order_add_variant(self, order_gid: str, variant_gid: str,
+                               quantity: int = 1) -> dict:
+        """
+        Add a variant to an already-placed (paid) order via the Order
+        Editing API: orderEditBegin -> add/set quantity -> orderEditCommit
+        with notifyCustomer false.
+
+        When the variant is already a line on the order its quantity is
+        bumped (orderEditSetQuantity) instead of adding a duplicate line.
+        Every step checks transport errors and userErrors; a mid-flow
+        failure returns {'error', 'calculated_order_gid'} — the uncommitted
+        calculated order is harmless but its id is logged for debugging.
+        Success: {'order_gid', 'action': 'added'|'quantity_set'}.
+        """
+        begin = """
+        mutation beginEdit($id: ID!) {
+            orderEditBegin(id: $id) {
+                calculatedOrder {
+                    id
+                    lineItems(first: 100) {
+                        edges {
+                            node {
+                                id
+                                quantity
+                                variant { id }
+                            }
+                        }
+                    }
+                }
+                userErrors { field message }
+            }
+        }
+        """
+        data = self._fulfillment_request(begin, {"id": self._as_gid(order_gid, 'Order')})
+        result = (data or {}).get("orderEditBegin") or {}
+        if not data or result.get("userErrors") or not result.get("calculatedOrder"):
+            logger.error(
+                f"orderEditBegin failed for {order_gid}: "
+                f"{result.get('userErrors') if data else 'request failed'}"
+            )
+            return {'error': 'orderEditBegin failed'}
+        calculated = result["calculatedOrder"]
+        calc_gid = calculated["id"]
+
+        existing = None
+        for li_edge in ((calculated.get('lineItems') or {}).get('edges') or []):
+            li = li_edge.get('node') or {}
+            if (li.get('variant') or {}).get('id') == variant_gid:
+                existing = li
+                break
+
+        if existing:
+            action = 'quantity_set'
+            mutation = """
+            mutation setQty($id: ID!, $lineItemId: ID!, $quantity: Int!) {
+                orderEditSetQuantity(id: $id, lineItemId: $lineItemId, quantity: $quantity) {
+                    calculatedOrder { id }
+                    userErrors { field message }
+                }
+            }
+            """
+            variables = {
+                "id": calc_gid,
+                "lineItemId": existing['id'],
+                "quantity": (existing.get('quantity') or 0) + int(quantity),
+            }
+            key = "orderEditSetQuantity"
+        else:
+            action = 'added'
+            mutation = """
+            mutation addVariant($id: ID!, $variantId: ID!, $quantity: Int!) {
+                orderEditAddVariant(id: $id, variantId: $variantId, quantity: $quantity) {
+                    calculatedOrder { id }
+                    userErrors { field message }
+                }
+            }
+            """
+            variables = {"id": calc_gid, "variantId": variant_gid,
+                         "quantity": int(quantity)}
+            key = "orderEditAddVariant"
+
+        data = self._fulfillment_request(mutation, variables)
+        step = (data or {}).get(key) or {}
+        if not data or step.get("userErrors"):
+            logger.error(
+                f"{key} failed (calculated order {calc_gid}): "
+                f"{step.get('userErrors') if data else 'request failed'}"
+            )
+            return {'error': f'{key} failed', 'calculated_order_gid': calc_gid}
+
+        commit = """
+        mutation commitEdit($id: ID!) {
+            orderEditCommit(id: $id, notifyCustomer: false) {
+                order { id }
+                userErrors { field message }
+            }
+        }
+        """
+        data = self._fulfillment_request(commit, {"id": calc_gid})
+        result = (data or {}).get("orderEditCommit") or {}
+        if not data or result.get("userErrors") or not result.get("order"):
+            logger.error(
+                f"orderEditCommit failed (calculated order {calc_gid}): "
+                f"{result.get('userErrors') if data else 'request failed'}"
+            )
+            return {'error': 'orderEditCommit failed', 'calculated_order_gid': calc_gid}
+
+        order = result["order"]
+        logger.info(f"Order edit committed: {variant_gid} x{quantity} on {order['id']}")
+        return {'order_gid': order['id'], 'action': action}
+
+    def send_draft_invoice(self, draft_gid: str, custom_message: str = None) -> Optional[dict]:
+        """draftOrderInvoiceSend — emails the customer the pay link for
+        their draft (how auction winners pay). Returns {'draft_gid',
+        'invoice_url'} or None."""
+        mutation = """
+        mutation sendPrizeInvoice($id: ID!, $email: EmailInput) {
+            draftOrderInvoiceSend(id: $id, email: $email) {
+                draftOrder { id invoiceUrl }
+                userErrors { field message }
+            }
+        }
+        """
+        variables = {"id": draft_gid}
+        if custom_message:
+            variables["email"] = {"customMessage": custom_message}
+
+        data = self._fulfillment_request(mutation, variables)
+        if not data:
+            return None
+        result = data.get("draftOrderInvoiceSend") or {}
+        if result.get("userErrors"):
+            logger.error(f"draftOrderInvoiceSend failed for {draft_gid}: "
+                         f"{result['userErrors']}")
+            return None
+        draft = result.get("draftOrder") or {}
+        logger.info(f"Sent invoice for draft {draft_gid}")
+        return {'draft_gid': draft.get('id') or draft_gid,
+                'invoice_url': draft.get('invoiceUrl')}
+
+    def attach_variant_to_customer(self, customer_id, variant_gid: str,
+                                   quantity: int = 1) -> dict:
+        """
+        Router: put a prize variant on the customer's open draft order, or
+        create a new draft when they have none. (Editing already-PAID orders
+        stays a separate, explicit edit_order_add_variant call — silently
+        growing a paid order is never the default.)
+
+        Returns {'action': 'draft_updated'|'draft_created', 'draft_gid',
+        'invoice_url'} or {'error': ...}. Aborts when the draft lookup
+        failed rather than risking a duplicate draft.
+        """
+        found = self.find_open_draft_order(customer_id)
+        if found and found.get('error'):
+            return {'error': found['error']}
+
+        if found:
+            updated = self.add_to_draft_order(found['draft_gid'], variant_gid, quantity)
+            if not updated:
+                return {'error': 'failed to update draft order'}
+            return {
+                'action': 'draft_updated',
+                'draft_gid': updated['draft_gid'],
+                'invoice_url': updated.get('invoice_url') or found.get('invoice_url'),
+            }
+
+        created = self.create_draft_order(
+            customer_id,
+            [{'variant_gid': variant_gid, 'quantity': quantity}],
+        )
+        if not created:
+            return {'error': 'failed to create draft order'}
+        return {
+            'action': 'draft_created',
+            'draft_gid': created['draft_gid'],
+            'invoice_url': created.get('invoice_url'),
+        }

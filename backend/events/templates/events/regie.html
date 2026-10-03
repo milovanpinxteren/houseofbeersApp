@@ -40,6 +40,62 @@
   .regie select { padding: 4px; }
   .regie .muted { color: var(--body-quiet-color, #777); font-size: 12px; }
   .regie .status-drawn { color: var(--body-quiet-color, #777); font-weight: 600; }
+  .regie .draw-btn.secondary {
+    background: transparent; color: var(--button-bg, #417690);
+    border: 1px solid var(--button-bg, #417690); padding: 9px 14px;
+  }
+  .regie .draw-forms { display: flex; gap: 6px; flex-wrap: wrap; }
+  .regie h2 { margin-top: 36px; }
+  .regie .inline-form { display: inline; }
+  .regie .link-btn {
+    background: none; border: none; cursor: pointer; padding: 0;
+    color: var(--link-fg, #447e9b); text-decoration: underline; font-size: 13px;
+  }
+  .regie .chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--darkened-bg, #f8f8f8);
+    border: 1px solid var(--border-color, #ccc);
+    border-radius: 14px; padding: 4px 12px; margin: 0 6px 6px 0; font-size: 13px;
+  }
+  .regie .auction-form {
+    display: grid; grid-template-columns: repeat(4, minmax(140px, 1fr));
+    gap: 8px; margin: 10px 0; max-width: 900px;
+  }
+  .regie .auction-form label { font-size: 12px; display: block; }
+  .regie .auction-form input, .regie .auction-form textarea { width: 100%; box-sizing: border-box; }
+  .regie .auction-form .wide { grid-column: span 2; }
+  .regie details { margin: 8px 0; }
+  .regie details summary { cursor: pointer; }
+  .regie .bid-chip {
+    display: inline-block; background: var(--message-warning-bg, #fff3cd);
+    border-radius: 10px; padding: 1px 8px; font-size: 12px;
+  }
+  .regie .f-block {
+    border: 1px solid var(--border-color, #ccc); border-radius: 8px;
+    padding: 12px 14px; margin: 12px 0;
+  }
+  .regie .f-block h3 { margin: 0 0 8px; }
+  .regie .f-status {
+    display: inline-block; border-radius: 10px; padding: 1px 8px;
+    font-size: 12px; background: var(--darkened-bg, #f0f0f0);
+    border: 1px solid var(--border-color, #ccc);
+  }
+  .regie .f-status.draft_created, .regie .f-status.added_to_order {
+    background: var(--message-warning-bg, #fff3cd); border-color: transparent;
+  }
+  .regie .f-status.invoice_sent {
+    background: #e3f2fd; color: #0d47a1; border-color: transparent;
+  }
+  .regie .f-status.fulfilled {
+    background: var(--message-success-bg, #e8f5e9); color: #2e7d32;
+    border-color: transparent;
+  }
+  .regie .f-status.failed {
+    background: #fdecea; color: #b71c1c; border-color: transparent;
+  }
+  .regie .f-error { color: #b71c1c; font-size: 12px; max-width: 320px; }
+  .regie .f-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .regie .draw-btn.small { padding: 4px 10px; font-size: 13px; }
 </style>
 {% endblock %}
 
@@ -65,6 +121,11 @@
       Getrokken: <b id="drawn-count">{{ drawn_count }}</b> / {{ total_count }}
       <span class="muted">({{ prize_unit_count }} prijzen)</span>
     </span>
+    {% if fulfillment_total %}
+    <span class="regie-stat">
+      Afhandeling: <b>{{ fulfillment_processed }}</b> / {{ fulfillment_total }} verwerkt
+    </span>
+    {% endif %}
   </div>
 
   <p class="muted">
@@ -120,6 +181,9 @@
         <td class="winners">
           {% if raffle.winner_names %}
             🏆 {{ raffle.winner_names|join:", " }}
+            {% if raffle.status == 'pending' %}
+              <div class="muted">{{ raffle.drawn_so_far }}/{{ raffle.num_winners }} getrokken</div>
+            {% endif %}
           {% elif raffle.status == 'drawn' %}
             <span class="muted">getrokken, geen winnaars</span>
           {% else %}
@@ -128,12 +192,30 @@
         </td>
         <td>
           {% if raffle.status == 'pending' %}
-          <form method="post"
-                action="{% url 'admin:events_event_regie_draw' event.pk raffle.pk %}"
-                onsubmit="return regieConfirmDraw(this, '{{ raffle.prize_name|escapejs }}')">
-            {% csrf_token %}
-            <button type="submit" class="draw-btn">Trek nu</button>
-          </form>
+          <div class="draw-forms">
+            {% if raffle.slots_left > 1 %}
+            <form method="post"
+                  action="{% url 'admin:events_event_regie_draw' event.pk raffle.pk %}"
+                  onsubmit="return regieConfirmDraw(this, '{{ raffle.prize_name|escapejs }} (1 winnaar)')">
+              {% csrf_token %}
+              <input type="hidden" name="draw_count" value="1">
+              <button type="submit" class="draw-btn secondary">Trek 1</button>
+            </form>
+            <form method="post"
+                  action="{% url 'admin:events_event_regie_draw' event.pk raffle.pk %}"
+                  onsubmit="return regieConfirmDraw(this, '{{ raffle.prize_name|escapejs }} (alle {{ raffle.slots_left }})')">
+              {% csrf_token %}
+              <button type="submit" class="draw-btn">Trek alle ({{ raffle.slots_left }})</button>
+            </form>
+            {% else %}
+            <form method="post"
+                  action="{% url 'admin:events_event_regie_draw' event.pk raffle.pk %}"
+                  onsubmit="return regieConfirmDraw(this, '{{ raffle.prize_name|escapejs }}')">
+              {% csrf_token %}
+              <button type="submit" class="draw-btn">Trek nu</button>
+            </form>
+            {% endif %}
+          </div>
           {% else %}
             <span class="status-drawn">✔ {{ raffle.drawn_at|date:"H:i" }}</span>
           {% endif %}
@@ -145,6 +227,314 @@
       {% endfor %}
     </tbody>
   </table>
+
+  <h2>Veiling</h2>
+  <p class="muted">
+    Eén item tegelijk actief; leden bieden in de app (hele euro's, minimaal
+    het startbod of huidig bod + increment). “Sluit veiling” maakt de
+    hoogste bieder winnaar.
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Item</th>
+        <th>Startbod</th>
+        <th>Huidig bod</th>
+        <th>Status</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in auction_items %}
+      <tr class="{% if item.status == 'sold' %}drawn{% endif %}">
+        <td class="muted">{{ forloop.counter }}</td>
+        <td>
+          <span class="prize">{{ item.title }}</span>
+          <div class="muted">
+            {% if item.brewery %}{{ item.brewery }}{% endif %}
+            {% if item.size %} · {{ item.size }}{% endif %}
+            {% if item.untappd_rating %} · UT {{ item.untappd_rating }}{% endif %}
+          </div>
+          {% if item.status == 'pending' %}
+          <details>
+            <summary class="muted">Bewerk</summary>
+            <form method="post" class="auction-form"
+                  action="{% url 'admin:events_event_regie_auction_save' event.pk %}">
+              {% csrf_token %}
+              <input type="hidden" name="item_id" value="{{ item.pk }}">
+              <label>Titel <input type="text" name="title" value="{{ item.title }}" required></label>
+              <label>Brouwerij <input type="text" name="brewery" value="{{ item.brewery }}"></label>
+              <label>Formaat <input type="text" name="size" value="{{ item.size }}"></label>
+              <label>UT-score <input type="text" name="untappd_rating" value="{{ item.untappd_rating|default_if_none:'' }}"></label>
+              <label>Startbod € <input type="number" name="starting_price" step="0.01" value="{{ item.starting_price }}" required></label>
+              <label>Min. verhoging € <input type="number" name="min_increment" value="{{ item.min_increment }}"></label>
+              <label class="wide">Afbeelding-URL <input type="url" name="image_url" value="{{ item.image_url }}"></label>
+              <label class="wide">Omschrijving <textarea name="description" rows="2">{{ item.description }}</textarea></label>
+              <button type="submit" class="draw-btn secondary">Opslaan</button>
+            </form>
+          </details>
+          {% endif %}
+        </td>
+        <td>€{{ item.starting_price }}</td>
+        <td>
+          {% if item.status == 'sold' %}
+            €{{ item.final_price }} — 🏆 {% if item.winner %}{{ item.leader_display|default:item.winner.email }}{% endif %}
+          {% elif item.top_bid %}
+            <span class="bid-chip" id="auction-bid-{{ item.pk }}">€{{ item.top_bid.amount }}</span>
+            <span class="muted" id="auction-leader-{{ item.pk }}">{{ item.leader_display }}</span>
+            <span class="muted" id="auction-count-{{ item.pk }}">({{ item.total_bid_count }} biedingen)</span>
+          {% else %}
+            <span class="muted"
+                  id="auction-bid-{{ item.pk }}">nog geen biedingen</span>
+            <span class="muted" id="auction-leader-{{ item.pk }}"></span>
+            <span class="muted" id="auction-count-{{ item.pk }}"></span>
+          {% endif %}
+        </td>
+        <td>{{ item.get_status_display }}</td>
+        <td>
+          {% if item.status == 'pending' %}
+          <form method="post" class="inline-form"
+                action="{% url 'admin:events_event_regie_auction_activate' event.pk item.pk %}"
+                onsubmit="return regieConfirmDraw(this, 'Veiling starten: {{ item.title|escapejs }}')">
+            {% csrf_token %}
+            <button type="submit" class="draw-btn secondary">Activeer</button>
+          </form>
+          {% elif item.status == 'active' %}
+          <form method="post" class="inline-form"
+                action="{% url 'admin:events_event_regie_auction_close' event.pk item.pk %}"
+                onsubmit="return regieConfirmDraw(this, 'Veiling sluiten: {{ item.title|escapejs }}')">
+            {% csrf_token %}
+            <button type="submit" class="draw-btn">Sluit veiling</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="6" class="muted">Nog geen veilingitems.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <details>
+    <summary><b>+ Nieuw veilingitem</b></summary>
+    <form method="post" class="auction-form"
+          action="{% url 'admin:events_event_regie_auction_save' event.pk %}">
+      {% csrf_token %}
+      <label>Titel <input type="text" name="title" required></label>
+      <label>Brouwerij <input type="text" name="brewery"></label>
+      <label>Formaat <input type="text" name="size" placeholder="75cl"></label>
+      <label>UT-score <input type="text" name="untappd_rating" placeholder="4.35"></label>
+      <label>Startbod € <input type="number" name="starting_price" step="0.01" required></label>
+      <label>Min. verhoging € <input type="number" name="min_increment" value="5"></label>
+      <label class="wide">Afbeelding-URL <input type="url" name="image_url"></label>
+      <label class="wide">Omschrijving <textarea name="description" rows="2"></textarea></label>
+      <button type="submit" class="draw-btn secondary">Toevoegen</button>
+    </form>
+  </details>
+
+  <h2>Afhandeling</h2>
+  {% if fulfillment_raffles or sold_auction_items %}
+  <p class="muted">
+    Prijzen naar de winnaars: maak per prijs één (unlisted) Shopify-product
+    en zet het daarna op de draft order van elke winnaar. Punten-prijzen
+    zijn al automatisch bijgeschreven; een factuur sturen hoeft alleen bij
+    een prijs met een bedrag.
+  </p>
+
+  {% for raffle in fulfillment_raffles %}
+  <div class="f-block">
+    <h3>
+      {{ raffle.prize_name }}
+      <span class="muted">
+        — loting · {{ raffle.drawn_so_far }} winnaar(s)
+        · {{ raffle.get_fulfillment_type_display }}
+        {% if raffle.fulfillment_type == 'shopify' %}
+          · winnaarsprijs €{{ raffle.effective_price }}
+        {% endif %}
+      </span>
+    </h3>
+
+    {% if raffle.fulfillment_type == 'points' %}
+      <span class="points-chip">✔ {{ raffle.points_award }} punten p.p. automatisch toegekend bij de trekking</span>
+    {% else %}
+      {% if raffle.fulfillment_type == 'shopify' %}
+      <div class="f-actions" style="margin-bottom: 8px;">
+        {% if raffle.shopify_variant_gid %}
+          <span class="f-status fulfilled">Shopify-product ✔</span>
+          <span class="muted">{{ raffle.shopify_product_gid }}</span>
+          <form method="post" class="inline-form"
+                action="{% url 'admin:events_event_regie_fulfill_attach_all' event.pk raffle.pk %}">
+            {% csrf_token %}
+            <button type="submit" class="draw-btn secondary small">Alles toevoegen aan bestellingen</button>
+          </form>
+        {% else %}
+          <form method="post" class="inline-form"
+                action="{% url 'admin:events_event_regie_fulfill_product' event.pk %}">
+            {% csrf_token %}
+            <input type="hidden" name="kind" value="raffle">
+            <input type="hidden" name="obj_id" value="{{ raffle.pk }}">
+            <button type="submit" class="draw-btn small">Maak Shopify-product (€{{ raffle.effective_price }})</button>
+          </form>
+        {% endif %}
+      </div>
+      {% endif %}
+
+      <table>
+        <tbody>
+          {% for w in raffle.winners.all %}
+          <tr>
+            <td>{{ w.user.first_name }} {{ w.user.last_name }}</td>
+            <td class="muted">{{ w.user.email }}</td>
+            <td>
+              <span class="f-status {{ w.fulfillment_status }}">{{ w.get_fulfillment_status_display }}</span>
+              {% if w.fulfillment_error %}<div class="f-error">{{ w.fulfillment_error }}</div>{% endif %}
+            </td>
+            <td class="f-actions">
+              {% if raffle.fulfillment_type == 'shopify' and w.fulfillment_status != 'fulfilled' %}
+                {% if raffle.shopify_variant_gid %}
+                <form method="post" class="inline-form"
+                      action="{% url 'admin:events_event_regie_fulfill_attach' event.pk %}">
+                  {% csrf_token %}
+                  <input type="hidden" name="kind" value="winner">
+                  <input type="hidden" name="obj_id" value="{{ w.pk }}">
+                  <button type="submit" class="draw-btn secondary small">Voeg toe aan bestelling</button>
+                </form>
+                {% endif %}
+                {% if w.shopify_order_gid and raffle.effective_price %}
+                <form method="post" class="inline-form"
+                      action="{% url 'admin:events_event_regie_fulfill_invoice' event.pk %}">
+                  {% csrf_token %}
+                  <input type="hidden" name="kind" value="winner">
+                  <input type="hidden" name="obj_id" value="{{ w.pk }}">
+                  <button type="submit" class="draw-btn secondary small">Stuur factuur</button>
+                </form>
+                {% endif %}
+              {% endif %}
+              <form method="post" class="inline-form"
+                    action="{% url 'admin:events_event_regie_fulfill_toggle' event.pk %}">
+                {% csrf_token %}
+                <input type="hidden" name="kind" value="winner">
+                <input type="hidden" name="obj_id" value="{{ w.pk }}">
+                <button type="submit" class="link-btn">
+                  {% if w.fulfillment_status == 'fulfilled' %}maak ongedaan{% else %}markeer afgehandeld{% endif %}
+                </button>
+              </form>
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td class="muted">Getrokken zonder winnaars.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  {% for item in sold_auction_items %}
+  <div class="f-block">
+    <h3>
+      {{ item.title }}
+      <span class="muted">— veiling · verkocht voor €{{ item.final_price }}</span>
+    </h3>
+    <div class="f-actions" style="margin-bottom: 8px;">
+      {% if item.shopify_variant_gid %}
+        <span class="f-status fulfilled">Shopify-product ✔</span>
+        <span class="muted">{{ item.shopify_product_gid }}</span>
+      {% else %}
+        <form method="post" class="inline-form"
+              action="{% url 'admin:events_event_regie_fulfill_product' event.pk %}">
+          {% csrf_token %}
+          <input type="hidden" name="kind" value="auction">
+          <input type="hidden" name="obj_id" value="{{ item.pk }}">
+          <button type="submit" class="draw-btn small">Maak Shopify-product (€{{ item.final_price }})</button>
+        </form>
+      {% endif %}
+    </div>
+    {% if item.winner %}
+    <table>
+      <tbody>
+        <tr>
+          <td>{{ item.winner.first_name }} {{ item.winner.last_name }}</td>
+          <td class="muted">{{ item.winner.email }}</td>
+          <td>
+            <span class="f-status {{ item.fulfillment_status }}">{{ item.get_fulfillment_status_display }}</span>
+            {% if item.fulfillment_error %}<div class="f-error">{{ item.fulfillment_error }}</div>{% endif %}
+          </td>
+          <td class="f-actions">
+            {% if item.fulfillment_status != 'fulfilled' %}
+              {% if item.shopify_variant_gid %}
+              <form method="post" class="inline-form"
+                    action="{% url 'admin:events_event_regie_fulfill_attach' event.pk %}">
+                {% csrf_token %}
+                <input type="hidden" name="kind" value="auction">
+                <input type="hidden" name="obj_id" value="{{ item.pk }}">
+                <button type="submit" class="draw-btn secondary small">Voeg toe aan bestelling</button>
+              </form>
+              {% endif %}
+              {% if item.shopify_order_gid %}
+              <form method="post" class="inline-form"
+                    action="{% url 'admin:events_event_regie_fulfill_invoice' event.pk %}">
+                {% csrf_token %}
+                <input type="hidden" name="kind" value="auction">
+                <input type="hidden" name="obj_id" value="{{ item.pk }}">
+                <button type="submit" class="draw-btn secondary small">Stuur factuur</button>
+              </form>
+              {% endif %}
+            {% endif %}
+            <form method="post" class="inline-form"
+                  action="{% url 'admin:events_event_regie_fulfill_toggle' event.pk %}">
+              {% csrf_token %}
+              <input type="hidden" name="kind" value="auction">
+              <input type="hidden" name="obj_id" value="{{ item.pk }}">
+              <button type="submit" class="link-btn">
+                {% if item.fulfillment_status == 'fulfilled' %}maak ongedaan{% else %}markeer afgehandeld{% endif %}
+              </button>
+            </form>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    {% else %}
+    <span class="muted">Winnaar is verwijderd — handmatig afhandelen.</span>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% else %}
+  <p class="muted">
+    Nog niets af te handelen — dit vult zich zodra een loting getrokken of
+    een veilingitem verkocht is.
+  </p>
+  {% endif %}
+
+  <h2>Uitgesloten van loting</h2>
+  <p class="muted">
+    Deze leden (bijv. de presentatoren) kunnen niets winnen en staan niet
+    in het namenrad; ze tellen wél mee als kijker.
+  </p>
+  <div>
+    {% for member in excluded_users %}
+    <span class="chip">
+      {{ member.first_name }} {{ member.last_name }}
+      <span class="muted">{{ member.email }}</span>
+      <form method="post" class="inline-form"
+            action="{% url 'admin:events_event_regie_exclude_remove' event.pk %}">
+        {% csrf_token %}
+        <input type="hidden" name="user_id" value="{{ member.pk }}">
+        <button type="submit" class="link-btn">verwijder</button>
+      </form>
+    </span>
+    {% empty %}
+    <span class="muted">Niemand uitgesloten.</span>
+    {% endfor %}
+  </div>
+  <form method="post" style="margin-top: 8px;"
+        action="{% url 'admin:events_event_regie_exclude_add' event.pk %}">
+    {% csrf_token %}
+    <input type="text" name="q" placeholder="naam of e-mailadres"
+           style="padding: 6px; min-width: 260px;">
+    <button type="submit" class="draw-btn secondary">Uitsluiten</button>
+  </form>
 </div>
 
 <script>
@@ -164,6 +554,20 @@
           if (!data) return;
           document.getElementById('viewer-count').textContent =
             data.active_viewer_count;
+          // Live bid updates for the active auction item, so the host can
+          // call out bids without refreshing the page.
+          if (data.auction && data.auction.current_bid !== null) {
+            const a = data.auction;
+            const bid = document.getElementById('auction-bid-' + a.item_id);
+            const leader = document.getElementById('auction-leader-' + a.item_id);
+            const count = document.getElementById('auction-count-' + a.item_id);
+            if (bid) {
+              bid.textContent = '€' + a.current_bid;
+              bid.className = 'bid-chip';
+            }
+            if (leader) leader.textContent = a.leader || '';
+            if (count) count.textContent = '(' + a.bid_count + ' biedingen)';
+          }
         })
         .catch(function () {});
     }, 10000);

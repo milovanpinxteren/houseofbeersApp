@@ -18,6 +18,7 @@ import {
   Suggestion, SuggestionComment,
 } from '../../../src/api/community';
 import { timeAgo } from '../../../src/utils/timeAgo';
+import { Avatar } from '../../../src/components/chat';
 
 const STATUS_COLORS: Record<string, string> = {
   open: colors.primary,
@@ -302,9 +303,7 @@ export default function SuggestionDetailScreen() {
             <View style={styles.commentCard}>
               <View style={styles.commentHeader}>
                 <View style={styles.commentAuthorRow}>
-                  <View style={styles.commentAvatar}>
-                    <Ionicons name="person" size={13} color={colors.primary} />
-                  </View>
+                  <Avatar name={item.author.display_name} userId={item.author.user_id} size={24} />
                   <Text style={styles.commentAuthor}>{item.author.display_name}</Text>
                   <Text style={styles.commentTime}>
                     {timeAgo(item.created_at)}
@@ -506,14 +505,6 @@ const styles = StyleSheet.create({
   },
   commentHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.xs },
   commentAuthorRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flex: 1 },
-  commentAvatar: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: colors.primary + '14',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
   commentAuthor: {
     fontFamily: fonts.heading,
     fontSize: 13,

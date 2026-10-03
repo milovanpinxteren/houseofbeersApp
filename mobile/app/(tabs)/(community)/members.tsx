@@ -9,6 +9,7 @@ import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
 import { colors, spacing, borderRadius, fonts } from '../../../src/theme/colors';
 import { Card, EmptyState, SkeletonCard } from '../../../src/components/ui';
+import { Avatar } from '../../../src/components/chat';
 import { getMembers, CommunityProfile } from '../../../src/api/community';
 
 function MemberCard({ member }: { member: CommunityProfile }) {
@@ -19,9 +20,12 @@ function MemberCard({ member }: { member: CommunityProfile }) {
       onPress={() => router.push(`/(tabs)/(community)/member-profile?userId=${member.user_id}`)}
     >
       <View style={styles.memberRow}>
-        <View style={styles.avatar}>
-          <Ionicons name="person" size={22} color={colors.tertiary} />
-        </View>
+        <Avatar
+          name={member.display_name_resolved}
+          userId={member.user_id}
+          size="lg"
+          style={{ marginRight: spacing.md }}
+        />
         <View style={styles.memberInfo}>
           <Text style={styles.memberName}>{member.display_name_resolved}</Text>
           {member.bio ? <Text style={styles.memberBio} numberOfLines={2}>{member.bio}</Text> : null}
@@ -172,15 +176,6 @@ const styles = StyleSheet.create({
 
   memberCard: { marginHorizontal: spacing.md, marginTop: spacing.sm },
   memberRow: { flexDirection: 'row', alignItems: 'center' },
-  avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: colors.surfaceHigh,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: spacing.md,
-  },
   memberInfo: { flex: 1 },
   memberName: { fontFamily: fonts.heading, fontSize: 16, letterSpacing: 0.4, color: colors.text },
   memberBio: { color: colors.textMuted, fontSize: 13, lineHeight: 18, marginTop: 3 },

@@ -164,7 +164,25 @@ class ConversationSerializer(serializers.Serializer):
         return obj.messages.filter(is_read=False).exclude(sender=request_user).count()
 
 
-class MessageSerializer(serializers.ModelSerializer):
+class ReactionFieldsMixin:
+    """Adds `reactions` ({emoji: count}) and `mine` ([emoji]) to a message
+    representation, read from the `reaction_map` serializer context (built
+    once per page by community.reactions.reaction_map — no per-row queries).
+    Both keys are OMITTED entirely when empty: the mobile types are optional
+    and the common case (no reactions) must cost zero payload."""
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        entry = (self.context.get('reaction_map') or {}).get(instance.id)
+        if entry:
+            if entry['reactions']:
+                data['reactions'] = entry['reactions']
+            if entry['mine']:
+                data['mine'] = entry['mine']
+        return data
+
+
+class MessageSerializer(ReactionFieldsMixin, serializers.ModelSerializer):
     sender_id = serializers.IntegerField(source='sender.id', read_only=True)
 
     class Meta:
@@ -234,7 +252,7 @@ class GroupDetailSerializer(GroupSerializer):
         fields = GroupSerializer.Meta.fields + ['members']
 
 
-class GroupMessageSerializer(serializers.ModelSerializer):
+class GroupMessageSerializer(ReactionFieldsMixin, serializers.ModelSerializer):
     sender_id = serializers.IntegerField(source='sender.id', read_only=True)
     sender_name = serializers.SerializerMethodField()
 

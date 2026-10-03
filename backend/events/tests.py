@@ -32,7 +32,7 @@ from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from .models import (
-    Event, EventViewer, EventMessage, Raffle, RaffleWinner, AuctionItem,
+    Event, EventViewer, EventMessage, Raffle, RaffleWinner, AuctionItem, Bid,
     PRESENCE_WINDOW_SECONDS,
 )
 
@@ -1019,3 +1019,535 @@ class ViewerNameFallbackTests(APITestCase):
         self.assertIn('Member', names)
         for name in names:
             self.assertNotIn('user1', name)
+
+
+class PartialDrawTests(TestCase):
+    """draw_winners(count=N) fills slots in batches; the raffle only flips
+    to 'drawn' once every num_winners slot is filled ("Trek 1" on regie)."""
+
+    def setUp(self):
+        self.event = make_event()
+        self.users = [make_user(i) for i in range(6)]
+        for user in self.users:
+            EventViewer.objects.create(event=self.event, user=user)
+
+    def test_single_draw_leaves_raffle_pending(self):
+        raffle = Raffle.objects.create(
+            event=self.event, prize_name='Taster', num_winners=4,
+        )
+        winners = raffle.draw_winners(count=1)
+        self.assertEqual(len(winners), 1)
+        raffle.refresh_from_db()
+        self.assertEqual(raffle.status, 'pending')
+        self.assertIsNone(raffle.drawn_at)
+
+    def test_batches_accumulate_until_drawn(self):
+        raffle = Raffle.objects.create(
+            event=self.event, prize_name='Taster', num_winners=3,
+        )
+        self.assertEqual(len(raffle.draw_winners(count=1)), 1)
+        self.assertEqual(len(raffle.draw_winners(count=1)), 1)
+        raffle.refresh_from_db()
+        self.assertEqual(raffle.status, 'pending')
+
+        final = raffle.draw_winners(count=1)
+        self.assertEqual(len(final), 1)
+        raffle.refresh_from_db()
+        self.assertEqual(raffle.status, 'drawn')
+        self.assertIsNotNone(raffle.drawn_at)
+        self.assertEqual(raffle.winners.count(), 3)
+        # Fully drawn: another call is the already-drawn no-op
+        self.assertIsNone(raffle.draw_winners())
+
+    def test_count_clamped_to_remaining_slots(self):
+        raffle = Raffle.objects.create(
+            event=self.event, prize_name='Taster', num_winners=2,
+        )
+        winners = raffle.draw_winners(count=99)
+        self.assertEqual(len(winners), 2)
+        raffle.refresh_from_db()
+        self.assertEqual(raffle.status, 'drawn')
+
+    def test_no_count_draws_all_remaining(self):
+        raffle = Raffle.objects.create(
+            event=self.event, prize_name='Taster', num_winners=4,
+        )
+        raffle.draw_winners(count=1)
+        rest = raffle.draw_winners()
+        self.assertEqual(len(rest), 3)
+        raffle.refresh_from_db()
+        self.assertEqual(raffle.status, 'drawn')
+
+    def test_same_raffle_winner_never_redrawn_even_with_allow_policy(self):
+        """'allow' lets event-wide past winners back in, but a winner of an
+        earlier batch of THIS raffle must never be drawn again (unique
+        constraint)."""
+        raffle = Raffle.objects.create(
+            event=self.event, prize_name='Taster', num_winners=6,
+            winner_policy='allow',
+        )
+        seen = set()
+        for _ in range(6):
+            (winner,) = raffle.draw_winners(count=1)
+            self.assertNotIn(winner.user_id, seen)
+            seen.add(winner.user_id)
+        self.assertEqual(len(seen), 6)
+
+    def test_insufficient_viewers_keeps_raffle_open(self):
+        """A full draw with fewer eligible viewers than slots fills what it
+        can and stays pending, so the rest can be drawn once more viewers
+        arrive (previously the raffle closed short)."""
+        raffle = Raffle.objects.create(
+            event=self.event, prize_name='Taster', num_winners=10,
+        )
+        winners = raffle.draw_winners()
+        self.assertEqual(len(winners), 6)
+        raffle.refresh_from_db()
+        self.assertEqual(raffle.status, 'pending')
+
+        late_user = make_user(50)
+        EventViewer.objects.create(event=self.event, user=late_user)
+        raffle.winner_policy = 'allow'
+        raffle.save()
+        more = raffle.draw_winners()
+        self.assertEqual({w.user_id for w in more}, {late_user.id})
+
+    def test_points_awarded_per_batch(self):
+        from loyalty.models import PointsTransaction
+
+        raffle = Raffle.objects.create(
+            event=self.event, prize_name='500 Punten',
+            num_winners=2, points_award=500,
+        )
+        (first,) = raffle.draw_winners(count=1)
+        self.assertEqual(
+            PointsTransaction.objects.filter(user=first.user).count(), 1)
+        (second,) = raffle.draw_winners(count=1)
+        self.assertEqual(
+            PointsTransaction.objects.filter(user=second.user).count(), 1)
+        self.assertEqual(PointsTransaction.objects.count(), 2)
+
+
+class ExcludedUserTests(APITestCase):
+    """Event.excluded_users (presenting staff): never drawn, never on the
+    name reel, but still an honest part of the viewer count."""
+
+    def setUp(self):
+        self.user = make_user(0)
+        self.client.force_authenticate(user=self.user)
+        self.event = make_event()
+        self.host = make_user(1)
+        self.host.first_name = 'Mart'
+        self.host.save()
+        self.event.excluded_users.add(self.host)
+        self.regular = make_user(2)
+        for user in [self.host, self.regular]:
+            EventViewer.objects.create(event=self.event, user=user)
+
+    def test_excluded_user_never_drawn(self):
+        raffle = Raffle.objects.create(
+            event=self.event, prize_name='Prijs', num_winners=5,
+        )
+        winners = raffle.draw_winners()
+        winner_ids = {w.user_id for w in winners}
+        self.assertNotIn(self.host.id, winner_ids)
+        self.assertIn(self.regular.id, winner_ids)
+
+    def test_excluded_user_not_in_poll_viewer_names(self):
+        raffle = Raffle.objects.create(
+            event=self.event, prize_name='Prijs', num_winners=1,
+            status='drawn', drawn_at=timezone.now(),
+        )
+        RaffleWinner.objects.create(raffle=raffle, user=self.regular)
+        response = self.client.get(
+            f'/api/events/{self.event.id}/poll/?known_winner_count=0'
+        )
+        names = [v['display_name'] for v in response.data['viewer_names']]
+        self.assertNotIn('Mart', names)
+
+    def test_excluded_user_not_in_viewers_endpoint(self):
+        response = self.client.get(f'/api/events/{self.event.id}/viewers/')
+        names = [v['display_name'] for v in response.data['viewers']]
+        self.assertNotIn('Mart', names)
+
+    def test_excluded_user_still_counts_as_viewer(self):
+        self.assertEqual(self.event.active_viewer_count(), 2)
+
+
+class AuctionBidTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+        self.user = make_user(0)
+        self.client.force_authenticate(user=self.user)
+        # Deliberately livestream-typed: raffles and auctions share an event
+        self.event = make_event(status='live')
+        self.item = AuctionItem.objects.create(
+            event=self.event, title='BCBS 2015', starting_price='50.00',
+            min_increment=5, status='active',
+        )
+        self.url = f'/api/events/{self.event.id}/auction/bid/'
+
+    def tearDown(self):
+        cache.clear()
+
+    def bid(self, amount):
+        return self.client.post(self.url, {'amount': amount}, format='json')
+
+    def test_first_bid_at_starting_price_accepted(self):
+        response = self.bid(50)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['ok'])
+        self.assertEqual(response.data['current_bid'], 50)
+        self.assertEqual(Bid.objects.count(), 1)
+
+    def test_first_bid_below_starting_price_rejected(self):
+        response = self.bid(49)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data['error'], 'too_low')
+        self.assertEqual(response.data['minimum'], 50)
+        self.assertEqual(Bid.objects.count(), 0)
+
+    def test_bid_below_current_plus_increment_rejected(self):
+        other = make_user(1)
+        Bid.objects.create(item=self.item, user=other, amount=60)
+        response = self.bid(64)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data['error'], 'too_low')
+        self.assertEqual(response.data['minimum'], 65)
+
+    def test_bid_at_current_plus_increment_accepted(self):
+        other = make_user(1)
+        Bid.objects.create(item=self.item, user=other, amount=60)
+        response = self.bid(65)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['current_bid'], 65)
+
+    def test_non_integer_amount_rejected(self):
+        for value in ['abc', '50.5', '', None, [50]]:
+            response = self.bid(value)
+            self.assertEqual(response.status_code, 400, f'amount={value!r}')
+            self.assertEqual(response.data['error'], 'invalid_amount')
+        self.assertEqual(Bid.objects.count(), 0)
+
+    def test_no_active_item_rejected(self):
+        self.item.status = 'pending'
+        self.item.save()
+        response = self.bid(50)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data['error'], 'no_active_item')
+
+    def test_not_live_rejected(self):
+        self.event.status = 'ended'
+        self.event.save()
+        response = self.bid(50)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data['error'], 'not_live')
+
+    def test_bid_refreshes_presence(self):
+        self.bid(50)
+        viewer = EventViewer.objects.get(event=self.event, user=self.user)
+        self.assertGreater(
+            viewer.last_seen_at,
+            timezone.now() - timedelta(seconds=PRESENCE_WINDOW_SECONDS),
+        )
+
+    def test_tie_goes_to_earliest_bidder(self):
+        other = make_user(1)
+        other.first_name = 'Eerste'
+        other.save()
+        Bid.objects.create(item=self.item, user=other, amount=50)
+        # Same amount arriving later (race): stored, but not the leader
+        Bid.objects.create(item=self.item, user=self.user, amount=50)
+        self.assertEqual(self.item.bids.first().user_id, other.id)
+
+
+class PollPayloadTests(APITestCase):
+    def setUp(self):
+        self.user = make_user(0)
+        self.client.force_authenticate(user=self.user)
+        self.event = make_event(
+            youtube_url='https://www.youtube.com/live/abc123',
+        )
+        self.url = f'/api/events/{self.event.id}/poll/'
+
+    def test_event_block_always_present(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.data['event'], {
+            'status': 'live',
+            'youtube_url': 'https://www.youtube.com/live/abc123',
+        })
+
+    def test_event_block_reflects_mid_stream_url_fix(self):
+        self.client.get(self.url)
+        self.event.youtube_url = 'https://www.youtube.com/live/NEWID'
+        self.event.status = 'ended'
+        self.event.save()
+        response = self.client.get(self.url)
+        self.assertEqual(response.data['event']['status'], 'ended')
+        self.assertEqual(
+            response.data['event']['youtube_url'],
+            'https://www.youtube.com/live/NEWID',
+        )
+
+    def test_livestream_event_with_items_includes_auction_block(self):
+        """Raffles + auction now run in ONE livestream-typed event; the
+        auction payload must not require event_type == 'auction'."""
+        item = AuctionItem.objects.create(
+            event=self.event, title='BCBS', brewery='Goose Island',
+            size='75cl', untappd_rating='4.55', starting_price='50.00',
+            min_increment=10, status='active',
+        )
+        Bid.objects.create(item=item, user=make_user(1), amount=80)
+        response = self.client.get(self.url)
+        data = response.data['auction_item']
+        self.assertEqual(data['id'], item.id)
+        self.assertEqual(data['brewery'], 'Goose Island')
+        self.assertEqual(data['size'], '75cl')
+        self.assertEqual(data['min_increment'], 10)
+        self.assertEqual(data['current_bid'], 80)
+        self.assertEqual(data['bid_count'], 1)
+        self.assertIsNotNone(data['leader_name'])
+
+    def test_livestream_event_without_items_omits_auction_block(self):
+        response = self.client.get(self.url)
+        self.assertNotIn('auction_item', response.data)
+
+
+class NameDisambiguationTests(APITestCase):
+    """Three Ivos won on 2026-10-02 and nobody knew which one — winner and
+    viewer names now carry the last-name initial."""
+
+    def setUp(self):
+        self.user = make_user(0)
+        self.client.force_authenticate(user=self.user)
+        self.event = make_event()
+
+        self.ivo_b = make_user(1)
+        self.ivo_b.first_name, self.ivo_b.last_name = 'Ivo', 'Bakker'
+        self.ivo_b.save()
+        self.ivo_s = make_user(2)
+        self.ivo_s.first_name, self.ivo_s.last_name = 'Ivo', 'Smit'
+        self.ivo_s.save()
+
+        self.raffle = Raffle.objects.create(
+            event=self.event, prize_name='Glas', num_winners=2,
+            status='drawn', drawn_at=timezone.now(),
+        )
+        RaffleWinner.objects.create(raffle=self.raffle, user=self.ivo_b)
+        RaffleWinner.objects.create(raffle=self.raffle, user=self.ivo_s)
+
+    def winners_payload(self):
+        response = self.client.get(
+            f'/api/events/{self.event.id}/poll/?known_winner_count=0'
+        )
+        return response.data['winners']
+
+    def test_winner_names_carry_last_initial(self):
+        names = {w['user']['display_name'] for w in self.winners_payload()}
+        self.assertEqual(names, {'Ivo B.', 'Ivo S.'})
+
+    def test_winner_rows_carry_raffle_id(self):
+        for winner in self.winners_payload():
+            self.assertEqual(winner['raffle_id'], self.raffle.id)
+
+    def test_community_display_name_wins_over_initial(self):
+        from community.models import CommunityProfile
+
+        # A profile row may already exist (created on registration)
+        CommunityProfile.objects.update_or_create(
+            user=self.ivo_b, defaults={'display_name': 'BierIvo'})
+        names = {w['user']['display_name'] for w in self.winners_payload()}
+        self.assertIn('BierIvo', names)
+
+    def test_viewer_reel_names_carry_last_initial(self):
+        EventViewer.objects.create(event=self.event, user=self.ivo_b)
+        response = self.client.get(f'/api/events/{self.event.id}/viewers/')
+        names = [v['display_name'] for v in response.data['viewers']]
+        self.assertIn('Ivo B.', names)
+
+    def test_no_email_leak_for_nameless_winner(self):
+        nameless = make_user(3)
+        raffle = Raffle.objects.create(
+            event=self.event, prize_name='Pet', num_winners=1,
+            status='drawn', drawn_at=timezone.now(),
+        )
+        RaffleWinner.objects.create(raffle=raffle, user=nameless)
+        names = {w['user']['display_name'] for w in self.winners_payload()}
+        self.assertIn('Member', names)
+        for name in names:
+            self.assertNotIn('user3', name)
+
+
+class FulfillmentTypeMigrationTests(TestCase):
+    """The 0007 data migration marks points raffles as points-fulfilled."""
+
+    def test_forward_sets_points_type(self):
+        import importlib
+        from django.apps import apps as live_apps
+
+        event = make_event()
+        points_raffle = Raffle.objects.create(
+            event=event, prize_name='2000 Punten', points_award=2000,
+            fulfillment_type='manual',
+        )
+        physical_raffle = Raffle.objects.create(
+            event=event, prize_name='Glas',
+        )
+        migration = importlib.import_module(
+            'events.migrations.0007_raffle_fulfillment_type_points')
+        migration.set_points_fulfillment(live_apps, None)
+
+        points_raffle.refresh_from_db()
+        physical_raffle.refresh_from_db()
+        self.assertEqual(points_raffle.fulfillment_type, 'points')
+        self.assertEqual(physical_raffle.fulfillment_type, 'manual')
+
+
+@override_settings(STORAGES={
+    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+    'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+})
+class RegieControlTests(TestCase):
+    """New regie controls: partial draws, auction management, exclusions."""
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(
+            username='admin', email='admin@test.com', password='adminpass123',
+        )
+        self.client.force_login(self.admin)
+        self.event = make_event(title='Najaar Stream')
+        self.viewers = [make_user(i) for i in range(4)]
+        for user in self.viewers:
+            EventViewer.objects.create(event=self.event, user=user)
+        self.url = f'/admin/events/event/{self.event.pk}/regie/'
+
+    def test_draw_count_one_draws_single_winner(self):
+        raffle = Raffle.objects.create(
+            event=self.event, prize_name='Taster', num_winners=3,
+        )
+        response = self.client.post(
+            f'{self.url}draw/{raffle.pk}/', {'draw_count': '1'},
+        )
+        self.assertRedirects(response, self.url)
+        raffle.refresh_from_db()
+        self.assertEqual(raffle.winners.count(), 1)
+        self.assertEqual(raffle.status, 'pending')
+
+    def test_draw_without_count_fills_all_slots(self):
+        raffle = Raffle.objects.create(
+            event=self.event, prize_name='Taster', num_winners=3,
+        )
+        self.client.post(f'{self.url}draw/{raffle.pk}/')
+        raffle.refresh_from_db()
+        self.assertEqual(raffle.winners.count(), 3)
+        self.assertEqual(raffle.status, 'drawn')
+
+    def test_regie_page_shows_partial_draw_buttons(self):
+        Raffle.objects.create(
+            event=self.event, prize_name='Taster', num_winners=4,
+        )
+        response = self.client.get(self.url)
+        self.assertContains(response, 'Trek 1')
+        self.assertContains(response, 'Trek alle (4)')
+
+    def test_auction_create_activate_bid_close_cycle(self):
+        # Create via the regie form
+        response = self.client.post(f'{self.url}auction/save/', {
+            'title': 'King Henry II', 'brewery': 'Goose Island',
+            'size': '50cl', 'untappd_rating': '4.8',
+            'starting_price': '100.00', 'min_increment': '10',
+            'description': 'Barrel aged', 'image_url': '',
+        })
+        self.assertRedirects(response, self.url)
+        item = AuctionItem.objects.get(event=self.event)
+        self.assertEqual(item.status, 'pending')
+        self.assertEqual(item.min_increment, 10)
+
+        # Activate deactivates any other active item
+        other = AuctionItem.objects.create(
+            event=self.event, title='Ander item', starting_price='10.00',
+            status='active',
+        )
+        self.client.post(f'{self.url}auction/{item.pk}/activate/')
+        item.refresh_from_db()
+        other.refresh_from_db()
+        self.assertEqual(item.status, 'active')
+        self.assertEqual(other.status, 'pending')
+
+        # Close: highest bidder wins at their amount
+        Bid.objects.create(item=item, user=self.viewers[0], amount=120)
+        Bid.objects.create(item=item, user=self.viewers[1], amount=150)
+        self.client.post(f'{self.url}auction/{item.pk}/close/')
+        item.refresh_from_db()
+        self.assertEqual(item.status, 'sold')
+        self.assertEqual(item.winner_id, self.viewers[1].id)
+        self.assertEqual(item.final_price, 150)
+
+    def test_auction_close_without_bids_returns_to_pending(self):
+        item = AuctionItem.objects.create(
+            event=self.event, title='Stil item', starting_price='10.00',
+            status='active',
+        )
+        self.client.post(f'{self.url}auction/{item.pk}/close/')
+        item.refresh_from_db()
+        self.assertEqual(item.status, 'pending')
+        self.assertIsNone(item.winner)
+
+    def test_exclude_add_by_email_and_remove(self):
+        member = self.viewers[0]
+        response = self.client.post(
+            f'{self.url}exclude/add/', {'q': member.email},
+        )
+        self.assertRedirects(response, self.url)
+        self.assertIn(member, self.event.excluded_users.all())
+
+        response = self.client.post(
+            f'{self.url}exclude/remove/', {'user_id': member.pk},
+        )
+        self.assertRedirects(response, self.url)
+        self.assertNotIn(member, self.event.excluded_users.all())
+
+    def test_exclude_add_ambiguous_query_adds_nobody(self):
+        for user in self.viewers[:2]:
+            user.first_name = 'Jeroen'
+            user.save()
+        self.client.post(f'{self.url}exclude/add/', {'q': 'Jeroen'})
+        self.assertEqual(self.event.excluded_users.count(), 0)
+
+
+class ChatCsvExportTests(TestCase):
+    def setUp(self):
+        self.event = make_event(title='Export Stream')
+        self.user = make_user(1)
+        self.user.first_name = 'Kees'
+        self.user.save()
+        EventMessage.objects.create(
+            event=self.event, user=self.user, message='Proost; allemaal',
+        )
+
+    def export(self, queryset):
+        from django.contrib.admin.sites import AdminSite
+        from unittest.mock import MagicMock
+        from .admin import EventAdmin
+
+        event_admin = EventAdmin(Event, AdminSite())
+        event_admin.message_user = MagicMock()
+        return event_admin, event_admin.export_chat_csv(None, queryset)
+
+    def test_exports_semicolon_csv_with_bom(self):
+        _, response = self.export(Event.objects.filter(pk=self.event.pk))
+        raw = response.content.decode('utf-8-sig')
+        lines = raw.strip().splitlines()
+        self.assertEqual(lines[0], 'tijd;naam;email;bericht')
+        self.assertIn('Kees', lines[1])
+        self.assertIn(self.user.email, lines[1])
+        # The ; inside the message must be quoted, not split
+        self.assertIn('"Proost; allemaal"', lines[1])
+        self.assertIn(
+            f'chat-{self.event.pk}-', response['Content-Disposition'])
+
+    def test_multiple_events_selected_is_rejected(self):
+        make_event(title='Tweede')
+        event_admin, response = self.export(Event.objects.all())
+        self.assertIsNone(response)
+        event_admin.message_user.assert_called_once()

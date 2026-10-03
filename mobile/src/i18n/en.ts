@@ -597,6 +597,27 @@ export default {
     groupNotFound: 'Group not found',
     memberNotFound: 'Member not found',
     admin: 'Admin',
+
+    // Reactions & shared chat UI
+    copyMessage: 'Copy',
+    copied: 'Copied',
+    reactError: 'Could not update your reaction. Please try again.',
+    newMessage: '1 new message',
+    newMessages: '%{count} new messages',
+    emojiBeer: 'Cheers',
+    emojiSmileys: 'Smileys',
+    emojiGestures: 'Gestures',
+    emojiMisc: 'More',
+  },
+
+  // Relative/absolute time formatting (used by timeAgo + chat day pills)
+  time: {
+    now: 'now',
+    minutes: '%{count}m',
+    hours: '%{count}h',
+    days: '%{count}d',
+    today: 'Today',
+    yesterday: 'Yesterday',
   },
 
   // Events
@@ -616,6 +637,11 @@ export default {
     noEventsHint: 'Check back soon for upcoming livestreams!',
     chatPlaceholder: 'Say something...',
     sendError: 'Failed to send message',
+    chatThrottled: 'Easy there! Max 15 messages per minute.',
+    reactionThrottled: 'Easy there! Too many reactions at once.',
+    chatClosed: 'Chat is only open while the stream is live.',
+    newMessage: '1 new message',
+    newMessages: '%{count} new messages',
     winners: 'Winners',
     noWinners: 'No winners yet',
     won: 'won',
@@ -623,15 +649,30 @@ export default {
     startsAt: 'Starts',
     going: 'going',
     // Auction
+    auction: 'Auction',
     currentItem: 'Current Item',
     startingAt: 'Starting at',
     soldFor: 'Sold for',
     soldTo: 'to',
     unsold: 'Unsold',
     noActiveItem: 'No item up for auction',
+    auctionNoBids: 'No bids yet',
+    auctionHighestBid: 'Highest bid',
+    auctionBidCount: '%{count} bids',
+    auctionBidCountOne: '1 bid',
+    auctionQuickBid: 'Bid €%{amount}',
+    auctionBidPlaceholder: 'Your bid (€)',
+    auctionYouLead: "You're the highest bidder!",
+    auctionOutbid: 'Someone bid higher — highest bid is €%{amount}',
+    auctionBidTooLow: 'Bid too low — minimum is €%{minimum}',
+    auctionClosed: 'This auction is closed',
+    auctionThrottled: 'Easy on the bidding! Try again in a moment.',
+    auctionBidError: 'Failed to place bid',
     // Raffle animation
     drawingFor: 'Drawing for',
     tapToDismiss: 'Tap to dismiss',
+    youWonBanner: 'You won: %{prizes}',
+    missedDraws: 'You missed %{count} draws',
   },
 
   // Loyalty campaign raffles

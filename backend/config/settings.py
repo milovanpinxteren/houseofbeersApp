@@ -181,6 +181,11 @@ CORS_ALLOW_CREDENTIALS = True
 # Shopify
 SHOPIFY_STORE_URL = config('SHOPIFY_STORE_URL', default='')
 SHOPIFY_ACCESS_TOKEN = config('SHOPIFY_ACCESS_TOKEN', default='')
+# Location that receives inventory for products the app creates itself
+# (livestream prize fulfillment). Bare numeric id or full
+# gid://shopify/Location/<id> — both accepted. Empty = prize products are
+# created untracked (no inventory step).
+SHOPIFY_LOCATION_ID = config('SHOPIFY_LOCATION_ID', default='')
 
 # Beer Recommender service
 RECOMMENDER_API_URL = config(

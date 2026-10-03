@@ -17,6 +17,7 @@ import {
   Post, Group, ChatItem, Suggestion,
 } from '../../src/api/community';
 import { timeAgo } from '../../src/utils/timeAgo';
+import { Avatar } from '../../src/components/chat';
 
 const STATUS_COLORS: Record<string, string> = {
   open: colors.primary,
@@ -73,9 +74,7 @@ function PostCard({ post, userId, isStaff, onLike, onDelete, onComment, onEdit }
           style={({ pressed }) => [styles.authorRow, pressed && { opacity: 0.7 }]}
           onPress={() => router.push(`/(tabs)/(community)/member-profile?userId=${post.author.user_id}`)}
         >
-          <View style={styles.avatarSm}>
-            <Ionicons name="person" size={18} color={colors.tertiary} />
-          </View>
+          <Avatar name={post.author.display_name} userId={post.author.user_id} size="md" />
           <View>
             <Text style={styles.authorName}>{post.author.display_name}</Text>
             <Text style={styles.postTime}>
@@ -425,9 +424,18 @@ function ChatsTab({ userId }: { userId: number }) {
           return (
             <Card style={styles.chatRow} onPress={() => handleTap(item)}>
               <View style={styles.chatRowInner}>
-                <View style={item.type === 'group' ? styles.avatarGroup : styles.avatarDm}>
-                  <Ionicons name={item.type === 'group' ? 'people' : 'person'} size={20} color={item.type === 'group' ? colors.primary : colors.tertiary} />
-                </View>
+                {item.type === 'group' ? (
+                  <View style={styles.avatarGroup}>
+                    <Ionicons name="people" size={20} color={colors.primary} />
+                  </View>
+                ) : (
+                  <Avatar
+                    name={item.name}
+                    userId={item.other_user_id ?? undefined}
+                    size={44}
+                    style={{ marginRight: spacing.md }}
+                  />
+                )}
                 <View style={styles.chatInfo}>
                   <View style={styles.chatHeader}>
                     <Text style={[styles.chatName, item.unread_count > 0 && styles.chatNameBold]} numberOfLines={1}>{item.name}</Text>
@@ -743,7 +751,6 @@ const styles = StyleSheet.create({
   postCard: { marginHorizontal: spacing.md, marginTop: spacing.md },
   postHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.sm },
   authorRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  avatarSm: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surfaceHigh, justifyContent: 'center', alignItems: 'center' },
   authorName: { fontFamily: fonts.heading, fontSize: 15, letterSpacing: 0.4, color: colors.text },
   postTime: { color: colors.textMuted, fontSize: 12, marginTop: 1 },
   postTypeBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: spacing.xs },
@@ -805,7 +812,6 @@ const styles = StyleSheet.create({
   // Chat / group rows
   chatRow: { marginHorizontal: spacing.md, marginTop: spacing.sm },
   chatRowInner: { flexDirection: 'row', alignItems: 'center' },
-  avatarDm: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.surfaceHigh, justifyContent: 'center', alignItems: 'center', marginRight: spacing.md },
   avatarGroup: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.primary + '18', justifyContent: 'center', alignItems: 'center', marginRight: spacing.md },
   chatInfo: { flex: 1 },
   chatHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },

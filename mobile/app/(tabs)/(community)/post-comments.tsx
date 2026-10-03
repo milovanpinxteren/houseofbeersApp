@@ -10,7 +10,9 @@ import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
 import { colors, spacing, borderRadius, fonts } from '../../../src/theme/colors';
 import { EmptyState, SkeletonCard, Button, useToast } from '../../../src/components/ui';
+import { Avatar } from '../../../src/components/chat';
 import { getComments, addComment, deleteComment, editComment, Comment } from '../../../src/api/community';
+import { timeAgo } from '../../../src/utils/timeAgo';
 
 export default function PostCommentsScreen() {
   const { language } = useLanguage();
@@ -127,13 +129,15 @@ export default function PostCommentsScreen() {
               style={({ pressed }) => [styles.commentAuthorRow, pressed && { opacity: 0.7 }]}
               onPress={() => router.push(`/(tabs)/(community)/member-profile?userId=${comment.author.user_id}`)}
             >
-              <View style={isReply ? styles.avatarXs : styles.avatarSm}>
-                <Ionicons name="person" size={isReply ? 11 : 14} color={colors.tertiary} />
-              </View>
+              <Avatar
+                name={comment.author.display_name}
+                userId={comment.author.user_id}
+                size={isReply ? 'xs' : 'sm'}
+              />
               <Text style={styles.commentAuthor}>{comment.author.display_name}</Text>
             </Pressable>
             <Text style={styles.commentTime}>
-              {new Date(comment.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+              {timeAgo(comment.created_at)}
               {comment.edited_at ? ` · ${t('community.edited')}` : ''}
             </Text>
           </View>
@@ -261,8 +265,6 @@ const styles = StyleSheet.create({
   commentInner: { backgroundColor: colors.surface, borderRadius: borderRadius.lg, padding: spacing.md },
   commentHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm },
   commentAuthorRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  avatarSm: { width: 28, height: 28, borderRadius: 14, backgroundColor: colors.surfaceHigh, justifyContent: 'center', alignItems: 'center' },
-  avatarXs: { width: 22, height: 22, borderRadius: 11, backgroundColor: colors.surfaceHigh, justifyContent: 'center', alignItems: 'center' },
   commentAuthor: { fontFamily: fonts.heading, fontSize: 14, letterSpacing: 0.3, color: colors.text },
   commentTime: { color: colors.textMuted, fontSize: 11 },
   commentText: { fontFamily: fonts.serif, fontSize: 15, lineHeight: 21, color: colors.text },

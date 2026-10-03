@@ -596,6 +596,27 @@ export default {
     groupNotFound: 'Groep niet gevonden',
     memberNotFound: 'Lid niet gevonden',
     admin: 'Beheerder',
+
+    // Reacties & gedeelde chat-UI
+    copyMessage: 'Kopiëren',
+    copied: 'Gekopieerd',
+    reactError: 'Reactie kon niet worden opgeslagen. Probeer het opnieuw.',
+    newMessage: '1 nieuw bericht',
+    newMessages: '%{count} nieuwe berichten',
+    emojiBeer: 'Proost',
+    emojiSmileys: 'Smileys',
+    emojiGestures: 'Gebaren',
+    emojiMisc: 'Meer',
+  },
+
+  // Relatieve/absolute tijdnotatie (timeAgo + dag-pills in de chat)
+  time: {
+    now: 'nu',
+    minutes: '%{count}m',
+    hours: '%{count}u',
+    days: '%{count}d',
+    today: 'Vandaag',
+    yesterday: 'Gisteren',
   },
 
   // Evenementen
@@ -615,6 +636,11 @@ export default {
     noEventsHint: 'Kom snel terug voor aankomende livestreams!',
     chatPlaceholder: 'Zeg iets...',
     sendError: 'Bericht versturen mislukt',
+    chatThrottled: 'Rustig aan! Max 15 berichten per minuut.',
+    reactionThrottled: 'Rustig aan! Te veel reacties tegelijk.',
+    chatClosed: 'De chat is alleen open tijdens de livestream.',
+    newMessage: '1 nieuw bericht',
+    newMessages: '%{count} nieuwe berichten',
     winners: 'Winnaars',
     noWinners: 'Nog geen winnaars',
     won: 'won',
@@ -622,15 +648,30 @@ export default {
     startsAt: 'Start',
     going: 'gaan',
     // Veiling
+    auction: 'Veiling',
     currentItem: 'Huidig Item',
     startingAt: 'Startprijs',
     soldFor: 'Verkocht voor',
     soldTo: 'aan',
     unsold: 'Niet verkocht',
     noActiveItem: 'Geen item te veilen',
+    auctionNoBids: 'Nog geen biedingen',
+    auctionHighestBid: 'Hoogste bod',
+    auctionBidCount: '%{count} biedingen',
+    auctionBidCountOne: '1 bod',
+    auctionQuickBid: 'Bied €%{amount}',
+    auctionBidPlaceholder: 'Eigen bod (€)',
+    auctionYouLead: 'Jij bent de hoogste bieder!',
+    auctionOutbid: 'Iemand bood net hoger — hoogste bod is €%{amount}',
+    auctionBidTooLow: 'Bod te laag — minimaal €%{minimum}',
+    auctionClosed: 'Deze veiling is gesloten',
+    auctionThrottled: 'Rustig aan met bieden! Probeer zo weer.',
+    auctionBidError: 'Bod plaatsen mislukt',
     // Verloting animatie
     drawingFor: 'Trekking voor',
     tapToDismiss: 'Tik om te sluiten',
+    youWonBanner: 'Jij hebt gewonnen: %{prizes}',
+    missedDraws: 'Je hebt %{count} trekkingen gemist',
   },
 
   // Loyalty-campagne verlotingen

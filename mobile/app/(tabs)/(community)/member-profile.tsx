@@ -9,6 +9,7 @@ import { useAuth } from '../../../src/context/AuthContext';
 import { t } from '../../../src/i18n';
 import { colors, spacing, borderRadius, fonts } from '../../../src/theme/colors';
 import { Button, Card, EmptyState, Screen, SectionHeader, Skeleton, SkeletonCard, useToast } from '../../../src/components/ui';
+import { Avatar } from '../../../src/components/chat';
 import {
   getMemberProfile, getOrCreateConversation,
   MemberProfileResponse, Post, CachedCheckin, MemberFavorite,
@@ -91,9 +92,12 @@ export default function MemberProfileScreen() {
     >
       {/* Profile header */}
       <View style={styles.profileHeader}>
-        <View style={styles.avatarLarge}>
-          <Ionicons name="person" size={38} color={colors.tertiary} />
-        </View>
+        <Avatar
+          name={profile.display_name_resolved}
+          userId={profile.user_id}
+          size={84}
+          style={{ marginBottom: spacing.md }}
+        />
         <Text style={styles.displayName}>{profile.display_name_resolved}</Text>
         {profile.bio ? <Text style={styles.bio}>{profile.bio}</Text> : null}
 
@@ -235,15 +239,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingTop: spacing.lg,
     paddingBottom: spacing.sm,
-  },
-  avatarLarge: {
-    width: 84,
-    height: 84,
-    borderRadius: 42,
-    backgroundColor: colors.surfaceHigh,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: spacing.md,
   },
   displayName: {
     fontFamily: fonts.headingBold,

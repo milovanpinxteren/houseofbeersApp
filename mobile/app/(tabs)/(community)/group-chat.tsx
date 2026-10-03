@@ -6,6 +6,7 @@ import ChatScreen from '../../../src/components/ChatScreen';
 import { colors } from '../../../src/theme/colors';
 import {
   getGroupMessages, sendGroupMessage, deleteGroupMessage, markGroupRead,
+  toggleGroupMessageReaction,
 } from '../../../src/api/community';
 
 export default function GroupChatScreen() {
@@ -15,6 +16,10 @@ export default function GroupChatScreen() {
   const fetchMessages = useCallback((page: number) => getGroupMessages(gId, page), [gId]);
   const handleSend = useCallback((content: string) => sendGroupMessage(gId, { content }), [gId]);
   const handleDelete = useCallback((messageId: number) => deleteGroupMessage(gId, messageId), [gId]);
+  const handleReact = useCallback(
+    (messageId: number, emoji: string) => toggleGroupMessageReaction(gId, messageId, emoji),
+    [gId]
+  );
   const markRead = useCallback(() => markGroupRead(gId), [gId]);
 
   return (
@@ -33,6 +38,7 @@ export default function GroupChatScreen() {
       fetchMessages={fetchMessages}
       onSend={handleSend}
       onDeleteMessage={handleDelete}
+      onReact={handleReact}
       markRead={markRead}
     />
   );

@@ -37,6 +37,20 @@ class Event(models.Model):
         default=True,
         help_text="If checked, users who already won a raffle in this event cannot win again"
     )
+    excluded_users = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        blank=True,
+        related_name='excluded_from_events',
+        help_text=(
+            "Members who can never win in this event (e.g. the staff "
+            "presenting the stream). They still count as viewers."
+        ),
+    )
+    # Bumped (F() + 1) on every chat reaction change. The poll compares it to
+    # the client's known_reaction_rev and ships a reaction digest only when
+    # they differ — same idiom as known_winner_count, so ~200 viewers polling
+    # every 3s cost nothing while nobody is reacting.
+    reactions_rev = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -89,6 +103,24 @@ class EventMessage(models.Model):
         return f"Message by {self.user.email} in {self.event.title}"
 
 
+# Fulfillment pipeline shared by raffle prizes and auction wins: how the
+# winner receives their prize, and how far the (future) Shopify handover got.
+FULFILLMENT_TYPE_CHOICES = [
+    ('manual', 'Manual (WhatsApp/pickup)'),
+    ('shopify', 'Shopify product on order'),
+    ('points', 'Loyalty points'),
+]
+
+FULFILLMENT_STATUS_CHOICES = [
+    ('pending', 'Pending'),
+    ('draft_created', 'Draft order created'),
+    ('added_to_order', 'Added to order'),
+    ('invoice_sent', 'Invoice sent'),
+    ('fulfilled', 'Fulfilled'),
+    ('failed', 'Failed'),
+]
+
+
 class Raffle(models.Model):
     STATUS_CHOICES = [
         ('pending', 'Pending'),
@@ -105,6 +137,22 @@ class Raffle(models.Model):
     prize_name = models.CharField(max_length=200)
     shopify_product_id = models.CharField(max_length=255, blank=True)
     num_winners = models.PositiveIntegerField(default=1)
+    fulfillment_type = models.CharField(
+        max_length=10, choices=FULFILLMENT_TYPE_CHOICES, default='manual',
+        help_text="How winners receive this prize",
+    )
+    winner_price = models.DecimalField(
+        max_digits=8, decimal_places=2, null=True, blank=True,
+        help_text=(
+            "What the winner pays for the prize (empty/0 = free). Only "
+            "meaningful for Shopify fulfillment, e.g. 'won for €100, "
+            "normally €200'."
+        ),
+    )
+    # Set once the prize product exists on Shopify (UNLISTED), so every
+    # winner handover reuses the same product/variant.
+    shopify_product_gid = models.CharField(max_length=255, blank=True)
+    shopify_variant_gid = models.CharField(max_length=255, blank=True)
     winner_policy = models.CharField(
         max_length=10, choices=WINNER_POLICY_CHOICES, default='inherit',
         help_text=(
@@ -137,8 +185,14 @@ class Raffle(models.Model):
             return False
         return self.event.exclude_past_winners
 
-    def draw_winners(self):
+    def draw_winners(self, count=None):
         """Draw random winners from active viewers.
+
+        `count` limits this batch ("Trek 1" on the regie page); None fills
+        every remaining slot. The raffle only flips to 'drawn' once all
+        num_winners slots are filled, so a multi-prize raffle can be
+        revealed one winner at a time, and a draw that found fewer eligible
+        viewers than slots stays open for a later retry.
 
         Atomic: locks the raffle row and re-checks status so a concurrent
         (double-clicked) draw can't run twice. Returns None if the raffle
@@ -152,6 +206,22 @@ class Raffle(models.Model):
             if raffle.status != 'pending':
                 return None
 
+            already_won = set(
+                RaffleWinner.objects
+                .filter(raffle=raffle)
+                .values_list('user_id', flat=True)
+            )
+            remaining = raffle.num_winners - len(already_won)
+            if remaining <= 0:
+                # Slots were filled out-of-band (e.g. num_winners lowered
+                # after a partial draw): just close the raffle.
+                raffle.status = 'drawn'
+                raffle.drawn_at = timezone.now()
+                raffle.save(update_fields=['status', 'drawn_at'])
+                self.status = raffle.status
+                self.drawn_at = raffle.drawn_at
+                return []
+
             cutoff = timezone.now() - timezone.timedelta(seconds=PRESENCE_WINDOW_SECONDS)
             eligible = list(
                 raffle.event.viewers
@@ -159,17 +229,25 @@ class Raffle(models.Model):
                 .values_list('user_id', flat=True)
             )
 
-            # Optionally exclude users who already won in this event
+            # Optionally exclude users who already won in this event; a
+            # winner of an earlier batch of THIS raffle is never redrawn
+            # regardless of policy (the unique constraint would trip).
             if raffle.excludes_past_winners():
-                existing_winner_ids = set(
+                ineligible = set(
                     RaffleWinner.objects
                     .filter(raffle__event=raffle.event)
                     .values_list('user_id', flat=True)
                 )
-                eligible = [uid for uid in eligible if uid not in existing_winner_ids]
+            else:
+                ineligible = set(already_won)
+            # Members on the event blocklist (presenting staff) never win.
+            ineligible |= set(
+                raffle.event.excluded_users.values_list('id', flat=True)
+            )
+            eligible = [uid for uid in eligible if uid not in ineligible]
 
-            num_to_draw = min(raffle.num_winners, len(eligible))
-            if num_to_draw == 0:
+            num_to_draw = min(count or remaining, remaining, len(eligible))
+            if num_to_draw <= 0:
                 return []
 
             winner_ids = random.sample(eligible, num_to_draw)
@@ -186,9 +264,10 @@ class Raffle(models.Model):
             # winners without their prize. DB-only, so safe in the lock.
             raffle._award_points_locked(created_winners)
 
-            raffle.status = 'drawn'
-            raffle.drawn_at = timezone.now()
-            raffle.save(update_fields=['status', 'drawn_at'])
+            if len(already_won) + num_to_draw >= raffle.num_winners:
+                raffle.status = 'drawn'
+                raffle.drawn_at = timezone.now()
+                raffle.save(update_fields=['status', 'drawn_at'])
 
             # Keep the in-memory instance consistent with the DB
             self.status = raffle.status
@@ -282,8 +361,19 @@ class AuctionItem(models.Model):
 
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='auction_items')
     title = models.CharField(max_length=200)
+    # Beer details shown in the app while the item is up for auction, so
+    # late joiners also know what is being auctioned.
+    description = models.TextField(blank=True)
+    brewery = models.CharField(max_length=200, blank=True)
+    size = models.CharField(max_length=50, blank=True, help_text="e.g. 75cl")
+    untappd_rating = models.DecimalField(
+        max_digits=3, decimal_places=2, null=True, blank=True,
+    )
     image_url = models.URLField(max_length=500, blank=True)
     starting_price = models.DecimalField(max_digits=10, decimal_places=2)
+    min_increment = models.PositiveIntegerField(
+        default=5, help_text="Minimum euros above the current bid",
+    )
     final_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     winner = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -293,6 +383,15 @@ class AuctionItem(models.Model):
         related_name='auction_wins',
     )
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    # Shopify handover state for the winner (same pipeline as raffle prizes)
+    shopify_product_gid = models.CharField(max_length=255, blank=True)
+    shopify_variant_gid = models.CharField(max_length=255, blank=True)
+    fulfillment_status = models.CharField(
+        max_length=20, choices=FULFILLMENT_STATUS_CHOICES, default='pending',
+    )
+    fulfillment_error = models.TextField(blank=True)
+    shopify_order_gid = models.CharField(max_length=255, blank=True)
+    fulfilled_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -301,6 +400,36 @@ class AuctionItem(models.Model):
 
     def __str__(self):
         return f"{self.title} ({self.get_status_display()}) - {self.event.title}"
+
+    def current_bid(self):
+        """Highest bid amount, or None before the first bid."""
+        top = self.bids.first()  # Bid.Meta orders highest-first
+        return top.amount if top else None
+
+
+class Bid(models.Model):
+    """One bid on an auction item. Whole euros only — the app enforces an
+    integer-only input so the chat stays free of number spam. Ties go to
+    the earliest bid (ordering below)."""
+    item = models.ForeignKey(AuctionItem, on_delete=models.CASCADE, related_name='bids')
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='auction_bids',
+    )
+    amount = models.PositiveIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        # id as final tie-breaker: created_at resolution can collide on
+        # same-moment bids and the earlier INSERT must stay the leader
+        ordering = ['-amount', 'created_at', 'id']
+        indexes = [
+            models.Index(fields=['item', 'amount']),
+        ]
+
+    def __str__(self):
+        return f"€{self.amount} by {self.user.email} on {self.item.title}"
 
 
 class RaffleWinner(models.Model):
@@ -311,6 +440,14 @@ class RaffleWinner(models.Model):
         related_name='raffle_wins',
     )
     drawn_at = models.DateTimeField(auto_now_add=True)
+    # Shopify handover state (per winner — each gets the prize product on
+    # their own order/draft order)
+    fulfillment_status = models.CharField(
+        max_length=20, choices=FULFILLMENT_STATUS_CHOICES, default='pending',
+    )
+    fulfillment_error = models.TextField(blank=True)
+    shopify_order_gid = models.CharField(max_length=255, blank=True)
+    fulfilled_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         unique_together = ['raffle', 'user']

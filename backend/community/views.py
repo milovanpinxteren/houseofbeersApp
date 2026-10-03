@@ -10,11 +10,13 @@ from rest_framework.views import APIView
 from rest_framework.pagination import CursorPagination, PageNumberPagination
 
 from .models import (
+    ALLOWED_REACTIONS,
     CommunityProfile, Post, PostLike, PostComment,
     Conversation, Message, CachedBeerCheckin,
     Group, GroupMembership, GroupMessage,
     Suggestion, SuggestionVote, SuggestionComment, SuggestionCommentVote,
 )
+from .reactions import reaction_map, toggle_reaction
 from .serializers import (
     CommunityProfileSerializer, MemberDetailSerializer,
     PostSerializer, CreatePostSerializer, CommentSerializer, CommentReplySerializer,
@@ -407,7 +409,9 @@ class MessagesListView(APIView):
         messages = conversation.messages.select_related('sender').order_by('-created_at', '-id')
         paginator = MessagePagination()
         page = paginator.paginate_queryset(messages, request)
-        serializer = MessageSerializer(page, many=True)
+        serializer = MessageSerializer(page, many=True, context={
+            'reaction_map': reaction_map('dm_message', [m.id for m in page], request.user),
+        })
         return paginator.get_paginated_response(serializer.data)
 
 
@@ -462,6 +466,37 @@ class MessageDeleteView(APIView):
 
         message.delete()
         return Response({'success': True})
+
+
+class MessageReactView(APIView):
+    """Toggle an emoji reaction on a DM message. Participants only."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, conversation_id, message_id):
+        try:
+            conversation = Conversation.objects.get(
+                Q(participant_1=request.user) | Q(participant_2=request.user),
+                id=conversation_id,
+            )
+        except Conversation.DoesNotExist:
+            return Response({'error': 'Conversation not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            message = Message.objects.get(id=message_id, conversation=conversation)
+        except Message.DoesNotExist:
+            return Response({'error': 'Message not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        emoji = (request.data.get('emoji') or '').strip()
+        if emoji not in ALLOWED_REACTIONS:
+            return Response({'error': 'Invalid emoji'}, status=status.HTTP_400_BAD_REQUEST)
+
+        reacted, reactions, mine = toggle_reaction('dm_message', message, request.user, emoji)
+        if reacted:
+            from analytics.tracker import track
+            track('community_message_reaction', user=request.user,
+                  conversation_id=conversation_id, emoji=emoji)
+
+        return Response({'reacted': reacted, 'reactions': reactions, 'mine': mine})
 
 
 class MarkReadView(APIView):
@@ -595,7 +630,9 @@ class GroupMessagesListView(APIView):
         )
         paginator = MessagePagination()
         page = paginator.paginate_queryset(messages, request)
-        serializer = GroupMessageSerializer(page, many=True)
+        serializer = GroupMessageSerializer(page, many=True, context={
+            'reaction_map': reaction_map('group_message', [m.id for m in page], request.user),
+        })
         return paginator.get_paginated_response(serializer.data)
 
 
@@ -645,6 +682,32 @@ class GroupMessageDeleteView(APIView):
 
         message.delete()
         return Response({'success': True})
+
+
+class GroupMessageReactView(APIView):
+    """Toggle an emoji reaction on a group message. Members only."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, group_id, message_id):
+        if not GroupMembership.objects.filter(group_id=group_id, user=request.user).exists():
+            return Response({'error': 'Not a member'}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            message = GroupMessage.objects.get(id=message_id, group_id=group_id)
+        except GroupMessage.DoesNotExist:
+            return Response({'error': 'Message not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        emoji = (request.data.get('emoji') or '').strip()
+        if emoji not in ALLOWED_REACTIONS:
+            return Response({'error': 'Invalid emoji'}, status=status.HTTP_400_BAD_REQUEST)
+
+        reacted, reactions, mine = toggle_reaction('group_message', message, request.user, emoji)
+        if reacted:
+            from analytics.tracker import track
+            track('community_group_message_reaction', user=request.user,
+                  group_id=group_id, emoji=emoji)
+
+        return Response({'reacted': reacted, 'reactions': reactions, 'mine': mine})
 
 
 class GroupMarkReadView(APIView):

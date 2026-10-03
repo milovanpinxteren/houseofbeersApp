@@ -4,11 +4,12 @@ from .views import (
     FeedView, PostCreateView, PostDeleteView, PostLikeView,
     PostCommentsView, CommentDeleteView,
     ConversationsListView, ConversationCreateView,
-    MessagesListView, SendMessageView, MessageDeleteView, MarkReadView, UnreadCountView,
+    MessagesListView, SendMessageView, MessageDeleteView, MessageReactView,
+    MarkReadView, UnreadCountView,
     MemberCheckinsView,
     GroupsListView, AvailableGroupsListView, GroupDetailView,
     GroupJoinView, GroupLeaveView, GroupMessagesListView, GroupSendMessageView,
-    GroupMessageDeleteView, GroupMarkReadView,
+    GroupMessageDeleteView, GroupMessageReactView, GroupMarkReadView,
     UnifiedChatsView,
     SuggestionsListView, SuggestionCreateView, SuggestionDetailView, SuggestionDeleteView,
     SuggestionVoteView, SuggestionCommentsView, SuggestionCommentDeleteView,
@@ -42,6 +43,7 @@ urlpatterns = [
     path('conversations/<int:conversation_id>/messages/', MessagesListView.as_view(), name='community-messages'),
     path('conversations/<int:conversation_id>/messages/send/', SendMessageView.as_view(), name='community-message-send'),
     path('conversations/<int:conversation_id>/messages/<int:message_id>/', MessageDeleteView.as_view(), name='community-message-delete'),
+    path('conversations/<int:conversation_id>/messages/<int:message_id>/react/', MessageReactView.as_view(), name='community-message-react'),
     path('conversations/<int:conversation_id>/read/', MarkReadView.as_view(), name='community-conversation-read'),
 
     # Groups
@@ -53,6 +55,7 @@ urlpatterns = [
     path('groups/<int:group_id>/messages/', GroupMessagesListView.as_view(), name='community-group-messages'),
     path('groups/<int:group_id>/messages/send/', GroupSendMessageView.as_view(), name='community-group-message-send'),
     path('groups/<int:group_id>/messages/<int:message_id>/', GroupMessageDeleteView.as_view(), name='community-group-message-delete'),
+    path('groups/<int:group_id>/messages/<int:message_id>/react/', GroupMessageReactView.as_view(), name='community-group-message-react'),
     path('groups/<int:group_id>/read/', GroupMarkReadView.as_view(), name='community-group-read'),
 
     # Unified chats

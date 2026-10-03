@@ -705,3 +705,135 @@ class QueryCountRegressionTests(APITestCase):
             f'/members/ query count scales with rows ({small_count} -> {large_count})',
         )
         self.assertLessEqual(large_count, 5)
+
+
+# --- Message reactions (DM + group) ---
+
+from .models import ALLOWED_REACTIONS, MessageReaction  # noqa: E402
+
+BEER = ALLOWED_REACTIONS[0]   # beer emoji
+FIRE = ALLOWED_REACTIONS[1]   # fire emoji
+
+
+class DmReactionTests(APITestCase):
+    def setUp(self):
+        self.alice = make_user('ralice')
+        self.bob = make_user('rbob')
+        self.conv, _ = Conversation.objects.get_or_create_between(self.alice, self.bob)
+        self.msg = Message.objects.create(
+            conversation=self.conv, sender=self.bob, content='proost',
+        )
+        self.client = auth_client(self.alice)
+        self.url = (
+            f'/api/community/conversations/{self.conv.id}'
+            f'/messages/{self.msg.id}/react/'
+        )
+
+    def test_toggle_on_then_off(self):
+        response = self.client.post(self.url, {'emoji': BEER}, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['reacted'])
+        self.assertEqual(response.data['reactions'], {BEER: 1})
+        self.assertEqual(response.data['mine'], [BEER])
+
+        response = self.client.post(self.url, {'emoji': BEER}, format='json')
+        self.assertFalse(response.data['reacted'])
+        # Toggle response is the reconciliation source: empty but present.
+        self.assertEqual(response.data['reactions'], {})
+        self.assertEqual(response.data['mine'], [])
+        self.assertEqual(MessageReaction.objects.count(), 0)
+
+    def test_multiple_distinct_emoji_per_user(self):
+        self.client.post(self.url, {'emoji': BEER}, format='json')
+        response = self.client.post(self.url, {'emoji': FIRE}, format='json')
+        self.assertEqual(response.data['reactions'], {BEER: 1, FIRE: 1})
+        self.assertEqual(sorted(response.data['mine']), sorted([BEER, FIRE]))
+
+    def test_invalid_emoji_rejected(self):
+        response = self.client.post(self.url, {'emoji': '🦅'}, format='json')
+        self.assertEqual(response.status_code, 400)
+        response = self.client.post(self.url, {}, format='json')
+        self.assertEqual(response.status_code, 400)
+
+    def test_non_participant_cannot_react(self):
+        charlie = make_user('rcharlie')
+        response = auth_client(charlie).post(self.url, {'emoji': BEER}, format='json')
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(MessageReaction.objects.count(), 0)
+
+    def test_messages_page_carries_reactions_and_omits_when_empty(self):
+        other_msg = Message.objects.create(
+            conversation=self.conv, sender=self.alice, content='santé',
+        )
+        self.client.post(self.url, {'emoji': BEER}, format='json')
+        auth_client(self.bob).post(self.url, {'emoji': BEER}, format='json')
+
+        response = self.client.get(
+            f'/api/community/conversations/{self.conv.id}/messages/'
+        )
+        by_id = {m['id']: m for m in response.data['results']}
+        self.assertEqual(by_id[self.msg.id]['reactions'], {BEER: 2})
+        self.assertEqual(by_id[self.msg.id]['mine'], [BEER])
+        self.assertNotIn('reactions', by_id[other_msg.id])
+        self.assertNotIn('mine', by_id[other_msg.id])
+
+    def test_messages_page_query_count_constant_in_reactions(self):
+        """The reaction map is two grouped queries per page, never per-row."""
+        msgs = [
+            Message.objects.create(conversation=self.conv, sender=self.bob, content=f'm{i}')
+            for i in range(5)
+        ]
+        url = f'/api/community/conversations/{self.conv.id}/messages/'
+
+        MessageReaction.objects.create(dm_message=msgs[0], user=self.alice, emoji=BEER)
+        with CaptureQueriesContext(connection) as small:
+            self.client.get(url)
+
+        for m in msgs:
+            MessageReaction.objects.get_or_create(dm_message=m, user=self.alice, emoji=FIRE)
+            MessageReaction.objects.get_or_create(dm_message=m, user=self.bob, emoji=BEER)
+        with CaptureQueriesContext(connection) as large:
+            self.client.get(url)
+
+        self.assertEqual(
+            len(small), len(large),
+            f'messages query count scales with reactions ({len(small)} -> {len(large)})',
+        )
+
+
+class GroupReactionTests(APITestCase):
+    def setUp(self):
+        self.alice = make_user('galice')
+        self.bob = make_user('gbob')
+        self.group = Group.objects.create(name='Stouts', created_by=self.alice)
+        GroupMembership.objects.create(group=self.group, user=self.alice)
+        GroupMembership.objects.create(group=self.group, user=self.bob)
+        self.msg = GroupMessage.objects.create(
+            group=self.group, sender=self.bob, content='proost',
+        )
+        self.client = auth_client(self.alice)
+        self.url = (
+            f'/api/community/groups/{self.group.id}'
+            f'/messages/{self.msg.id}/react/'
+        )
+
+    def test_toggle_works_for_member(self):
+        response = self.client.post(self.url, {'emoji': BEER}, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['reacted'])
+        self.assertEqual(response.data['reactions'], {BEER: 1})
+
+    def test_non_member_rejected(self):
+        charlie = make_user('gcharlie')
+        response = auth_client(charlie).post(self.url, {'emoji': BEER}, format='json')
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(MessageReaction.objects.count(), 0)
+
+    def test_group_messages_page_carries_reactions(self):
+        self.client.post(self.url, {'emoji': FIRE}, format='json')
+        response = self.client.get(
+            f'/api/community/groups/{self.group.id}/messages/'
+        )
+        by_id = {m['id']: m for m in response.data['results']}
+        self.assertEqual(by_id[self.msg.id]['reactions'], {FIRE: 1})
+        self.assertEqual(by_id[self.msg.id]['mine'], [FIRE])

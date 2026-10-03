@@ -318,3 +318,64 @@ class SuggestionCommentVote(models.Model):
 
     class Meta:
         unique_together = ['comment', 'user']
+
+
+# Single source of truth for message reactions, validated server-side so the
+# reaction bar can never grow past these six (and no ZWJ-sequence storage
+# surprises). The mobile app pins the same list.
+ALLOWED_REACTIONS = ['🍺', '🔥', '😂', '❤️', '👍', '🤯']
+
+
+class MessageReaction(models.Model):
+    """One member's one emoji on one message — DM, group, or livestream chat.
+
+    Exactly one of the three message FKs is set (enforced by a check
+    constraint): a single table keeps one toggle endpoint, one aggregation
+    helper and one serializer shape for all three chat surfaces. A member may
+    hold several DIFFERENT emoji on the same message (uniqueness is on the
+    message+user+emoji triple), matching WhatsApp/Slack expectations.
+    """
+    dm_message = models.ForeignKey(
+        Message, null=True, blank=True,
+        on_delete=models.CASCADE, related_name='reactions',
+    )
+    group_message = models.ForeignKey(
+        GroupMessage, null=True, blank=True,
+        on_delete=models.CASCADE, related_name='reactions',
+    )
+    event_message = models.ForeignKey(
+        'events.EventMessage', null=True, blank=True,
+        on_delete=models.CASCADE, related_name='reactions',
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='message_reactions',
+    )
+    emoji = models.CharField(max_length=8, choices=[(e, e) for e in ALLOWED_REACTIONS])
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['dm_message', 'user', 'emoji'], name='uniq_dm_reaction',
+            ),
+            models.UniqueConstraint(
+                fields=['group_message', 'user', 'emoji'], name='uniq_group_reaction',
+            ),
+            models.UniqueConstraint(
+                fields=['event_message', 'user', 'emoji'], name='uniq_event_reaction',
+            ),
+            models.CheckConstraint(
+                check=(
+                    (models.Q(dm_message__isnull=False) & models.Q(group_message__isnull=True) & models.Q(event_message__isnull=True)) |
+                    (models.Q(dm_message__isnull=True) & models.Q(group_message__isnull=False) & models.Q(event_message__isnull=True)) |
+                    (models.Q(dm_message__isnull=True) & models.Q(group_message__isnull=True) & models.Q(event_message__isnull=False))
+                ),
+                name='reaction_exactly_one_message',
+            ),
+        ]
+
+    def __str__(self):
+        target = self.dm_message_id or self.group_message_id or self.event_message_id
+        return f"{self.emoji} by {self.user.email} on message #{target}"

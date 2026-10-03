@@ -1,13 +1,21 @@
 import csv
+from decimal import Decimal, InvalidOperation
+
 from django.contrib import admin, messages
+from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
+from django.db.models import Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import path, reverse
 from django.utils import timezone
 from django.utils.html import format_html
 from django.views.decorators.http import require_POST
-from .models import Event, EventViewer, EventMessage, Raffle, RaffleWinner, AuctionItem
+from .models import (
+    Event, EventViewer, EventMessage, Raffle, RaffleWinner, AuctionItem, Bid,
+)
+from .services import fulfillment as fulfillment_service
 
 
 def _winner_display(user):
@@ -66,7 +74,8 @@ def _winners_csv_response(winners):
 class AuctionItemInline(admin.TabularInline):
     model = AuctionItem
     extra = 1
-    fields = ['title', 'image_url', 'starting_price', 'final_price', 'winner', 'status']
+    fields = ['title', 'brewery', 'size', 'image_url', 'starting_price',
+              'min_increment', 'final_price', 'winner', 'status']
     raw_id_fields = ['winner']
 
 
@@ -74,7 +83,7 @@ class RaffleInline(admin.TabularInline):
     model = Raffle
     extra = 1
     fields = ['prize_name', 'num_winners', 'winner_policy', 'points_award',
-              'status', 'drawn_at']
+              'fulfillment_type', 'winner_price', 'status', 'drawn_at']
     readonly_fields = ['status', 'drawn_at']
 
 
@@ -88,8 +97,9 @@ class EventAdmin(admin.ModelAdmin):
     search_fields = ['title', 'description']
     readonly_fields = ['created_at', 'updated_at']
     ordering = ['-scheduled_at']
+    filter_horizontal = ['excluded_users']
     inlines = [AuctionItemInline, RaffleInline]
-    actions = ['set_live', 'set_ended', 'export_winners_csv']
+    actions = ['set_live', 'set_ended', 'export_winners_csv', 'export_chat_csv']
 
     def get_urls(self):
         # Custom URLs must precede the default ones or <pk>/change/ wins.
@@ -106,6 +116,36 @@ class EventAdmin(admin.ModelAdmin):
             path('<int:event_id>/regie/policy/<int:raffle_id>/',
                  self.admin_site.admin_view(require_POST(self.regie_policy_view)),
                  name='events_event_regie_policy'),
+            path('<int:event_id>/regie/exclude/add/',
+                 self.admin_site.admin_view(require_POST(self.regie_exclude_add_view)),
+                 name='events_event_regie_exclude_add'),
+            path('<int:event_id>/regie/exclude/remove/',
+                 self.admin_site.admin_view(require_POST(self.regie_exclude_remove_view)),
+                 name='events_event_regie_exclude_remove'),
+            path('<int:event_id>/regie/auction/save/',
+                 self.admin_site.admin_view(require_POST(self.regie_auction_save_view)),
+                 name='events_event_regie_auction_save'),
+            path('<int:event_id>/regie/auction/<int:item_id>/activate/',
+                 self.admin_site.admin_view(require_POST(self.regie_auction_activate_view)),
+                 name='events_event_regie_auction_activate'),
+            path('<int:event_id>/regie/auction/<int:item_id>/close/',
+                 self.admin_site.admin_view(require_POST(self.regie_auction_close_view)),
+                 name='events_event_regie_auction_close'),
+            path('<int:event_id>/regie/fulfill/product/',
+                 self.admin_site.admin_view(require_POST(self.regie_fulfill_product_view)),
+                 name='events_event_regie_fulfill_product'),
+            path('<int:event_id>/regie/fulfill/attach/',
+                 self.admin_site.admin_view(require_POST(self.regie_fulfill_attach_view)),
+                 name='events_event_regie_fulfill_attach'),
+            path('<int:event_id>/regie/fulfill/attach-all/<int:raffle_id>/',
+                 self.admin_site.admin_view(require_POST(self.regie_fulfill_attach_all_view)),
+                 name='events_event_regie_fulfill_attach_all'),
+            path('<int:event_id>/regie/fulfill/invoice/',
+                 self.admin_site.admin_view(require_POST(self.regie_fulfill_invoice_view)),
+                 name='events_event_regie_fulfill_invoice'),
+            path('<int:event_id>/regie/fulfill/toggle/',
+                 self.admin_site.admin_view(require_POST(self.regie_fulfill_toggle_view)),
+                 name='events_event_regie_fulfill_toggle'),
         ]
         return custom + super().get_urls()
 
@@ -126,7 +166,29 @@ class EventAdmin(admin.ModelAdmin):
             raffle.winner_names = [
                 _winner_display(w.user) for w in raffle.winners.all()
             ]
+            raffle.drawn_so_far = len(raffle.winner_names)
+            raffle.slots_left = raffle.num_winners - raffle.drawn_so_far
         drawn = sum(1 for r in raffles if r.status == 'drawn')
+
+        auction_items = list(
+            event.auction_items.select_related('winner').order_by('created_at')
+        )
+        for item in auction_items:
+            item.top_bid = (
+                item.bids.select_related('user', 'user__community_profile')
+                .first()
+            )
+            item.total_bid_count = item.bids.count()
+            if item.top_bid:
+                item.leader_display = _winner_display(item.top_bid.user)
+
+        # Afhandeling: everything with a winner to hand a prize to
+        fulfillment_raffles = [r for r in raffles if r.status == 'drawn']
+        for raffle in fulfillment_raffles:
+            raffle.effective_price = raffle.winner_price or 0
+        sold_auction_items = [i for i in auction_items if i.status == 'sold']
+        processed, total = fulfillment_service.fulfillment_progress(event)
+
         return {
             **self.admin_site.each_context(request),
             'title': f'Livestream regie — {event.title}',
@@ -137,6 +199,14 @@ class EventAdmin(admin.ModelAdmin):
             'prize_unit_count': sum(r.num_winners for r in raffles),
             'active_viewer_count': event.active_viewer_count(),
             'policy_choices': Raffle.WINNER_POLICY_CHOICES,
+            'auction_items': auction_items,
+            'excluded_users': list(
+                event.excluded_users.order_by('first_name', 'email')
+            ),
+            'fulfillment_raffles': fulfillment_raffles,
+            'sold_auction_items': sold_auction_items,
+            'fulfillment_processed': processed,
+            'fulfillment_total': total,
         }
 
     def regie_view(self, request, event_id):
@@ -146,19 +216,38 @@ class EventAdmin(admin.ModelAdmin):
 
     def regie_stats_view(self, request, event_id):
         event = get_object_or_404(Event, pk=event_id)
+        active_item = (
+            AuctionItem.objects.filter(event=event, status='active').first()
+        )
+        auction = None
+        if active_item:
+            top = (
+                active_item.bids
+                .select_related('user', 'user__community_profile')
+                .first()
+            )
+            auction = {
+                'item_id': active_item.pk,
+                'current_bid': top.amount if top else None,
+                'bid_count': active_item.bids.count(),
+                'leader': _winner_display(top.user) if top else None,
+            }
         return JsonResponse({
             'active_viewer_count': event.active_viewer_count(),
             'status': event.status,
             'winner_count': RaffleWinner.objects.filter(
                 raffle__event=event
             ).count(),
+            'auction': auction,
         })
 
     def regie_draw_view(self, request, event_id, raffle_id):
         if not request.user.has_perm('events.change_raffle'):
             raise PermissionDenied
         raffle = get_object_or_404(Raffle, pk=raffle_id, event_id=event_id)
-        winners = raffle.draw_winners()
+        count_param = request.POST.get('draw_count', '')
+        count = int(count_param) if count_param.isdigit() else None
+        winners = raffle.draw_winners(count=count)
         if winners is None:
             messages.warning(
                 request, f"'{raffle.prize_name}' was al getrokken.")
@@ -168,6 +257,9 @@ class EventAdmin(admin.ModelAdmin):
                 f' — {raffle.points_award} punten per winnaar toegevoegd'
                 if raffle.points_award else ''
             )
+            if raffle.status == 'pending':
+                slots_left = raffle.num_winners - raffle.winners.count()
+                suffix += f' — nog {slots_left} plek(ken) open'
             messages.success(
                 request,
                 f"'{raffle.prize_name}': {len(winners)} winnaar(s) — "
@@ -179,6 +271,301 @@ class EventAdmin(admin.ModelAdmin):
                 f"'{raffle.prize_name}': geen kijkers in de afgelopen 90s "
                 "om uit te trekken. De loting blijft open.",
             )
+        return redirect('admin:events_event_regie', event_id)
+
+    def regie_exclude_add_view(self, request, event_id):
+        if not request.user.has_perm('events.change_event'):
+            raise PermissionDenied
+        event = get_object_or_404(Event, pk=event_id)
+        query = request.POST.get('q', '').strip()
+        if not query:
+            messages.error(request, 'Geen zoekterm opgegeven.')
+            return redirect('admin:events_event_regie', event_id)
+
+        User = get_user_model()
+        # Exact email first (there are unmerged case-duplicate accounts),
+        # then a broad name/email search.
+        matches = list(User.objects.filter(email__iexact=query)[:6])
+        if not matches:
+            matches = list(
+                User.objects.filter(
+                    Q(email__icontains=query)
+                    | Q(first_name__icontains=query)
+                    | Q(last_name__icontains=query)
+                )[:6]
+            )
+        if len(matches) == 1:
+            event.excluded_users.add(matches[0])
+            messages.success(
+                request,
+                f'{_winner_display(matches[0])} is uitgesloten van winnen '
+                'in dit event.',
+            )
+        elif not matches:
+            messages.warning(request, f"Geen lid gevonden voor '{query}'.")
+        else:
+            options = '; '.join(_winner_display(u) for u in matches)
+            messages.warning(
+                request,
+                f'Meerdere leden gevonden — gebruik het e-mailadres: {options}',
+            )
+        return redirect('admin:events_event_regie', event_id)
+
+    def regie_exclude_remove_view(self, request, event_id):
+        if not request.user.has_perm('events.change_event'):
+            raise PermissionDenied
+        event = get_object_or_404(Event, pk=event_id)
+        User = get_user_model()
+        user = get_object_or_404(User, pk=request.POST.get('user_id'))
+        event.excluded_users.remove(user)
+        messages.success(
+            request, f'{_winner_display(user)} doet weer mee met lotingen.')
+        return redirect('admin:events_event_regie', event_id)
+
+    def regie_auction_save_view(self, request, event_id):
+        if not request.user.has_perm('events.change_auctionitem'):
+            raise PermissionDenied
+        event = get_object_or_404(Event, pk=event_id)
+
+        title = request.POST.get('title', '').strip()
+        if not title:
+            messages.error(request, 'Titel is verplicht.')
+            return redirect('admin:events_event_regie', event_id)
+        try:
+            starting_price = Decimal(request.POST.get('starting_price', '').strip() or '0')
+        except InvalidOperation:
+            messages.error(request, 'Ongeldige startprijs.')
+            return redirect('admin:events_event_regie', event_id)
+        rating_raw = request.POST.get('untappd_rating', '').strip().replace(',', '.')
+        try:
+            untappd_rating = Decimal(rating_raw) if rating_raw else None
+        except InvalidOperation:
+            messages.error(request, 'Ongeldige Untappd-score.')
+            return redirect('admin:events_event_regie', event_id)
+        increment_raw = request.POST.get('min_increment', '').strip()
+        min_increment = int(increment_raw) if increment_raw.isdigit() else 5
+
+        fields = {
+            'title': title,
+            'description': request.POST.get('description', '').strip(),
+            'brewery': request.POST.get('brewery', '').strip(),
+            'size': request.POST.get('size', '').strip(),
+            'untappd_rating': untappd_rating,
+            'image_url': request.POST.get('image_url', '').strip(),
+            'starting_price': starting_price,
+            'min_increment': min_increment,
+        }
+        item_id = request.POST.get('item_id', '')
+        if item_id:
+            item = get_object_or_404(AuctionItem, pk=item_id, event=event)
+            if item.status != 'pending':
+                messages.warning(
+                    request,
+                    f"'{item.title}' is al {item.get_status_display().lower()} "
+                    'en kan niet meer bewerkt worden.',
+                )
+                return redirect('admin:events_event_regie', event_id)
+            for name, value in fields.items():
+                setattr(item, name, value)
+            item.save()
+            messages.success(request, f"'{item.title}' bijgewerkt.")
+        else:
+            item = AuctionItem.objects.create(event=event, **fields)
+            messages.success(request, f"Veilingitem '{item.title}' toegevoegd.")
+        return redirect('admin:events_event_regie', event_id)
+
+    def regie_auction_activate_view(self, request, event_id, item_id):
+        if not request.user.has_perm('events.change_auctionitem'):
+            raise PermissionDenied
+        item = get_object_or_404(AuctionItem, pk=item_id, event_id=event_id)
+        if item.status != 'pending':
+            messages.warning(
+                request,
+                f"'{item.title}' is al {item.get_status_display().lower()}.",
+            )
+            return redirect('admin:events_event_regie', event_id)
+        # Only one item may be live at a time
+        AuctionItem.objects.filter(
+            event_id=event_id, status='active',
+        ).exclude(pk=item.pk).update(status='pending')
+        item.status = 'active'
+        item.save(update_fields=['status', 'updated_at'])
+        messages.success(
+            request,
+            f"Veiling gestart: '{item.title}' (startbod €{item.starting_price}).",
+        )
+        return redirect('admin:events_event_regie', event_id)
+
+    def regie_auction_close_view(self, request, event_id, item_id):
+        if not request.user.has_perm('events.change_auctionitem'):
+            raise PermissionDenied
+        # Lock the row: a double-clicked "Sluit veiling" must not re-close
+        # (the second request sees status != 'active' and backs off).
+        with transaction.atomic():
+            item = get_object_or_404(
+                AuctionItem.objects.select_for_update(),
+                pk=item_id, event_id=event_id,
+            )
+            if item.status != 'active':
+                messages.warning(
+                    request,
+                    f"'{item.title}' is niet actief "
+                    f'(status: {item.get_status_display().lower()}).',
+                )
+                return redirect('admin:events_event_regie', event_id)
+            top = item.bids.select_related('user').first()
+            if not top:
+                item.status = 'pending'
+                item.save(update_fields=['status', 'updated_at'])
+                messages.warning(
+                    request,
+                    f"'{item.title}': geen biedingen — terug in de wachtrij.",
+                )
+                return redirect('admin:events_event_regie', event_id)
+            item.winner = top.user
+            item.final_price = Decimal(top.amount)
+            item.status = 'sold'
+            item.save(update_fields=[
+                'winner', 'final_price', 'status', 'updated_at',
+            ])
+        messages.success(
+            request,
+            f"'{item.title}' verkocht aan {_winner_display(top.user)} "
+            f'voor €{top.amount}.',
+        )
+        return redirect('admin:events_event_regie', event_id)
+
+    # --- Afhandeling (prize fulfillment) -------------------------------
+    # Thin wrappers around events.services.fulfillment; every outcome is a
+    # Django message and the service never raises for Shopify failures.
+
+    def _fulfillment_target(self, request, event_id):
+        """Resolve POSTed kind/obj_id into a RaffleWinner ('winner') or
+        AuctionItem ('auction') of this event, enforcing the matching model
+        permission. Returns (target, label) or raises 404/PermissionDenied;
+        returns (None, None) on malformed input."""
+        kind = request.POST.get('kind', '')
+        obj_id = request.POST.get('obj_id', '')
+        if not obj_id.isdigit():
+            return None, None
+        if kind == 'winner':
+            if not request.user.has_perm('events.change_raffle'):
+                raise PermissionDenied
+            winner = get_object_or_404(
+                RaffleWinner.objects.select_related('raffle', 'user'),
+                pk=obj_id, raffle__event_id=event_id,
+            )
+            return winner, f'{winner.raffle.prize_name} — {winner.user.email}'
+        if kind == 'auction':
+            if not request.user.has_perm('events.change_auctionitem'):
+                raise PermissionDenied
+            item = get_object_or_404(
+                AuctionItem.objects.select_related('winner'),
+                pk=obj_id, event_id=event_id,
+            )
+            return item, item.title
+        return None, None
+
+    def regie_fulfill_product_view(self, request, event_id):
+        kind = request.POST.get('kind', '')
+        obj_id = request.POST.get('obj_id', '')
+        if not obj_id.isdigit() or kind not in ('raffle', 'auction'):
+            messages.error(request, 'Ongeldig afhandel-doel.')
+            return redirect('admin:events_event_regie', event_id)
+        if kind == 'raffle':
+            if not request.user.has_perm('events.change_raffle'):
+                raise PermissionDenied
+            obj = get_object_or_404(Raffle, pk=obj_id, event_id=event_id)
+            label = obj.prize_name
+        else:
+            if not request.user.has_perm('events.change_auctionitem'):
+                raise PermissionDenied
+            obj = get_object_or_404(AuctionItem, pk=obj_id, event_id=event_id)
+            label = obj.title
+
+        result = fulfillment_service.ensure_prize_product(obj)
+        if result.get('error'):
+            messages.error(request, result['error'])
+        elif result.get('skipped'):
+            messages.info(request, f"'{label}': Shopify-product bestond al.")
+        else:
+            how = 'hergebruikt' if result.get('reused') else 'aangemaakt'
+            messages.success(
+                request, f"'{label}': Shopify-product {how} (unlisted).")
+        return redirect('admin:events_event_regie', event_id)
+
+    def regie_fulfill_attach_view(self, request, event_id):
+        target, label = self._fulfillment_target(request, event_id)
+        if target is None:
+            messages.error(request, 'Ongeldig afhandel-doel.')
+            return redirect('admin:events_event_regie', event_id)
+        result = fulfillment_service.attach_to_winner(target)
+        if result.get('error'):
+            messages.error(request, result['error'])
+        else:
+            what = ('nieuwe draft order'
+                    if result['status'] == 'draft_created'
+                    else 'bestaande draft order')
+            messages.success(
+                request, f'{label}: prijs op {what} gezet.')
+        return redirect('admin:events_event_regie', event_id)
+
+    def regie_fulfill_attach_all_view(self, request, event_id, raffle_id):
+        if not request.user.has_perm('events.change_raffle'):
+            raise PermissionDenied
+        raffle = get_object_or_404(Raffle, pk=raffle_id, event_id=event_id)
+        pending = raffle.winners.select_related('user').exclude(
+            fulfillment_status__in=sorted(
+                fulfillment_service.PROCESSED_STATUSES),
+        )
+        ok, failed = 0, []
+        for winner in pending:
+            result = fulfillment_service.attach_to_winner(winner)
+            if result.get('error'):
+                failed.append(f'{winner.user.email}: {result["error"]}')
+            else:
+                ok += 1
+        if ok:
+            messages.success(
+                request,
+                f"'{raffle.prize_name}': prijs bij {ok} winnaar(s) op een "
+                'draft order gezet.',
+            )
+        if failed:
+            messages.error(
+                request,
+                f"'{raffle.prize_name}': {len(failed)} mislukt — "
+                + '; '.join(failed),
+            )
+        if not ok and not failed:
+            messages.info(
+                request, f"'{raffle.prize_name}': niets meer te verwerken.")
+        return redirect('admin:events_event_regie', event_id)
+
+    def regie_fulfill_invoice_view(self, request, event_id):
+        target, label = self._fulfillment_target(request, event_id)
+        if target is None:
+            messages.error(request, 'Ongeldig afhandel-doel.')
+            return redirect('admin:events_event_regie', event_id)
+        result = fulfillment_service.send_invoice(target)
+        if result.get('error'):
+            messages.error(request, result['error'])
+        else:
+            messages.success(request, f'{label}: factuur verstuurd.')
+        return redirect('admin:events_event_regie', event_id)
+
+    def regie_fulfill_toggle_view(self, request, event_id):
+        target, label = self._fulfillment_target(request, event_id)
+        if target is None:
+            messages.error(request, 'Ongeldig afhandel-doel.')
+            return redirect('admin:events_event_regie', event_id)
+        if target.fulfillment_status == 'fulfilled':
+            fulfillment_service.unmark_fulfilled(target)
+            messages.success(
+                request, f'{label}: niet meer afgehandeld.')
+        else:
+            fulfillment_service.mark_fulfilled(target)
+            messages.success(request, f'{label}: afgehandeld.')
         return redirect('admin:events_event_regie', event_id)
 
     def regie_policy_view(self, request, event_id, raffle_id):
@@ -231,6 +618,35 @@ class EventAdmin(admin.ModelAdmin):
             )
             return None
         return _winners_csv_response(winners)
+
+    @admin.action(description='Export chat CSV')
+    def export_chat_csv(self, request, queryset):
+        if queryset.count() != 1:
+            self.message_user(
+                request,
+                'Selecteer precies één event voor de chat-export.',
+                level='error',
+            )
+            return None
+        event = queryset.first()
+        chat = event.messages.select_related('user').order_by('created_at')
+
+        response = HttpResponse(content_type='text/csv; charset=utf-8')
+        response['Content-Disposition'] = (
+            f'attachment; filename="chat-{event.pk}-{timezone.localdate()}.csv"'
+        )
+        response.write('﻿')  # BOM: Excel misreads plain UTF-8 CSV
+        # Semicolon-delimited: NL-locale Excel splits on ; by default
+        writer = csv.writer(response, delimiter=';')
+        writer.writerow(['tijd', 'naam', 'email', 'bericht'])
+        for message in chat.iterator():
+            writer.writerow([
+                timezone.localtime(message.created_at).strftime('%Y-%m-%d %H:%M:%S'),
+                message.user.first_name or message.user.email.split('@')[0],
+                message.user.email,
+                message.message,
+            ])
+        return response
 
 
 @admin.register(Raffle)
@@ -375,6 +791,25 @@ class AuctionItemAdmin(admin.ModelAdmin):
             ])
 
         return response
+
+
+@admin.register(Bid)
+class BidAdmin(admin.ModelAdmin):
+    list_display = ['item', 'amount', 'user_email', 'created_at']
+    list_filter = ['item__event']
+    search_fields = ['user__email', 'item__title']
+    readonly_fields = ['item', 'user', 'amount', 'created_at']
+    ordering = ['-created_at']
+
+    def user_email(self, obj):
+        return obj.user.email
+    user_email.short_description = 'Bidder'
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(EventViewer)

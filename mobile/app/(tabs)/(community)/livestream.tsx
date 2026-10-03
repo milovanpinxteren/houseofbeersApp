@@ -1,25 +1,35 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   FlatList,
-  TextInput,
   TouchableOpacity,
   KeyboardAvoidingView,
   Platform,
   Dimensions,
   Modal,
-  ActivityIndicator,
   Animated,
   Pressable,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams } from 'expo-router';
+import * as Clipboard from 'expo-clipboard';
 import { useAuth } from '../../../src/context/AuthContext';
 import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
 import { colors, spacing, borderRadius, fonts } from '../../../src/theme/colors';
+import { Skeleton, useToast } from '../../../src/components/ui';
+import {
+  MessageBubble,
+  MessageComposer,
+  ReactionSheet,
+  GroupedPosition,
+} from '../../../src/components/chat';
+import { ApiError } from '../../../src/api/client';
+import AuctionPanel from '../../../src/components/AuctionPanel';
 import {
   Event,
   EventMessage,
@@ -29,6 +39,7 @@ import {
   joinEvent,
   sendEventMessage,
   pollEvent,
+  reactEventMessage,
 } from '../../../src/api/events';
 
 const POLL_INTERVAL = 3000;
@@ -42,6 +53,61 @@ type RaffleAnimationData = {
   isCurrentUser: boolean;
   viewerNames: string[];
 };
+
+type MissedDraw = {
+  prizeName: string;
+  winnerNames: string[];
+  isCurrentUser: boolean;
+};
+
+// Rejoin threshold: a poll delta spanning more than this many raffles is
+// a catch-up (user was backgrounded), not a live draw — show one summary
+// instead of replaying every animation back-to-back.
+const MAX_REPLAYED_DRAWS = 2;
+
+// Consecutive same-sender messages within this window render as one
+// WhatsApp-style run (shared corner treatment, one author line).
+const RUN_WINDOW_MS = 5 * 60 * 1000;
+
+function sameRun(a: EventMessage, b: EventMessage): boolean {
+  return (
+    !a.is_system &&
+    !b.is_system &&
+    a.user.user_id === b.user.user_id &&
+    Math.abs(
+      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    ) < RUN_WINDOW_MS
+  );
+}
+
+// Change detection for reaction fields so steady-state polls (same digest
+// re-sent, nothing changed) never produce a new messages array.
+function reactionsEqual(
+  a?: Record<string, number>,
+  b?: Record<string, number>
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return !a && !b;
+  const ka = Object.keys(a);
+  if (ka.length !== Object.keys(b).length) return false;
+  return ka.every((k) => a[k] === b[k]);
+}
+
+function mineEqual(a?: string[], b?: string[]): boolean {
+  if (a === b) return true;
+  if (!a || !b) return !a && !b;
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
+// Shuffle pool for the reveal reel: real member names only. If the
+// viewer list is tiny, repeat it rather than padding with fake names.
+function buildShufflePool(viewerNames: string[], winnerNames: string[]): string[] {
+  let pool = viewerNames.length > 0 ? [...viewerNames] : [...winnerNames];
+  while (pool.length > 0 && pool.length < 3) {
+    pool = pool.concat(pool);
+  }
+  return pool;
+}
 
 function getYouTubeEmbedUrl(url: string): string {
   const match = url.match(
@@ -95,6 +161,7 @@ export default function LivestreamScreen() {
   const { eventId } = useLocalSearchParams<{ eventId: string }>();
   const { user } = useAuth();
   const { language } = useLanguage();
+  const { showToast } = useToast();
 
   const [event, setEvent] = useState<Event | null>(null);
   const [messages, setMessages] = useState<EventMessage[]>([]);
@@ -115,6 +182,13 @@ export default function LivestreamScreen() {
   const [raffleAnimation, setRaffleAnimation] = useState<RaffleAnimationData | null>(null);
   const [shuffleName, setShuffleName] = useState('');
   const [animationPhase, setAnimationPhase] = useState<'shuffling' | 'revealing' | 'done'>('shuffling');
+  // Multi-winner raffles reveal names one at a time, not all at once
+  const [revealedWinners, setRevealedWinners] = useState(0);
+  // Catch-up summary after missing several draws (backgrounded/rejoined)
+  const [missedSummary, setMissedSummary] = useState<MissedDraw[] | null>(null);
+  // Persistent "jij hebt gewonnen" banner — the overlay is ephemeral and
+  // namesakes made winners doubt themselves; this stays until dismissed.
+  const [myWins, setMyWins] = useState<string[]>([]);
   const raffleOverlayOpacity = useRef(new Animated.Value(0)).current;
   const winnerScale = useRef(new Animated.Value(0.5)).current;
   const youWonOpacity = useRef(new Animated.Value(0)).current;
@@ -131,26 +205,46 @@ export default function LivestreamScreen() {
   const userIdRef = useRef(user?.id);
   userIdRef.current = user?.id;
 
+  // Chat scroll: only auto-scroll while the user is (near) the bottom.
+  // messagesRef mirrors the messages state so the poll can merge + count
+  // unread synchronously without impure setState updaters.
+  const [unreadCount, setUnreadCount] = useState(0);
+  const atBottomRef = useRef(true);
+  const messagesRef = useRef<EventMessage[]>([]);
+
+  // Reactions: server revision we last saw, in-flight optimistic toggles
+  // (the poll must not clobber them), and the long-pressed message whose
+  // ReactionSheet is open.
+  const reactionRevRef = useRef(0);
+  const pendingReactionsRef = useRef<Set<number>>(new Set());
+  const [sheetMessage, setSheetMessage] = useState<EventMessage | null>(null);
+
   const numericEventId = Number(eventId);
 
-  // Load event and join
+  // Load event and join; retryKey re-runs after a failed load.
+  const [retryKey, setRetryKey] = useState(0);
   useEffect(() => {
+    let stale = false;
     async function init() {
       try {
         const [eventData] = await Promise.all([
           getEvent(numericEventId),
           joinEvent(numericEventId),
         ]);
+        if (stale) return;
         setEvent(eventData);
         setActiveViewerCount(eventData.active_viewer_count || 0);
       } catch (err) {
         console.error('Failed to load event:', err);
       } finally {
-        setLoading(false);
+        if (!stale) setLoading(false);
       }
     }
     init();
-  }, [numericEventId]);
+    return () => {
+      stale = true;
+    };
+  }, [numericEventId, retryKey]);
 
   // Combined poll: chat, winners, auction — single request every 3s.
   // Heartbeat (presence update) every 20th poll (~60s).
@@ -167,30 +261,119 @@ export default function LivestreamScreen() {
         pollCount += 1;
         const isHeartbeat = pollCount % 20 === 1; // First poll + every 60s
 
+        // The digest window is "messages we hold right now" — capture the
+        // oldest id BEFORE the request so snapshot clearing below matches
+        // exactly what the server was asked to cover.
+        const oldestHeldId = messagesRef.current[0]?.id;
+
         const data = await pollEvent(
           numericEventId,
           lastMessageTime.current,
           isHeartbeat,
           prevWinnerCount.current,
+          reactionRevRef.current,
+          oldestHeldId,
         );
         if (cancelled) return;
 
-        // Chat messages (capped to the most recent MAX_MESSAGES)
+        // Chat messages: merge-if-known (a re-delivered row may carry
+        // fresh reaction fields), append the genuinely new, cap at
+        // MAX_MESSAGES. `changed` tracks whether a new array must render.
+        let next = messagesRef.current;
+        let changed = false;
+
         if (data.messages.length > 0) {
-          setMessages((prev) => {
-            const existingIds = new Set(prev.map((m) => m.id));
-            const newMsgs = data.messages.filter((m) => !existingIds.has(m.id));
-            if (newMsgs.length === 0) return prev;
-            const next = [...prev, ...newMsgs];
-            return next.length > MAX_MESSAGES ? next.slice(-MAX_MESSAGES) : next;
+          const incoming = new Map(data.messages.map((m) => [m.id, m]));
+          next = next.map((held) => {
+            const upd = incoming.get(held.id);
+            if (!upd) return held;
+            incoming.delete(held.id);
+            if (
+              !pendingReactionsRef.current.has(held.id) &&
+              (!reactionsEqual(held.reactions, upd.reactions) ||
+                !mineEqual(held.mine, upd.mine))
+            ) {
+              changed = true;
+              return { ...held, reactions: upd.reactions, mine: upd.mine };
+            }
+            return held;
           });
+          // Whatever survived the merge pass is new, in server order
+          const newMsgs = data.messages.filter((m) => incoming.has(m.id));
+          if (newMsgs.length > 0) {
+            next = [...next, ...newMsgs];
+            if (next.length > MAX_MESSAGES) next = next.slice(-MAX_MESSAGES);
+            changed = true;
+            // Count messages from others as unread while scrolled up —
+            // the list no longer force-scrolls, the pill shows instead.
+            if (!atBottomRef.current) {
+              const fromOthers = newMsgs.filter(
+                (m) => m.user.user_id !== userIdRef.current
+              ).length;
+              if (fromOthers > 0) {
+                setUnreadCount((c) => c + fromOthers);
+              }
+            }
+          }
           lastMessageTime.current =
             data.messages[data.messages.length - 1].created_at;
+        }
+
+        // Reaction digest — a SNAPSHOT of every reacted message in the
+        // window we requested: a held message in that window that is
+        // absent from the digest has zero reactions (un-react propagation).
+        // In-flight optimistic toggles are skipped; their POST response
+        // reconciles them.
+        if (data.reaction_updates) {
+          const updates = new Map(
+            data.reaction_updates.map((u) => [u.m, u])
+          );
+          next = next.map((held) => {
+            if (pendingReactionsRef.current.has(held.id)) return held;
+            if (oldestHeldId !== undefined && held.id < oldestHeldId) {
+              return held; // outside the window we asked the server for
+            }
+            const u = updates.get(held.id);
+            const reactions =
+              u && Object.keys(u.r).length > 0 ? u.r : undefined;
+            const mine = u && u.mine.length > 0 ? u.mine : undefined;
+            if (
+              !reactionsEqual(held.reactions, reactions) ||
+              !mineEqual(held.mine, mine)
+            ) {
+              changed = true;
+              return { ...held, reactions, mine };
+            }
+            return held;
+          });
+        }
+        reactionRevRef.current = data.reaction_rev;
+
+        if (changed) {
+          messagesRef.current = next;
+          setMessages(next);
         }
 
         // Viewer count (only on heartbeat)
         if (data.active_viewer_count !== undefined) {
           setActiveViewerCount(data.active_viewer_count);
+        }
+
+        // Live event fields: a youtube_url corrected mid-stream or a
+        // status flip must reach viewers who already have the screen open
+        // (the detail endpoint is only fetched on mount). Same-value polls
+        // return the previous reference, so no re-render.
+        if (data.event) {
+          const info = data.event;
+          setEvent((prev) => {
+            if (
+              !prev ||
+              (prev.status === info.status && prev.youtube_url === info.youtube_url)
+            ) {
+              return prev;
+            }
+            return { ...prev, status: info.status, youtube_url: info.youtube_url };
+          });
         }
 
         // Winner changes — full data + viewer names included by backend
@@ -200,36 +383,61 @@ export default function LivestreamScreen() {
           const newCount = data.winner_count;
 
           if (initialized && newCount > prevWinnerCount.current) {
-            // Animate the full batch of new winners (list is newest-first)
             const delta = newCount - prevWinnerCount.current;
-            const newWinners = data.winners.slice(0, delta);
-            const winnerNames = newWinners.map((w) => w.user.display_name);
-            const prizeName = [
-              ...new Set(newWinners.map((w) => w.prize_name)),
-            ].join(', ');
-            const isCurrentUser = newWinners.some(
-              (w) => w.user.user_id === userIdRef.current
-            );
+            const newWinners = data.winners.slice(0, delta); // newest-first
+
+            // Persistent personal banner, regardless of which overlay
+            // (live reveal or catch-up summary) ends up shown.
+            const mine = newWinners
+              .filter((w) => w.user.user_id === userIdRef.current)
+              .map((w) => w.prize_name);
+            if (mine.length > 0) {
+              setMyWins((prev) => [
+                ...prev,
+                ...mine.filter((p) => !prev.includes(p)),
+              ]);
+            }
+
+            // One reveal per raffle, replayed in draw order (oldest first)
+            const groups: { raffleId: number; winners: RaffleWinner[] }[] = [];
+            for (const w of [...newWinners].reverse()) {
+              const g = groups.find((x) => x.raffleId === w.raffle_id);
+              if (g) g.winners.push(w);
+              else groups.push({ raffleId: w.raffle_id, winners: [w] });
+            }
 
             const names = data.viewer_names?.map((v) => v.display_name) || [];
-            const shuffleNames = names.length >= 3 ? names : [
-              ...winnerNames,
-              ...names,
-              'Viewer', 'Guest', 'Beer Fan',
-            ];
 
-            const animation: RaffleAnimationData = {
-              prizeName,
-              winnerNames,
-              isCurrentUser,
-              viewerNames: shuffleNames,
-            };
-
-            if (raffleActive.current) {
-              // An animation is playing — queue this draw for after it ends
-              pendingRaffles.current.push(animation);
+            if (groups.length > MAX_REPLAYED_DRAWS) {
+              // Catch-up after a gap: one summary instead of a parade of
+              // overlays.
+              setMissedSummary(
+                groups.map((g) => ({
+                  prizeName: g.winners[0].prize_name,
+                  winnerNames: g.winners.map((w) => w.user.display_name),
+                  isCurrentUser: g.winners.some(
+                    (w) => w.user.user_id === userIdRef.current
+                  ),
+                }))
+              );
             } else {
-              startRaffleAnimation(animation);
+              for (const g of groups) {
+                const winnerNames = g.winners.map((w) => w.user.display_name);
+                const animation: RaffleAnimationData = {
+                  prizeName: g.winners[0].prize_name,
+                  winnerNames,
+                  isCurrentUser: g.winners.some(
+                    (w) => w.user.user_id === userIdRef.current
+                  ),
+                  viewerNames: buildShufflePool(names, winnerNames),
+                };
+                if (raffleActive.current) {
+                  // An animation is playing — queue for after it ends
+                  pendingRaffles.current.push(animation);
+                } else {
+                  startRaffleAnimation(animation);
+                }
+              }
             }
           }
           // Payload consumed (winners stored, animation played/queued)
@@ -308,22 +516,122 @@ export default function LivestreamScreen() {
     setMessageText('');
     try {
       const msg = await sendEventMessage(numericEventId, text);
-      setMessages((prev) => {
-        if (prev.some((m) => m.id === msg.id)) return prev;
-        const next = [...prev, msg];
-        return next.length > MAX_MESSAGES ? next.slice(-MAX_MESSAGES) : next;
-      });
+      if (!messagesRef.current.some((m) => m.id === msg.id)) {
+        let next = [...messagesRef.current, msg];
+        if (next.length > MAX_MESSAGES) next = next.slice(-MAX_MESSAGES);
+        messagesRef.current = next;
+        setMessages(next);
+      }
       // Deliberately NOT advancing lastMessageTime here: the poll cursor
       // must only move via poll responses, otherwise messages other users
       // posted between the last poll and this send would be skipped.
+      // Sending your own message always returns you to the bottom.
+      atBottomRef.current = true;
+      setUnreadCount(0);
+      flatListRef.current?.scrollToEnd({ animated: true });
     } catch (err) {
       console.error('Send error:', err);
       setMessageText(text);
+      if (err instanceof ApiError && err.status === 429) {
+        showToast(t('events.chatThrottled'), 'error');
+      } else if (
+        err instanceof ApiError &&
+        err.status === 400 &&
+        err.message.includes('live')
+      ) {
+        showToast(t('events.chatClosed'), 'error');
+      } else {
+        showToast(t('events.sendError'), 'error');
+      }
     } finally {
       sendingRef.current = false;
       setSending(false);
     }
-  }, [messageText, numericEventId]);
+  }, [messageText, numericEventId, showToast]);
+
+  const handleChatScroll = useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
+      const atBottom =
+        contentOffset.y + layoutMeasurement.height >= contentSize.height - 40;
+      atBottomRef.current = atBottom;
+      if (atBottom) setUnreadCount(0);
+    },
+    []
+  );
+
+  const scrollChatToBottom = useCallback(() => {
+    atBottomRef.current = true;
+    setUnreadCount(0);
+    flatListRef.current?.scrollToEnd({ animated: true });
+  }, []);
+
+  const patchMessage = useCallback(
+    (id: number, patch: Partial<EventMessage>) => {
+      const next = messagesRef.current.map((m) =>
+        m.id === id ? { ...m, ...patch } : m
+      );
+      messagesRef.current = next;
+      setMessages(next);
+    },
+    []
+  );
+
+  // Optimistic reaction toggle, reconciled from the POST response; the
+  // pending set keeps the 3s poll from clobbering it mid-flight.
+  const handleToggleReaction = useCallback(
+    async (target: EventMessage, emoji: string) => {
+      // Re-resolve by id: the row's captured object may predate a poll merge
+      const msg =
+        messagesRef.current.find((m) => m.id === target.id) ?? target;
+      const snapshot = { reactions: msg.reactions, mine: msg.mine };
+      const mineSet = new Set(msg.mine ?? []);
+      const reactions: Record<string, number> = { ...(msg.reactions ?? {}) };
+      if (mineSet.has(emoji)) {
+        mineSet.delete(emoji);
+        const n = (reactions[emoji] ?? 1) - 1;
+        if (n > 0) reactions[emoji] = n;
+        else delete reactions[emoji];
+      } else {
+        mineSet.add(emoji);
+        reactions[emoji] = (reactions[emoji] ?? 0) + 1;
+      }
+      pendingReactionsRef.current.add(msg.id);
+      patchMessage(msg.id, {
+        reactions: Object.keys(reactions).length ? reactions : undefined,
+        mine: mineSet.size ? [...mineSet] : undefined,
+      });
+      try {
+        const res = await reactEventMessage(numericEventId, msg.id, emoji);
+        patchMessage(msg.id, {
+          reactions: Object.keys(res.reactions).length
+            ? res.reactions
+            : undefined,
+          mine: res.mine.length ? res.mine : undefined,
+        });
+      } catch (err) {
+        patchMessage(msg.id, snapshot);
+        if (err instanceof ApiError && err.status === 429) {
+          showToast(t('events.reactionThrottled'), 'error');
+        } else {
+          showToast(t('community.reactError'), 'error');
+        }
+      } finally {
+        pendingReactionsRef.current.delete(msg.id);
+      }
+    },
+    [numericEventId, patchMessage, showToast]
+  );
+
+  const handleCopyMessage = useCallback(
+    async (msg: EventMessage) => {
+      try {
+        await Clipboard.setStringAsync(msg.message);
+        showToast(t('community.copied'), 'success');
+      } catch {}
+    },
+    [showToast]
+  );
 
   function clearRaffleTimeouts() {
     raffleTimeouts.current.forEach(clearTimeout);
@@ -336,6 +644,7 @@ export default function LivestreamScreen() {
     raffleActive.current = true;
     setRaffleAnimation(data);
     setAnimationPhase('shuffling');
+    setRevealedWinners(0);
     raffleOverlayOpacity.setValue(0);
     winnerScale.setValue(0.5);
     youWonOpacity.setValue(0);
@@ -357,6 +666,26 @@ export default function LivestreamScreen() {
       if (elapsed < 1800) return 100;
       if (elapsed < 2300) return 200;
       return 400;
+    }
+
+    const REVEAL_STAGGER = 600;
+
+    function revealNext(n: number) {
+      setRevealedWinners(n);
+      if (n < data.winnerNames.length) {
+        // Multi-winner prize: names land one at a time, not all at once
+        raffleTimeouts.current.push(
+          setTimeout(() => revealNext(n + 1), REVEAL_STAGGER)
+        );
+      } else {
+        // Auto-dismiss 5 seconds after the last name lands
+        raffleTimeouts.current.push(
+          setTimeout(() => {
+            setAnimationPhase('done');
+            dismissRaffle();
+          }, 5000)
+        );
+      }
     }
 
     function tick() {
@@ -382,13 +711,7 @@ export default function LivestreamScreen() {
           ]).start();
         }
 
-        // Auto-dismiss after 5 seconds
-        raffleTimeouts.current.push(
-          setTimeout(() => {
-            setAnimationPhase('done');
-            dismissRaffle();
-          }, 5000)
-        );
+        revealNext(1);
         return;
       }
 
@@ -430,35 +753,96 @@ export default function LivestreamScreen() {
     });
   }
 
+  // Derived chat rows: WhatsApp-style run grouping over the ascending
+  // array (a run = consecutive non-system messages of one sender within
+  // 5 minutes; author once per run, timestamp on the run's last bubble).
+  type ChatRow = {
+    msg: EventMessage;
+    grouped: GroupedPosition;
+    showTime: boolean;
+    authorName?: string;
+  };
+  const chatRows = useMemo<ChatRow[]>(
+    () =>
+      messages.map((msg, i) => {
+        if (msg.is_system) {
+          return { msg, grouped: 'single' as const, showTime: false };
+        }
+        const prev = messages[i - 1];
+        const next = messages[i + 1];
+        const hasPrev = !!prev && sameRun(msg, prev);
+        const hasNext = !!next && sameRun(msg, next);
+        const grouped: GroupedPosition =
+          hasPrev && hasNext ? 'middle' : hasPrev ? 'last' : hasNext ? 'first' : 'single';
+        const isOwn = msg.user.user_id === user?.id;
+        return {
+          msg,
+          grouped,
+          showTime: grouped === 'last' || grouped === 'single',
+          authorName:
+            !isOwn && (grouped === 'first' || grouped === 'single')
+              ? msg.user.display_name
+              : undefined,
+        };
+      }),
+    [messages, user?.id]
+  );
+
   const renderMessage = useCallback(
-    ({ item }: { item: EventMessage }) => {
-      const isMe = item.user.user_id === user?.id;
-      const isSystem = item.is_system;
-
-      if (isSystem) {
-        return (
-          <View style={styles.systemMessage}>
-            <Text style={styles.systemMessageText}>{item.message}</Text>
-          </View>
-        );
-      }
-
+    ({ item }: { item: ChatRow }) => {
+      const { msg } = item;
+      const isOwn = msg.user.user_id === user?.id;
       return (
-        <View style={[styles.chatBubble, isMe && styles.chatBubbleMe]}>
-          {!isMe && (
-            <Text style={styles.chatAuthor}>{item.user.display_name}</Text>
-          )}
-          <Text style={[styles.chatText, isMe && styles.chatTextMe]}>{item.message}</Text>
-        </View>
+        <MessageBubble
+          isOwn={isOwn}
+          text={msg.message}
+          createdAt={msg.created_at}
+          authorName={item.authorName}
+          isSystem={msg.is_system}
+          grouped={item.grouped}
+          showTime={item.showTime}
+          reactions={msg.reactions}
+          mine={msg.mine}
+          onToggleReaction={(emoji) => handleToggleReaction(msg, emoji)}
+          onLongPress={
+            msg.is_system ? undefined : () => setSheetMessage(msg)
+          }
+        />
       );
     },
-    [user?.id]
+    [user?.id, handleToggleReaction]
   );
 
   if (loading) {
+    // Shimmer placeholders echoing the real layout: video block, status
+    // row, then a short conversation shape.
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={colors.primary} />
+      <View style={styles.container}>
+        <Skeleton width="100%" height={VIDEO_HEIGHT} radius={0} />
+        <View style={styles.skeletonStatusRow}>
+          <Skeleton width={90} height={22} radius={borderRadius.pill} />
+          <Skeleton width={70} height={22} radius={borderRadius.pill} />
+        </View>
+        <View style={styles.skeletonChat}>
+          {([
+            { w: '62%', own: false },
+            { w: '44%', own: true },
+            { w: '74%', own: false },
+            { w: '38%', own: false },
+            { w: '56%', own: true },
+          ] as const).map((r, i) => (
+            <Skeleton
+              key={i}
+              width={r.w}
+              height={42}
+              radius={16}
+              style={{
+                alignSelf: r.own ? 'flex-end' : 'flex-start',
+                marginBottom: spacing.sm,
+              }}
+            />
+          ))}
+        </View>
       </View>
     );
   }
@@ -466,7 +850,18 @@ export default function LivestreamScreen() {
   if (!event) {
     return (
       <View style={styles.loadingContainer}>
+        <Ionicons name="cloud-offline-outline" size={36} color={colors.textMuted} />
         <Text style={styles.errorText}>{t('events.notFound')}</Text>
+        <TouchableOpacity
+          style={styles.retryButton}
+          activeOpacity={0.85}
+          onPress={() => {
+            setLoading(true);
+            setRetryKey((k) => k + 1);
+          }}
+        >
+          <Text style={styles.retryButtonText}>{t('retry')}</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -477,9 +872,10 @@ export default function LivestreamScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
-      {/* YouTube Player */}
+      {/* YouTube Player — keyed on the URL so a mid-stream correction
+          (poll-delivered) swaps the embed cleanly */}
       {event.youtube_url ? (
-        <YouTubePlayer url={event.youtube_url} />
+        <YouTubePlayer key={event.youtube_url} url={event.youtube_url} />
       ) : (
         <View style={[styles.videoContainer, styles.noVideo]}>
           <Ionicons name="videocam-off" size={40} color={colors.textMuted} />
@@ -516,18 +912,31 @@ export default function LivestreamScreen() {
         )}
       </View>
 
-      {/* Auction Item Panel */}
-      {event.event_type === 'auction' && auctionItem && auctionItem.status === 'active' && (
-        <View style={styles.auctionPanel}>
-          <View style={styles.auctionHeader}>
-            <Ionicons name="hammer" size={16} color={colors.primary} />
-            <Text style={styles.auctionLabel}>{t('events.currentItem')}</Text>
-          </View>
-          <Text style={styles.auctionTitle}>{auctionItem.title}</Text>
-          <Text style={styles.auctionPrice}>
-            {t('events.startingAt')} €{auctionItem.starting_price}
+      {/* Persistent personal win banner — the overlay is ephemeral and a
+          first name alone left namesakes guessing; this one is theirs. */}
+      {myWins.length > 0 && (
+        <View style={styles.winBanner}>
+          <Ionicons name="trophy" size={18} color={colors.warning} />
+          <Text style={styles.winBannerText}>
+            {t('events.youWonBanner', { prizes: myWins.join(', ') })}
           </Text>
+          <TouchableOpacity
+            onPress={() => setMyWins([])}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Ionicons name="close" size={18} color={colors.textMuted} />
+          </TouchableOpacity>
         </View>
+      )}
+
+      {/* Auction Panel — shown whenever the poll carries an item, also on
+          livestream-typed events (raffles + auction in one stream) */}
+      {auctionItem && (
+        <AuctionPanel
+          item={auctionItem}
+          eventId={numericEventId}
+          isLive={event.status === 'live'}
+        />
       )}
 
       {/* Auction Sold Banner */}
@@ -564,14 +973,16 @@ export default function LivestreamScreen() {
                   {animationPhase === 'shuffling' ? (
                     <Text style={styles.raffleShuffleName}>{shuffleName}</Text>
                   ) : (
-                    raffleAnimation.winnerNames.map((name, index) => (
-                      <Text
-                        key={`${name}-${index}`}
-                        style={[styles.raffleShuffleName, styles.raffleWinnerName]}
-                      >
-                        {name}
-                      </Text>
-                    ))
+                    raffleAnimation.winnerNames
+                      .slice(0, revealedWinners)
+                      .map((name, index) => (
+                        <Text
+                          key={`${name}-${index}`}
+                          style={[styles.raffleShuffleName, styles.raffleWinnerName]}
+                        >
+                          {name}
+                        </Text>
+                      ))
                   )}
                 </Animated.View>
 
@@ -592,47 +1003,124 @@ export default function LivestreamScreen() {
         </Modal>
       )}
 
-      {/* Chat */}
-      <FlatList
-        ref={flatListRef}
-        data={messages}
-        renderItem={renderMessage}
-        keyExtractor={(item) => String(item.id)}
-        style={styles.chatList}
-        contentContainerStyle={styles.chatContent}
-        onContentSizeChange={() =>
-          flatListRef.current?.scrollToEnd({ animated: true })
-        }
-        onLayout={() =>
-          flatListRef.current?.scrollToEnd({ animated: false })
-        }
+      {/* Missed-draws summary: rejoining after a gap shows one compact
+          recap instead of replaying every draw animation back-to-back */}
+      {missedSummary && (
+        <Modal visible transparent animationType="fade">
+          <View style={styles.missedOverlay}>
+            <View style={styles.missedCard}>
+              <View style={styles.missedHeader}>
+                <Ionicons name="gift" size={20} color={colors.primary} />
+                <Text style={styles.missedTitle}>
+                  {t('events.missedDraws', { count: missedSummary.length })}
+                </Text>
+              </View>
+              {missedSummary.some((d) => d.isCurrentUser) && (
+                <View style={styles.missedYouWon}>
+                  <Text style={styles.missedYouWonText}>{t('events.youWon')}</Text>
+                </View>
+              )}
+              <FlatList
+                data={missedSummary}
+                keyExtractor={(_, i) => String(i)}
+                style={styles.missedList}
+                renderItem={({ item }) => (
+                  <View style={styles.missedRow}>
+                    <View style={styles.missedPrizeRow}>
+                      {item.isCurrentUser && (
+                        <Ionicons name="trophy" size={14} color={colors.warning} />
+                      )}
+                      <Text
+                        style={[
+                          styles.missedPrize,
+                          item.isCurrentUser && styles.missedPrizeMine,
+                        ]}
+                      >
+                        {item.prizeName}
+                      </Text>
+                    </View>
+                    <Text style={styles.missedWinners}>
+                      {item.winnerNames.join(', ')}
+                    </Text>
+                  </View>
+                )}
+              />
+              <TouchableOpacity
+                style={styles.missedDismiss}
+                onPress={() => setMissedSummary(null)}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.missedDismissText}>
+                  {t('events.tapToDismiss')}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+      )}
+
+      {/* Chat — auto-scrolls only while the user is at the bottom; while
+          scrolled up, new messages accumulate in the unread pill instead. */}
+      <View style={styles.chatWrap}>
+        <FlatList
+          ref={flatListRef}
+          data={chatRows}
+          renderItem={renderMessage}
+          keyExtractor={(item) => String(item.msg.id)}
+          style={styles.chatList}
+          contentContainerStyle={styles.chatContent}
+          onScroll={handleChatScroll}
+          scrollEventThrottle={32}
+          onContentSizeChange={() => {
+            if (atBottomRef.current) {
+              flatListRef.current?.scrollToEnd({ animated: true });
+            }
+          }}
+          onLayout={() => {
+            if (atBottomRef.current) {
+              flatListRef.current?.scrollToEnd({ animated: false });
+            }
+          }}
+        />
+        {unreadCount > 0 && (
+          <TouchableOpacity
+            style={styles.unreadPill}
+            onPress={scrollChatToBottom}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="chevron-down" size={14} color={colors.background} />
+            <Text style={styles.unreadPillText}>
+              {unreadCount === 1
+                ? t('events.newMessage')
+                : t('events.newMessages', { count: unreadCount })}
+            </Text>
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {/* Message Input — shared composer (emoji strip + send) */}
+      <MessageComposer
+        value={messageText}
+        onChangeText={setMessageText}
+        onSend={handleSend}
+        sending={sending}
+        maxLength={500}
+        placeholder={t('events.chatPlaceholder')}
       />
 
-      {/* Message Input */}
-      <View style={styles.inputContainer}>
-        <TextInput
-          style={styles.input}
-          value={messageText}
-          onChangeText={setMessageText}
-          placeholder={t('events.chatPlaceholder')}
-          placeholderTextColor={colors.textMuted}
-          maxLength={500}
-          multiline
-          onSubmitEditing={handleSend}
-          blurOnSubmit
-        />
-        <TouchableOpacity
-          style={[styles.sendButton, (!messageText.trim() || sending) && styles.sendButtonDisabled]}
-          onPress={handleSend}
-          disabled={!messageText.trim() || sending}
-        >
-          <Ionicons
-            name="send"
-            size={20}
-            color={messageText.trim() && !sending ? colors.background : colors.textMuted}
-          />
-        </TouchableOpacity>
-      </View>
+      {/* Long-press reaction sheet (reactions + copy; livestream has no
+          message delete endpoint, so no delete row) */}
+      <ReactionSheet
+        visible={sheetMessage !== null}
+        onClose={() => setSheetMessage(null)}
+        mine={sheetMessage?.mine}
+        onReact={(emoji) => {
+          if (sheetMessage) handleToggleReaction(sheetMessage, emoji);
+        }}
+        onCopy={() => {
+          if (sheetMessage) handleCopyMessage(sheetMessage);
+        }}
+      />
 
       {/* Winners Modal */}
       <Modal
@@ -688,10 +1176,35 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
     justifyContent: 'center',
     alignItems: 'center',
+    gap: spacing.md,
   },
   errorText: {
     color: colors.textMuted,
     fontSize: 16,
+  },
+  retryButton: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.pill,
+    backgroundColor: colors.primary,
+  },
+  retryButtonText: {
+    fontFamily: fonts.heading,
+    color: colors.background,
+    fontSize: 13,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  skeletonStatusRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  skeletonChat: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    padding: spacing.md,
   },
 
   // Video
@@ -786,37 +1299,111 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
 
-  // Auction panel
-  auctionPanel: {
-    backgroundColor: colors.surface,
+  // Persistent personal win banner
+  winBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.surfaceHigh,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm + 2,
     borderLeftWidth: 3,
-    borderLeftColor: colors.primary,
+    borderLeftColor: colors.warning,
   },
-  auctionHeader: {
+  winBannerText: {
+    fontFamily: fonts.heading,
+    color: colors.text,
+    fontSize: 14,
+    letterSpacing: 0.3,
+    flex: 1,
+  },
+
+  // Missed-draws summary
+  missedOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: spacing.lg,
+  },
+  missedCard: {
+    backgroundColor: colors.surfaceHigh,
+    borderRadius: borderRadius.xl,
+    padding: spacing.lg,
+    width: '100%',
+    maxWidth: 420,
+    maxHeight: '70%',
+  },
+  missedHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginBottom: 4,
+    gap: spacing.sm,
+    marginBottom: spacing.md,
   },
-  auctionLabel: {
-    fontFamily: fonts.heading,
-    color: colors.primary,
-    fontSize: 11,
-    letterSpacing: 1.5,
-    textTransform: 'uppercase',
-  },
-  auctionTitle: {
+  missedTitle: {
     fontFamily: fonts.heading,
     color: colors.text,
     fontSize: 17,
     letterSpacing: 0.4,
+    flex: 1,
   },
-  auctionPrice: {
-    color: colors.textMuted,
+  missedYouWon: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: borderRadius.pill,
+    borderWidth: 2,
+    borderColor: colors.warning,
+    marginBottom: spacing.md,
+  },
+  missedYouWonText: {
+    fontFamily: fonts.headingBold,
+    color: colors.warning,
+    fontSize: 14,
+    letterSpacing: 2,
+    textTransform: 'uppercase',
+  },
+  missedList: {
+    flexGrow: 0,
+  },
+  missedRow: {
+    paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  missedPrizeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  missedPrize: {
+    fontFamily: fonts.heading,
+    color: colors.primary,
+    fontSize: 14,
+    letterSpacing: 0.3,
+  },
+  missedPrizeMine: {
+    color: colors.warning,
+  },
+  missedWinners: {
+    color: colors.text,
     fontSize: 13,
     marginTop: 2,
+  },
+  missedDismiss: {
+    alignSelf: 'center',
+    marginTop: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.pill,
+    backgroundColor: colors.primary,
+  },
+  missedDismissText: {
+    fontFamily: fonts.heading,
+    color: colors.background,
+    fontSize: 13,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
   },
 
   // Sold banner
@@ -905,86 +1492,34 @@ const styles = StyleSheet.create({
   },
 
   // Chat
+  chatWrap: {
+    flex: 1,
+  },
   chatList: {
     flex: 1,
+  },
+  unreadPill: {
+    position: 'absolute',
+    bottom: spacing.sm,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.primary,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: borderRadius.pill,
+  },
+  unreadPillText: {
+    fontFamily: fonts.heading,
+    color: colors.background,
+    fontSize: 12,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
   },
   chatContent: {
     padding: spacing.sm,
     paddingBottom: spacing.md,
-  },
-  chatBubble: {
-    backgroundColor: colors.surfaceHigh,
-    borderRadius: 16,
-    borderBottomLeftRadius: 4,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.sm + 4,
-    marginBottom: spacing.xs + 2,
-    maxWidth: '85%',
-    alignSelf: 'flex-start',
-  },
-  chatBubbleMe: {
-    backgroundColor: colors.primary,
-    alignSelf: 'flex-end',
-    borderBottomLeftRadius: 16,
-    borderBottomRightRadius: 4,
-  },
-  chatAuthor: {
-    fontFamily: fonts.heading,
-    color: colors.primary,
-    fontSize: 11,
-    letterSpacing: 0.6,
-    marginBottom: 2,
-  },
-  chatText: {
-    color: colors.text,
-    fontSize: 14,
-    lineHeight: 20,
-  },
-  chatTextMe: {
-    color: colors.background,
-  },
-  systemMessage: {
-    alignItems: 'center',
-    paddingVertical: spacing.xs,
-  },
-  systemMessageText: {
-    fontFamily: fonts.heading,
-    color: colors.warning,
-    fontSize: 12,
-    letterSpacing: 0.6,
-  },
-
-  // Input
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: spacing.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
-    backgroundColor: colors.background,
-  },
-  input: {
-    flex: 1,
-    backgroundColor: colors.surfaceLow,
-    borderRadius: borderRadius.pill,
-    paddingHorizontal: spacing.md,
-    paddingVertical: Platform.OS === 'ios' ? 12 : 10,
-    color: colors.text,
-    fontSize: 14,
-    maxHeight: 100,
-  },
-  sendButton: {
-    backgroundColor: colors.primary,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  sendButtonDisabled: {
-    backgroundColor: colors.surfaceHigh,
   },
 
   // Winners Modal

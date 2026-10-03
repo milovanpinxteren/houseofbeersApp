@@ -74,6 +74,19 @@ export interface Message {
   beer_style: string;
   is_read: boolean;
   created_at: string;
+  reactions?: ReactionMap;
+  mine?: string[];
+}
+
+// --- Reactions ---
+
+/** Emoji -> count. The backend omits the field entirely when empty. */
+export type ReactionMap = Record<string, number>;
+
+export interface ReactionResponse {
+  reacted: boolean;
+  reactions: ReactionMap;
+  mine: string[];
 }
 
 export interface CachedCheckin {
@@ -144,6 +157,8 @@ export interface GroupMessage {
   beer_image_url: string;
   beer_style: string;
   created_at: string;
+  reactions?: ReactionMap;
+  mine?: string[];
 }
 
 export interface ChatItem {
@@ -286,6 +301,15 @@ export async function deleteMessage(conversationId: number, messageId: number): 
   await apiFetch(`/community/conversations/${conversationId}/messages/${messageId}/`, { method: 'DELETE' });
 }
 
+export async function toggleMessageReaction(
+  conversationId: number, messageId: number, emoji: string,
+): Promise<ReactionResponse> {
+  return apiFetch(`/community/conversations/${conversationId}/messages/${messageId}/react/`, {
+    method: 'POST',
+    body: JSON.stringify({ emoji }),
+  });
+}
+
 export async function markConversationRead(conversationId: number): Promise<void> {
   await apiFetch(`/community/conversations/${conversationId}/read/`, { method: 'POST' });
 }
@@ -335,6 +359,15 @@ export async function sendGroupMessage(groupId: number, data: {
 
 export async function deleteGroupMessage(groupId: number, messageId: number): Promise<void> {
   await apiFetch(`/community/groups/${groupId}/messages/${messageId}/`, { method: 'DELETE' });
+}
+
+export async function toggleGroupMessageReaction(
+  groupId: number, messageId: number, emoji: string,
+): Promise<ReactionResponse> {
+  return apiFetch(`/community/groups/${groupId}/messages/${messageId}/react/`, {
+    method: 'POST',
+    body: JSON.stringify({ emoji }),
+  });
 }
 
 export async function markGroupRead(groupId: number): Promise<void> {
