@@ -7,6 +7,8 @@ import {
   Image,
   StyleSheet,
   Platform,
+  Pressable,
+  Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { t } from '../i18n';
@@ -22,13 +24,15 @@ type Props = {
 };
 
 /**
- * Compact auction panel between the video and the chat. Shows the item
- * being auctioned (so late joiners know what the bidding is about) and,
- * while active, an integer-only bid input — bids go through their own
- * endpoint, never through chat.
+ * Auction panel between the video and the chat. Collapsed by default so the
+ * livestream screen stays calm: one row with the item title and an animated
+ * bid pill that pops whenever a new bid lands. Expanding reveals the full
+ * item info (late joiners) and, while active, the integer-only bid input —
+ * bids go through their own endpoint, never through chat.
  */
 export default function AuctionPanel({ item, eventId, isLive }: Props) {
   const { showToast } = useToast();
+  const [expanded, setExpanded] = useState(false);
   const [bidText, setBidText] = useState('');
   const [placing, setPlacing] = useState(false);
   // Authoritative top bid from our own accepted bid; the 3s poll lags a
@@ -49,14 +53,6 @@ export default function AuctionPanel({ item, eventId, isLive }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item.current_bid]);
   const itemIdRef = useRef(item.id);
-  useEffect(() => {
-    if (itemIdRef.current !== item.id) {
-      itemIdRef.current = item.id;
-      setLocalTop(null);
-      setMyTopBid(null);
-      setBidText('');
-    }
-  }, [item.id]);
 
   const polledBid = item.current_bid ?? 0;
   const localWins = localTop !== null && localTop.amount > polledBid;
@@ -67,6 +63,41 @@ export default function AuctionPanel({ item, eventId, isLive }: Props) {
   const minNext = effectiveBid != null
     ? effectiveBid + (item.min_increment || 1)
     : startPrice;
+
+  // Pop the bid pill when a new bid lands (or a new item takes the stage)
+  // so the collapsed row still signals auction activity.
+  const bidPulse = useRef(new Animated.Value(1)).current;
+  const prevBidRef = useRef<number | null>(null);
+  const pulse = useCallback(() => {
+    bidPulse.setValue(1.45);
+    Animated.spring(bidPulse, {
+      toValue: 1,
+      friction: 4,
+      useNativeDriver: true,
+    }).start();
+  }, [bidPulse]);
+
+  useEffect(() => {
+    if (itemIdRef.current !== item.id) {
+      itemIdRef.current = item.id;
+      setLocalTop(null);
+      setMyTopBid(null);
+      setBidText('');
+      prevBidRef.current = null;
+      pulse();
+    }
+  }, [item.id, pulse]);
+
+  useEffect(() => {
+    if (
+      effectiveBid != null &&
+      prevBidRef.current != null &&
+      effectiveBid > prevBidRef.current
+    ) {
+      pulse();
+    }
+    prevBidRef.current = effectiveBid;
+  }, [effectiveBid, pulse]);
 
   const submitBid = useCallback(
     async (amount: number) => {
@@ -130,91 +161,127 @@ export default function AuctionPanel({ item, eventId, isLive }: Props) {
       ? t('events.auctionBidCountOne')
       : t('events.auctionBidCount', { count: item.bid_count });
 
+  const sold = item.status === 'sold';
+  const bidPill = (
+    <Animated.View
+      style={[
+        styles.bidPill,
+        sold && styles.bidPillSold,
+        { transform: [{ scale: bidPulse }] },
+      ]}
+    >
+      {sold && (
+        <Ionicons name="checkmark" size={12} color={colors.background} />
+      )}
+      <Text style={[styles.bidPillText, sold && styles.bidPillTextSold]}>
+        €{sold
+          ? Math.round(parseFloat(item.final_price || '0'))
+          : effectiveBid ?? startPrice}
+      </Text>
+    </Animated.View>
+  );
+
   return (
     <View style={styles.panel}>
-      <View style={styles.headerRow}>
+      <Pressable
+        style={({ pressed }) => [styles.collapsedRow, pressed && { opacity: 0.8 }]}
+        onPress={() => setExpanded((e) => !e)}
+      >
         <Ionicons name="hammer" size={14} color={colors.primary} />
-        <Text style={styles.label}>{t('events.auction')}</Text>
-        {item.status === 'active' && isLive && (
-          <View style={styles.liveDotWrap}>
-            <View style={styles.liveDot} />
+        {item.status === 'active' && isLive && <View style={styles.liveDot} />}
+        <Text style={styles.collapsedTitle} numberOfLines={1}>
+          {item.title}
+        </Text>
+        {bidPill}
+        <Ionicons
+          name={expanded ? 'chevron-up' : 'chevron-down'}
+          size={16}
+          color={colors.textMuted}
+        />
+      </Pressable>
+
+      {expanded && (
+        <>
+          <View style={styles.bodyRow}>
+            {!!item.image_url && (
+              <Image source={{ uri: item.image_url }} style={styles.image} />
+            )}
+            <View style={styles.info}>
+              <Text style={styles.title}>{item.title}</Text>
+              {metaParts.length > 0 && (
+                <Text style={styles.meta}>{metaParts.join(' • ')}</Text>
+              )}
+              {!!item.description && (
+                <Text style={styles.description} numberOfLines={3}>
+                  {item.description}
+                </Text>
+              )}
+
+              {sold ? (
+                <Text style={styles.soldLine}>
+                  {t('events.soldFor')} €{Math.round(parseFloat(item.final_price || '0'))}
+                  {item.winner_name ? ` ${t('events.soldTo')} ${item.winner_name}` : ''}
+                </Text>
+              ) : effectiveBid != null ? (
+                <Text style={styles.bidLine}>
+                  {t('events.auctionHighestBid')}:{' '}
+                  <Text style={styles.bidAmount}>€{effectiveBid}</Text>
+                  {effectiveLeader ? ` — ${effectiveLeader}` : ''}
+                  {item.bid_count > 0 ? `  (${bidCountLabel})` : ''}
+                </Text>
+              ) : (
+                <Text style={styles.bidLine}>
+                  {t('events.auctionNoBids')} — {t('events.startingAt').toLowerCase()} €{startPrice}
+                </Text>
+              )}
+
+              {iAmLeading && item.status === 'active' && (
+                <Text style={styles.leadingLine}>{t('events.auctionYouLead')}</Text>
+              )}
+            </View>
           </View>
-        )}
-      </View>
 
-      <View style={styles.bodyRow}>
-        {!!item.image_url && (
-          <Image source={{ uri: item.image_url }} style={styles.image} />
-        )}
-        <View style={styles.info}>
-          <Text style={styles.title} numberOfLines={2}>{item.title}</Text>
-          {metaParts.length > 0 && (
-            <Text style={styles.meta}>{metaParts.join(' • ')}</Text>
+          {item.status === 'active' && isLive && (
+            <View style={styles.bidRow}>
+              <TouchableOpacity
+                style={[styles.quickBidButton, placing && styles.bidDisabled]}
+                onPress={() => submitBid(minNext)}
+                disabled={placing}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.quickBidText}>
+                  {t('events.auctionQuickBid', { amount: minNext })}
+                </Text>
+              </TouchableOpacity>
+              <TextInput
+                style={styles.bidInput}
+                value={bidText}
+                onChangeText={(v) => setBidText(v.replace(/[^0-9]/g, ''))}
+                placeholder={t('events.auctionBidPlaceholder')}
+                placeholderTextColor={colors.textMuted}
+                keyboardType="number-pad"
+                inputMode="numeric"
+                maxLength={5}
+                onSubmitEditing={handleCustomBid}
+                returnKeyType="send"
+              />
+              <TouchableOpacity
+                style={[
+                  styles.bidSendButton,
+                  (!bidText || placing) && styles.bidDisabled,
+                ]}
+                onPress={handleCustomBid}
+                disabled={!bidText || placing}
+              >
+                <Ionicons
+                  name="arrow-up"
+                  size={18}
+                  color={bidText && !placing ? colors.background : colors.textMuted}
+                />
+              </TouchableOpacity>
+            </View>
           )}
-
-          {item.status === 'sold' ? (
-            <Text style={styles.soldLine}>
-              {t('events.soldFor')} €{Math.round(parseFloat(item.final_price || '0'))}
-              {item.winner_name ? ` ${t('events.soldTo')} ${item.winner_name}` : ''}
-            </Text>
-          ) : effectiveBid != null ? (
-            <Text style={styles.bidLine}>
-              {t('events.auctionHighestBid')}:{' '}
-              <Text style={styles.bidAmount}>€{effectiveBid}</Text>
-              {effectiveLeader ? ` — ${effectiveLeader}` : ''}
-              {item.bid_count > 0 ? `  (${bidCountLabel})` : ''}
-            </Text>
-          ) : (
-            <Text style={styles.bidLine}>
-              {t('events.auctionNoBids')} — {t('events.startingAt').toLowerCase()} €{startPrice}
-            </Text>
-          )}
-
-          {iAmLeading && item.status === 'active' && (
-            <Text style={styles.leadingLine}>{t('events.auctionYouLead')}</Text>
-          )}
-        </View>
-      </View>
-
-      {item.status === 'active' && isLive && (
-        <View style={styles.bidRow}>
-          <TouchableOpacity
-            style={[styles.quickBidButton, placing && styles.bidDisabled]}
-            onPress={() => submitBid(minNext)}
-            disabled={placing}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.quickBidText}>
-              {t('events.auctionQuickBid', { amount: minNext })}
-            </Text>
-          </TouchableOpacity>
-          <TextInput
-            style={styles.bidInput}
-            value={bidText}
-            onChangeText={(v) => setBidText(v.replace(/[^0-9]/g, ''))}
-            placeholder={t('events.auctionBidPlaceholder')}
-            placeholderTextColor={colors.textMuted}
-            keyboardType="number-pad"
-            inputMode="numeric"
-            maxLength={5}
-            onSubmitEditing={handleCustomBid}
-            returnKeyType="send"
-          />
-          <TouchableOpacity
-            style={[
-              styles.bidSendButton,
-              (!bidText || placing) && styles.bidDisabled,
-            ]}
-            onPress={handleCustomBid}
-            disabled={!bidText || placing}
-          >
-            <Ionicons
-              name="arrow-up"
-              size={18}
-              color={bidText && !placing ? colors.background : colors.textMuted}
-            />
-          </TouchableOpacity>
-        </View>
+        </>
       )}
     </View>
   );
@@ -224,25 +291,22 @@ const styles = StyleSheet.create({
   panel: {
     backgroundColor: colors.surface,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm + 2,
+    paddingVertical: spacing.sm,
     borderLeftWidth: 3,
     borderLeftColor: colors.primary,
   },
-  headerRow: {
+  collapsedRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginBottom: 4,
+    gap: spacing.sm,
+    minHeight: 28,
   },
-  label: {
+  collapsedTitle: {
+    flex: 1,
     fontFamily: fonts.heading,
-    color: colors.primary,
-    fontSize: 11,
-    letterSpacing: 1.5,
-    textTransform: 'uppercase',
-  },
-  liveDotWrap: {
-    marginLeft: 2,
+    color: colors.text,
+    fontSize: 14,
+    letterSpacing: 0.3,
   },
   liveDot: {
     width: 6,
@@ -250,9 +314,31 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     backgroundColor: colors.live,
   },
+  bidPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: colors.surfaceHigh,
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: 3,
+    borderRadius: borderRadius.pill,
+  },
+  bidPillSold: {
+    backgroundColor: colors.success,
+  },
+  bidPillText: {
+    fontFamily: fonts.headingBold,
+    color: colors.primary,
+    fontSize: 13,
+    letterSpacing: 0.4,
+  },
+  bidPillTextSold: {
+    color: colors.background,
+  },
   bodyRow: {
     flexDirection: 'row',
     gap: spacing.sm + 2,
+    marginTop: spacing.sm,
   },
   image: {
     width: 54,
@@ -273,6 +359,12 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 12,
     marginTop: 1,
+  },
+  description: {
+    color: colors.textMuted,
+    fontSize: 12,
+    marginTop: 3,
+    lineHeight: 17,
   },
   bidLine: {
     color: colors.textMuted,

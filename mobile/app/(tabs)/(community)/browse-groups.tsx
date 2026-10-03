@@ -5,7 +5,7 @@ import { router } from 'expo-router';
 import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
 import { colors, spacing, borderRadius, fonts } from '../../../src/theme/colors';
-import { Card, Button, EmptyState, SkeletonCard } from '../../../src/components/ui';
+import { Card, Button, ContentColumn, EmptyState, SkeletonCard } from '../../../src/components/ui';
 import { getAvailableGroups, joinGroup, Group } from '../../../src/api/community';
 
 export default function BrowseGroupsScreen() {
@@ -45,6 +45,7 @@ export default function BrowseGroupsScreen() {
 
   return (
     <View style={styles.container}>
+      <ContentColumn>
       <FlatList
         data={groups}
         keyExtractor={(item) => item.id.toString()}
@@ -103,6 +104,7 @@ export default function BrowseGroupsScreen() {
         }
         contentContainerStyle={groups.length === 0 ? { flex: 1 } : styles.listContent}
       />
+      </ContentColumn>
     </View>
   );
 }

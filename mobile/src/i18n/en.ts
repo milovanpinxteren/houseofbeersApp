@@ -350,6 +350,9 @@ export default {
     tapToEdit: 'Tap to edit',
     editProfile: 'Edit Profile',
     saveError: 'Failed to save profile',
+    username: 'Username',
+    usernameHint:
+      'Shown in chat, winner lists and the community. Leave empty to use your first name.',
     account: 'Account',
     preferences: 'Preferences',
     shopifyAccount: 'Shopify Account',
@@ -670,6 +673,7 @@ export default {
     auctionBidError: 'Failed to place bid',
     // Raffle animation
     drawingFor: 'Drawing for',
+    winnersCount: '%{count} winners',
     tapToDismiss: 'Tap to dismiss',
     youWonBanner: 'You won: %{prizes}',
     missedDraws: 'You missed %{count} draws',

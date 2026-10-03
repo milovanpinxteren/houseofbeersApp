@@ -9,7 +9,7 @@ import { useAuth } from '../../../src/context/AuthContext';
 import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
 import { colors, spacing, borderRadius, fonts } from '../../../src/theme/colors';
-import { EmptyState, SkeletonCard, Button, useToast } from '../../../src/components/ui';
+import { ContentColumn, EmptyState, SkeletonCard, Button, useToast } from '../../../src/components/ui';
 import { Avatar } from '../../../src/components/chat';
 import { getComments, addComment, deleteComment, editComment, Comment } from '../../../src/api/community';
 import { timeAgo } from '../../../src/utils/timeAgo';
@@ -206,6 +206,7 @@ export default function PostCommentsScreen() {
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={90}>
+      <ContentColumn>
       <FlatList
         data={comments}
         keyExtractor={(item) => item.id.toString()}
@@ -252,6 +253,7 @@ export default function PostCommentsScreen() {
           {isSending ? <ActivityIndicator size="small" color={colors.background} /> : <Ionicons name="send" size={17} color={colors.background} />}
         </Pressable>
       </View>
+      </ContentColumn>
     </KeyboardAvoidingView>
   );
 }

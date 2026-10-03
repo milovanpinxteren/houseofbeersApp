@@ -58,7 +58,7 @@ export default function MemberProfileScreen() {
 
   if (isLoading) {
     return (
-      <Screen scroll={false}>
+      <Screen scroll={false} maxContentWidth={720}>
         <View style={styles.skeletonHeader}>
           <Skeleton width={84} height={84} radius={42} />
           <Skeleton width={160} height={20} style={{ marginTop: spacing.md }} />
@@ -72,7 +72,7 @@ export default function MemberProfileScreen() {
 
   if (!data) {
     return (
-      <Screen scroll={false}>
+      <Screen scroll={false} maxContentWidth={720}>
         <View style={styles.centerFill}>
           <EmptyState
             icon="person-outline"
@@ -87,6 +87,7 @@ export default function MemberProfileScreen() {
 
   return (
     <Screen
+      maxContentWidth={720}
       refreshing={isRefreshing}
       onRefresh={() => { setIsRefreshing(true); loadProfile(); }}
     >

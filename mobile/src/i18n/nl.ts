@@ -349,6 +349,9 @@ export default {
     tapToEdit: 'Tik om te bewerken',
     editProfile: 'Profiel bewerken',
     saveError: 'Profiel opslaan mislukt',
+    username: 'Gebruikersnaam',
+    usernameHint:
+      'Zichtbaar in de chat, winnaarslijsten en de community. Laat leeg om je voornaam te gebruiken.',
     account: 'Account',
     preferences: 'Voorkeuren',
     shopifyAccount: 'Shopify Account',
@@ -669,6 +672,7 @@ export default {
     auctionBidError: 'Bod plaatsen mislukt',
     // Verloting animatie
     drawingFor: 'Trekking voor',
+    winnersCount: '%{count} winnaars',
     tapToDismiss: 'Tik om te sluiten',
     youWonBanner: 'Jij hebt gewonnen: %{prizes}',
     missedDraws: 'Je hebt %{count} trekkingen gemist',

@@ -10,7 +10,7 @@ import { useLanguage } from '../../src/context/LanguageContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { t } from '../../src/i18n';
 import { colors, spacing, borderRadius, fonts, type } from '../../src/theme/colors';
-import { Card, EmptyState, SkeletonCard, Badge, Button, useToast } from '../../src/components/ui';
+import { Card, ContentColumn, EmptyState, SkeletonCard, Badge, Button, useToast } from '../../src/components/ui';
 import {
   getFeed, toggleLike, deletePost, editPost, getGroups, getChats,
   getSuggestions, toggleSuggestionVote, deleteSuggestion,
@@ -686,28 +686,30 @@ export default function CommunityScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.topTabBar}>
-        {tabs.map(tab => (
-          <Pressable
-            key={tab.key}
-            style={({ pressed }) => [
-              styles.topTab,
-              activeTab === tab.key && styles.topTabActive,
-              pressed && activeTab !== tab.key && { opacity: 0.7 },
-            ]}
-            onPress={() => setActiveTab(tab.key)}
-          >
-            <Text style={[styles.topTabText, activeTab === tab.key && styles.topTabTextActive]}>
-              {tab.label}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
+      <ContentColumn>
+        <View style={styles.topTabBar}>
+          {tabs.map(tab => (
+            <Pressable
+              key={tab.key}
+              style={({ pressed }) => [
+                styles.topTab,
+                activeTab === tab.key && styles.topTabActive,
+                pressed && activeTab !== tab.key && { opacity: 0.7 },
+              ]}
+              onPress={() => setActiveTab(tab.key)}
+            >
+              <Text style={[styles.topTabText, activeTab === tab.key && styles.topTabTextActive]}>
+                {tab.label}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
 
-      {activeTab === 'feed' && <FeedTab userId={user?.id ?? 0} isStaff={isStaff} />}
-      {activeTab === 'groups' && <GroupsTab />}
-      {activeTab === 'chats' && <ChatsTab userId={user?.id ?? 0} />}
-      {activeTab === 'forum' && <ForumTab userId={user?.id ?? 0} isStaff={isStaff} />}
+        {activeTab === 'feed' && <FeedTab userId={user?.id ?? 0} isStaff={isStaff} />}
+        {activeTab === 'groups' && <GroupsTab />}
+        {activeTab === 'chats' && <ChatsTab userId={user?.id ?? 0} />}
+        {activeTab === 'forum' && <ForumTab userId={user?.id ?? 0} isStaff={isStaff} />}
+      </ContentColumn>
     </View>
   );
 }

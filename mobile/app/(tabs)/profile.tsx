@@ -17,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/context/AuthContext';
 import { useLanguage } from '../../src/context/LanguageContext';
 import { syncShopify, updateProfile } from '../../src/api/auth';
+import { getMyProfile, updateMyProfile } from '../../src/api/community';
 import { t } from '../../src/i18n';
 import { colors, spacing, borderRadius, fonts, type } from '../../src/theme/colors';
 import { Screen, Card, Button, ListItem, SectionHeader, useToast } from '../../src/components/ui';
@@ -32,6 +33,9 @@ export default function ProfileScreen() {
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [editFirstName, setEditFirstName] = useState('');
   const [editLastName, setEditLastName] = useState('');
+  const [editDisplayName, setEditDisplayName] = useState('');
+  // null = not fetched (don't write display_name on save), string = loaded
+  const [loadedDisplayName, setLoadedDisplayName] = useState<string | null>(null);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -89,6 +93,17 @@ export default function ProfileScreen() {
     setEditFirstName(user?.first_name || '');
     setEditLastName(user?.last_name || '');
     setShowEditProfile(true);
+    // Community username loads async; until it arrives (or on failure) the
+    // save leaves display_name untouched so we never blank it by accident.
+    getMyProfile()
+      .then((profile) => {
+        setLoadedDisplayName(profile.display_name || '');
+        setEditDisplayName(profile.display_name || '');
+      })
+      .catch((error) => {
+        console.log('[Profile] Community profile load error:', error);
+        setLoadedDisplayName(null);
+      });
   }
 
   async function handleSaveProfile() {
@@ -98,6 +113,12 @@ export default function ProfileScreen() {
         first_name: editFirstName.trim(),
         last_name: editLastName.trim(),
       });
+      if (
+        loadedDisplayName !== null &&
+        editDisplayName.trim() !== loadedDisplayName
+      ) {
+        await updateMyProfile({ display_name: editDisplayName.trim() });
+      }
       await refreshUser();
       setShowEditProfile(false);
     } catch (error) {
@@ -264,6 +285,21 @@ export default function ProfileScreen() {
                 autoCapitalize="words"
               />
             </View>
+            {loadedDisplayName !== null && (
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>{t('profile.username')}</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={editDisplayName}
+                  onChangeText={setEditDisplayName}
+                  placeholder={user?.first_name || t('profile.username')}
+                  placeholderTextColor={colors.textMuted}
+                  autoCapitalize="none"
+                  maxLength={100}
+                />
+                <Text style={styles.inputHint}>{t('profile.usernameHint')}</Text>
+              </View>
+            )}
             <View style={styles.modalButtons}>
               <Button
                 label={t('common.cancel')}
@@ -427,6 +463,12 @@ const styles = StyleSheet.create({
     ...type.label,
     fontSize: 12,
     marginBottom: spacing.xs,
+  },
+  inputHint: {
+    color: colors.textMuted,
+    fontSize: 12,
+    lineHeight: 16,
+    marginTop: spacing.xs,
   },
   textInput: {
     backgroundColor: colors.surfaceLow,

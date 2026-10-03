@@ -8,7 +8,7 @@ import { router } from 'expo-router';
 import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
 import { colors, spacing, borderRadius, fonts } from '../../../src/theme/colors';
-import { Card, EmptyState, SkeletonCard } from '../../../src/components/ui';
+import { Card, ContentColumn, EmptyState, SkeletonCard } from '../../../src/components/ui';
 import { Avatar } from '../../../src/components/chat';
 import { getMembers, CommunityProfile } from '../../../src/api/community';
 
@@ -109,6 +109,7 @@ export default function MembersScreen() {
 
   return (
     <View style={styles.container}>
+      <ContentColumn>
       <View style={styles.searchBar}>
         <Ionicons name="search" size={18} color={colors.textMuted} />
         <TextInput
@@ -151,6 +152,7 @@ export default function MembersScreen() {
           contentContainerStyle={members.length === 0 ? styles.emptyListContent : styles.listContent}
         />
       )}
+      </ContentColumn>
     </View>
   );
 }

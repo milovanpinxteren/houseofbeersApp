@@ -7,7 +7,7 @@ import { router } from 'expo-router';
 import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
 import { colors, spacing, borderRadius, type } from '../../../src/theme/colors';
-import { Button, useToast } from '../../../src/components/ui';
+import { Button, ContentColumn, useToast } from '../../../src/components/ui';
 import { createSuggestion } from '../../../src/api/community';
 
 export default function NewSuggestionScreen() {
@@ -42,6 +42,7 @@ export default function NewSuggestionScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
+      <ContentColumn>
       <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
         {/* Title */}
         <Text style={styles.label}>{t('community.suggestionTitle')}</Text>
@@ -89,6 +90,7 @@ export default function NewSuggestionScreen() {
           loading={isPosting}
         />
       </View>
+      </ContentColumn>
     </KeyboardAvoidingView>
   );
 }

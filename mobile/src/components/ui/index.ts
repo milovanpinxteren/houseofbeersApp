@@ -1,6 +1,7 @@
 export { Badge } from './Badge';
 export { Button } from './Button';
 export { Card } from './Card';
+export { ContentColumn } from './ContentColumn';
 export { EmptyState } from './EmptyState';
 export { ListItem } from './ListItem';
 export { Screen } from './Screen';

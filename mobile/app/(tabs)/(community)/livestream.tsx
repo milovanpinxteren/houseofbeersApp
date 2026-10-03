@@ -13,6 +13,7 @@ import {
   Pressable,
   NativeSyntheticEvent,
   NativeScrollEvent,
+  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams } from 'expo-router';
@@ -30,6 +31,7 @@ import {
 } from '../../../src/components/chat';
 import { ApiError } from '../../../src/api/client';
 import AuctionPanel from '../../../src/components/AuctionPanel';
+import DrawReveal from '../../../src/components/DrawReveal';
 import {
   Event,
   EventMessage,
@@ -163,6 +165,18 @@ export default function LivestreamScreen() {
   const { language } = useLanguage();
   const { showToast } = useToast();
 
+  // Responsive layout: phones (<600) keep the classic stacked layout
+  // untouched; medium windows cap the video height so chat keeps room;
+  // wide windows (desktop PWA, admins) go two-column YouTube-style.
+  const { width: winWidth, height: winHeight } = useWindowDimensions();
+  const isWide = winWidth >= 900;
+  const isMedium = winWidth >= 600 && winWidth < 900;
+  const videoCapWidth = isWide
+    ? Math.round((winHeight * 0.6 * 16) / 9)
+    : isMedium
+      ? Math.round((winHeight * 0.45 * 16) / 9)
+      : undefined;
+
   const [event, setEvent] = useState<Event | null>(null);
   const [messages, setMessages] = useState<EventMessage[]>([]);
   const [winners, setWinners] = useState<RaffleWinner[]>([]);
@@ -178,25 +192,24 @@ export default function LivestreamScreen() {
   const soldBannerOpacity = useRef(new Animated.Value(0)).current;
   const announcedSoldIds = useRef<Set<number>>(new Set());
 
-  // Raffle animation
+  // Raffle draw overlay — the choreography itself lives in DrawReveal
+  // (slot-machine reel, per-winner confetti); this host owns the overlay
+  // fade, the queue and dismissal.
   const [raffleAnimation, setRaffleAnimation] = useState<RaffleAnimationData | null>(null);
-  const [shuffleName, setShuffleName] = useState('');
-  const [animationPhase, setAnimationPhase] = useState<'shuffling' | 'revealing' | 'done'>('shuffling');
-  // Multi-winner raffles reveal names one at a time, not all at once
-  const [revealedWinners, setRevealedWinners] = useState(0);
+  // Finale reached: tap-to-dismiss becomes available
+  const [raffleFinale, setRaffleFinale] = useState(false);
+  // Remount key so back-to-back queued draws each get a fresh DrawReveal run
+  const [raffleRunId, setRaffleRunId] = useState(0);
   // Catch-up summary after missing several draws (backgrounded/rejoined)
   const [missedSummary, setMissedSummary] = useState<MissedDraw[] | null>(null);
   // Persistent "jij hebt gewonnen" banner — the overlay is ephemeral and
   // namesakes made winners doubt themselves; this stays until dismissed.
   const [myWins, setMyWins] = useState<string[]>([]);
   const raffleOverlayOpacity = useRef(new Animated.Value(0)).current;
-  const winnerScale = useRef(new Animated.Value(0.5)).current;
-  const youWonOpacity = useRef(new Animated.Value(0)).current;
   const prevWinnerCount = useRef(0);
   const raffleActive = useRef(false);
   const raffleDismissing = useRef(false);
   const pendingRaffles = useRef<RaffleAnimationData[]>([]);
-  const raffleTimeouts = useRef<ReturnType<typeof setTimeout>[]>([]);
   const mountedRef = useRef(true);
 
   const lastMessageTime = useRef<string | undefined>(undefined);
@@ -496,12 +509,10 @@ export default function LivestreamScreen() {
     };
   }, [numericEventId]);
 
-  // Clear raffle animation timers and queue on unmount
+  // Clear the raffle queue on unmount (DrawReveal cleans its own timers)
   useEffect(() => {
     return () => {
       mountedRef.current = false;
-      raffleTimeouts.current.forEach(clearTimeout);
-      raffleTimeouts.current = [];
       pendingRaffles.current = [];
     };
   }, []);
@@ -633,107 +644,26 @@ export default function LivestreamScreen() {
     [showToast]
   );
 
-  function clearRaffleTimeouts() {
-    raffleTimeouts.current.forEach(clearTimeout);
-    raffleTimeouts.current = [];
-  }
-
   function startRaffleAnimation(data: RaffleAnimationData) {
     if (!mountedRef.current) return;
 
     raffleActive.current = true;
     setRaffleAnimation(data);
-    setAnimationPhase('shuffling');
-    setRevealedWinners(0);
+    setRaffleFinale(false);
+    setRaffleRunId((id) => id + 1); // fresh DrawReveal per draw
     raffleOverlayOpacity.setValue(0);
-    winnerScale.setValue(0.5);
-    youWonOpacity.setValue(0);
 
-    // Fade in overlay
+    // Fade in overlay; DrawReveal runs the choreography from mount
     Animated.timing(raffleOverlayOpacity, {
       toValue: 1,
       duration: 300,
       useNativeDriver: true,
     }).start();
-
-    // Shuffle through names with deceleration
-    const { viewerNames, winnerNames } = data;
-    let elapsed = 0;
-    let delay = 50;
-
-    function getDelay() {
-      if (elapsed < 1000) return 50;
-      if (elapsed < 1800) return 100;
-      if (elapsed < 2300) return 200;
-      return 400;
-    }
-
-    const REVEAL_STAGGER = 600;
-
-    function revealNext(n: number) {
-      setRevealedWinners(n);
-      if (n < data.winnerNames.length) {
-        // Multi-winner prize: names land one at a time, not all at once
-        raffleTimeouts.current.push(
-          setTimeout(() => revealNext(n + 1), REVEAL_STAGGER)
-        );
-      } else {
-        // Auto-dismiss 5 seconds after the last name lands
-        raffleTimeouts.current.push(
-          setTimeout(() => {
-            setAnimationPhase('done');
-            dismissRaffle();
-          }, 5000)
-        );
-      }
-    }
-
-    function tick() {
-      if (elapsed >= 2800) {
-        // Reveal the winner(s)
-        setAnimationPhase('revealing');
-
-        Animated.spring(winnerScale, {
-          toValue: 1,
-          friction: 4,
-          tension: 80,
-          useNativeDriver: true,
-        }).start();
-
-        if (data.isCurrentUser) {
-          Animated.sequence([
-            Animated.delay(500),
-            Animated.timing(youWonOpacity, {
-              toValue: 1,
-              duration: 400,
-              useNativeDriver: true,
-            }),
-          ]).start();
-        }
-
-        revealNext(1);
-        return;
-      }
-
-      // Pick a random name (avoid showing a winner too early)
-      const pool = viewerNames.filter((n) => !winnerNames.includes(n));
-      const randomName = pool.length > 0
-        ? pool[Math.floor(Math.random() * pool.length)]
-        : viewerNames[Math.floor(Math.random() * viewerNames.length)];
-      setShuffleName(randomName);
-
-      delay = getDelay();
-      elapsed += delay;
-      raffleTimeouts.current.push(setTimeout(tick, delay));
-    }
-
-    tick();
   }
 
   function dismissRaffle() {
     if (raffleDismissing.current) return;
     raffleDismissing.current = true;
-    clearRaffleTimeouts();
     Animated.timing(raffleOverlayOpacity, {
       toValue: 0,
       duration: 300,
@@ -741,7 +671,6 @@ export default function LivestreamScreen() {
     }).start(() => {
       raffleDismissing.current = false;
       if (!mountedRef.current) return;
-      setShuffleName('');
       // Play the next queued draw, if any arrived during this animation
       const next = pendingRaffles.current.shift();
       if (next) {
@@ -749,6 +678,7 @@ export default function LivestreamScreen() {
       } else {
         raffleActive.current = false;
         setRaffleAnimation(null);
+        setRaffleFinale(false);
       }
     });
   }
@@ -868,21 +798,36 @@ export default function LivestreamScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={styles.container}
+      style={[styles.container, isWide && styles.rowLayout]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
-      {/* YouTube Player — keyed on the URL so a mid-stream correction
-          (poll-delivered) swaps the embed cleanly */}
-      {event.youtube_url ? (
-        <YouTubePlayer key={event.youtube_url} url={event.youtube_url} />
-      ) : (
-        <View style={[styles.videoContainer, styles.noVideo]}>
-          <Ionicons name="videocam-off" size={40} color={colors.textMuted} />
-          <Text style={styles.noVideoText}>{event.title}</Text>
+      {/* Video area: full-width on phones; capped 16:9 on medium windows;
+          the flexible left column (letterboxed, vertically centered) on
+          wide windows */}
+      <View
+        style={[
+          isWide && styles.videoAreaWide,
+          isMedium && styles.videoAreaMedium,
+        ]}
+      >
+        <View style={videoCapWidth ? { width: '100%', maxWidth: videoCapWidth } : null}>
+          {/* YouTube Player — keyed on the URL so a mid-stream correction
+              (poll-delivered) swaps the embed cleanly */}
+          {event.youtube_url ? (
+            <YouTubePlayer key={event.youtube_url} url={event.youtube_url} />
+          ) : (
+            <View style={[styles.videoContainer, styles.noVideo]}>
+              <Ionicons name="videocam-off" size={40} color={colors.textMuted} />
+              <Text style={styles.noVideoText}>{event.title}</Text>
+            </View>
+          )}
         </View>
-      )}
+      </View>
 
+      {/* Everything else: the stacked remainder on phones, the fixed
+          right rail (status + auction + chat + composer) on wide */}
+      <View style={[styles.mainArea, isWide && styles.sideRail]}>
       {/* Status bar */}
       <View style={styles.statusBar}>
         <View style={styles.statusLeft}>
@@ -950,54 +895,23 @@ export default function LivestreamScreen() {
         </Animated.View>
       )}
 
-      {/* Raffle Animation Overlay */}
+      {/* Raffle Draw Overlay — slot-machine reveal, one spin per winner */}
       {raffleAnimation && (
         <Modal visible transparent animationType="none">
           <Animated.View style={[styles.raffleOverlay, { opacity: raffleOverlayOpacity }]}>
-            <Pressable style={styles.raffleOverlayPress} onPress={animationPhase === 'done' ? dismissRaffle : undefined}>
-              <View style={styles.raffleContent}>
-                {/* Prize name */}
-                <View style={styles.rafflePrizeRow}>
-                  <Ionicons name="gift" size={24} color={colors.primary} />
-                  <Text style={styles.rafflePrizeText}>{t('events.drawingFor')}: {raffleAnimation.prizeName}</Text>
-                </View>
-
-                {/* Shuffling / Winner name(s) */}
-                <Animated.View style={[
-                  styles.raffleNameContainer,
-                  animationPhase !== 'shuffling' && { transform: [{ scale: winnerScale }] },
-                ]}>
-                  {animationPhase !== 'shuffling' && (
-                    <Ionicons name="trophy" size={40} color={colors.warning} style={{ marginBottom: spacing.sm }} />
-                  )}
-                  {animationPhase === 'shuffling' ? (
-                    <Text style={styles.raffleShuffleName}>{shuffleName}</Text>
-                  ) : (
-                    raffleAnimation.winnerNames
-                      .slice(0, revealedWinners)
-                      .map((name, index) => (
-                        <Text
-                          key={`${name}-${index}`}
-                          style={[styles.raffleShuffleName, styles.raffleWinnerName]}
-                        >
-                          {name}
-                        </Text>
-                      ))
-                  )}
-                </Animated.View>
-
-                {/* YOU WON! */}
-                {raffleAnimation.isCurrentUser && animationPhase !== 'shuffling' && (
-                  <Animated.View style={[styles.youWonContainer, { opacity: youWonOpacity }]}>
-                    <Text style={styles.youWonText}>{t('events.youWon')}</Text>
-                  </Animated.View>
-                )}
-
-                {/* Tap to dismiss hint */}
-                {animationPhase === 'done' && (
-                  <Text style={styles.raffleDismissHint}>{t('events.tapToDismiss') || 'Tap to dismiss'}</Text>
-                )}
-              </View>
+            <Pressable
+              style={styles.raffleOverlayPress}
+              onPress={raffleFinale ? dismissRaffle : undefined}
+            >
+              <DrawReveal
+                key={raffleRunId}
+                prizeName={raffleAnimation.prizeName}
+                winnerNames={raffleAnimation.winnerNames}
+                viewerNames={raffleAnimation.viewerNames}
+                didWin={raffleAnimation.isCurrentUser}
+                onFinale={() => setRaffleFinale(true)}
+                onDone={dismissRaffle}
+              />
             </Pressable>
           </Animated.View>
         </Modal>
@@ -1162,6 +1076,7 @@ export default function LivestreamScreen() {
           </View>
         </View>
       </Modal>
+      </View>
     </KeyboardAvoidingView>
   );
 }
@@ -1170,6 +1085,31 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+  // Wide-screen (>=900px) two-column layout: video left, rail right.
+  rowLayout: {
+    flexDirection: 'row',
+  },
+  videoAreaWide: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#111',
+  },
+  videoAreaMedium: {
+    alignItems: 'center',
+    backgroundColor: '#111',
+  },
+  mainArea: {
+    flex: 1,
+  },
+  sideRail: {
+    flexGrow: 0,
+    flexShrink: 0,
+    flexBasis: 400,
+    width: 400,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderLeftColor: colors.border,
   },
   loadingContainer: {
     flex: 1,
@@ -1425,7 +1365,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 
-  // Raffle animation overlay
+  // Raffle draw overlay (stage content lives in DrawReveal)
   raffleOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.92)',
@@ -1434,61 +1374,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  raffleContent: {
-    alignItems: 'center',
     paddingHorizontal: spacing.xl,
-  },
-  rafflePrizeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginBottom: spacing.xl,
-  },
-  rafflePrizeText: {
-    fontFamily: fonts.heading,
-    color: colors.primary,
-    fontSize: 18,
-    letterSpacing: 0.5,
-  },
-  raffleNameContainer: {
-    alignItems: 'center',
-    minHeight: 100,
-    justifyContent: 'center',
-  },
-  raffleShuffleName: {
-    fontFamily: fonts.headingRegular,
-    color: colors.textMuted,
-    fontSize: 28,
-    letterSpacing: 0.6,
-    textAlign: 'center',
-  },
-  raffleWinnerName: {
-    fontFamily: fonts.headingBold,
-    color: colors.text,
-    fontSize: 36,
-    letterSpacing: 0.6,
-  },
-  youWonContainer: {
-    marginTop: spacing.lg,
-    paddingHorizontal: spacing.xl,
-    paddingVertical: spacing.md,
-    borderRadius: borderRadius.pill,
-    borderWidth: 2,
-    borderColor: colors.warning,
-  },
-  youWonText: {
-    fontFamily: fonts.headingBold,
-    color: colors.warning,
-    fontSize: 26,
-    textAlign: 'center',
-    letterSpacing: 4,
-    textTransform: 'uppercase',
-  },
-  raffleDismissHint: {
-    color: colors.textMuted,
-    fontSize: 12,
-    marginTop: spacing.xl,
   },
 
   // Chat

@@ -10,7 +10,7 @@ import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { t } from '../i18n';
 import { colors, spacing, borderRadius, fonts } from '../theme/colors';
-import { EmptyState, Skeleton, useToast } from './ui';
+import { ContentColumn, EmptyState, Skeleton, useToast } from './ui';
 import { PaginatedResponse, ReactionMap, ReactionResponse } from '../api/community';
 import {
   Avatar, DaySeparator, MessageBubble, MessageComposer, ReactionSheet,
@@ -339,18 +339,21 @@ export default function ChatScreen({
   if (isLoading) {
     return (
       <View style={styles.container}>
-        <View style={styles.chatHeader}>
-          <Avatar name={title} size="sm" style={styles.headerAvatar} />
-          <Text style={styles.chatTitle} numberOfLines={1}>{title}</Text>
-          {headerAction}
-        </View>
-        <LoadingBubbles />
+        <ContentColumn maxWidth={CHAT_MAX_WIDTH}>
+          <View style={styles.chatHeader}>
+            <Avatar name={title} size="sm" style={styles.headerAvatar} />
+            <Text style={styles.chatTitle} numberOfLines={1}>{title}</Text>
+            {headerAction}
+          </View>
+          <LoadingBubbles />
+        </ContentColumn>
       </View>
     );
   }
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={90}>
+      <ContentColumn maxWidth={CHAT_MAX_WIDTH}>
       <View style={styles.chatHeader}>
         <Avatar name={title} size="sm" style={styles.headerAvatar} />
         <Text style={styles.chatTitle} numberOfLines={1}>{title}</Text>
@@ -437,9 +440,13 @@ export default function ChatScreen({
           ? () => handleDelete(sheetMsg)
           : undefined}
       />
+      </ContentColumn>
     </KeyboardAvoidingView>
   );
 }
+
+// Wide-screen cap for the message column (desktop PWA); inert on phones.
+const CHAT_MAX_WIDTH = 760;
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },

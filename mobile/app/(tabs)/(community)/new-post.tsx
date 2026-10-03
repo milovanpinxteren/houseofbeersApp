@@ -8,7 +8,7 @@ import { router } from 'expo-router';
 import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
 import { colors, spacing, borderRadius, fonts, type } from '../../../src/theme/colors';
-import { Button, Card, useToast } from '../../../src/components/ui';
+import { Button, Card, ContentColumn, useToast } from '../../../src/components/ui';
 import { createPost } from '../../../src/api/community';
 import { getFavorites } from '../../../src/api/recommendations';
 
@@ -85,6 +85,7 @@ export default function NewPostScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
+      <ContentColumn>
       <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
         {/* Post type selector */}
         <View style={styles.typeRow}>
@@ -203,6 +204,7 @@ export default function NewPostScreen() {
           disabled={!content.trim()}
         />
       </View>
+      </ContentColumn>
     </KeyboardAvoidingView>
   );
 }

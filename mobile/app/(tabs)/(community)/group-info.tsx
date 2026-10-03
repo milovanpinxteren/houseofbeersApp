@@ -37,7 +37,7 @@ export default function GroupInfoScreen() {
 
   if (isLoading) {
     return (
-      <Screen scroll={false}>
+      <Screen scroll={false} maxContentWidth={720}>
         <View style={styles.skeletonHero}>
           <Skeleton width={72} height={72} radius={36} />
           <Skeleton width={160} height={20} style={{ marginTop: spacing.md }} />
@@ -50,7 +50,7 @@ export default function GroupInfoScreen() {
 
   if (!group) {
     return (
-      <Screen scroll={false}>
+      <Screen scroll={false} maxContentWidth={720}>
         <View style={styles.centerFill}>
           <EmptyState icon="alert-circle-outline" title={t('community.groupNotFound')} />
         </View>
@@ -59,7 +59,7 @@ export default function GroupInfoScreen() {
   }
 
   return (
-    <Screen>
+    <Screen maxContentWidth={720}>
       {/* Hero */}
       <View style={styles.hero}>
         <View style={styles.avatarLarge}>

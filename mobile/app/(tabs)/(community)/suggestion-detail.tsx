@@ -10,7 +10,7 @@ import { useAuth } from '../../../src/context/AuthContext';
 import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
 import { colors, spacing, borderRadius, fonts, type } from '../../../src/theme/colors';
-import { EmptyState, Skeleton, SkeletonCard, Button, useToast } from '../../../src/components/ui';
+import { ContentColumn, EmptyState, Skeleton, SkeletonCard, Button, useToast } from '../../../src/components/ui';
 import {
   getSuggestionDetail, getSuggestionComments, addSuggestionComment,
   deleteSuggestionComment, toggleSuggestionVote, toggleSuggestionCommentVote,
@@ -196,6 +196,7 @@ export default function SuggestionDetailScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={90}
     >
+      <ContentColumn>
       <FlatList
         ref={flatListRef}
         data={comments}
@@ -388,6 +389,7 @@ export default function SuggestionDetailScreen() {
           )}
         </TouchableOpacity>
       </View>
+      </ContentColumn>
     </KeyboardAvoidingView>
   );
 }
