@@ -93,6 +93,9 @@ export interface BirthdayReward {
   issued_at: string;
   expires_at: string | null;
   expired: boolean;
+  /** True once Shopify reports the code was used (daily backend sweep). */
+  used: boolean;
+  redeemed_at: string | null;
 }
 
 export interface CodesResponse {

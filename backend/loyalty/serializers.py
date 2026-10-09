@@ -97,6 +97,10 @@ def serialize_birthday_reward(reward, config):
         'issued_at': reward.issued_at,
         'expires_at': reward.expires_at,
         'expired': bool(reward.expires_at and reward.expires_at <= timezone.now()),
+        # Stamped by the daily usage sweep (check_issued_code_redemptions):
+        # a code the member already used must stop showing as valid.
+        'redeemed_at': reward.redeemed_at,
+        'used': bool(reward.redeemed_at),
     }
 
 

@@ -535,6 +535,11 @@ class BirthdayReward(models.Model):
     discount_code = models.CharField(max_length=255)
     expires_at = models.DateTimeField(null=True, blank=True)
     issued_at = models.DateTimeField(auto_now_add=True)
+    redeemed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Stamped by the daily code-usage sweep once Shopify reports the code used"
+    )
 
     # The offer as it stood when this gift was issued. BirthdayRewardConfig is
     # a mutable singleton, so reading the label off the live config would show

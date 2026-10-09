@@ -490,16 +490,30 @@ def campaign_raffle_scheduler():
 def check_winner_redemptions():
     """
     Daily (and on demand from the Studio's "Check redemptions" button):
-    mark issued prize codes as redeemed once Shopify reports usage.
+    mark issued prize codes as redeemed once Shopify reports usage, then do
+    the same for birthday gifts and reward-redemption codes. Each sweep is
+    guarded so one failing never kills the other.
     """
+    from loyalty.services.discounts import check_issued_code_redemptions
     from loyalty.services.raffles import check_winner_redemptions as check
 
-    result = check()
-    logger.info(
-        f"Raffle redemption check: {result['checked']} checked, "
-        f"{result['redeemed']} newly redeemed"
-    )
-    return result
+    try:
+        result = check()
+        logger.info(
+            f"Raffle redemption check: {result['checked']} checked, "
+            f"{result['redeemed']} newly redeemed"
+        )
+    except Exception as e:
+        result = {'error': str(e)}
+        logger.error(f"Raffle redemption check failed: {e}", exc_info=True)
+
+    try:
+        issued = check_issued_code_redemptions()
+    except Exception as e:
+        issued = {'error': str(e)}
+        logger.error(f"Issued-code redemption sweep failed: {e}", exc_info=True)
+
+    return {'raffle': result, 'issued_codes': issued}
 
 
 @shared_task

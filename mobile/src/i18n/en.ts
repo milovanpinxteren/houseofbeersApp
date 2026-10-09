@@ -328,6 +328,7 @@ export default {
     offerOff: 'off',
     codeValid: 'Valid',
     codeExpired: 'Expired',
+    codeUsed: 'Code used',
     redeemCode: 'Redeem discount',
     history: 'Points History',
     tabRewards: 'Rewards',

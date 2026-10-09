@@ -96,6 +96,90 @@ def build_cart_url(config, code: str, shopify_service=None) -> str:
     return f"{SHOP_BASE_URL}/discount/{code}"
 
 
+def check_issued_code_redemptions() -> Dict[str, int]:
+    """
+    Best-effort usage sweep for birthday gifts and reward-redemption codes,
+    mirroring raffles.check_winner_redemptions: for every still-live code not
+    yet marked used, ask Shopify (codeDiscountNodeByCode usage count) and
+    stamp the row when it was. All our codes are minted usage_limit=1, so any
+    usage > 0 means redeemed — this is purely a display fix, double use was
+    never possible.
+
+    Expired codes are skipped (no Shopify call): the app already dims them,
+    and they can never become redeemable again. One Shopify hiccup skips that
+    code, never the run.
+    """
+    from django.db.models import Q
+
+    from loyalty.models import BirthdayReward, Redemption
+    from users.services import ShopifyService
+
+    now = timezone.now()
+    unexpired = Q(expires_at__isnull=True) | Q(expires_at__gt=now)
+
+    service = ShopifyService()
+    checked = 0
+    redeemed = 0
+
+    def code_used(code: str) -> bool:
+        usage = service.get_discount_code_usage(code)
+        return bool(usage and usage > 0)
+
+    for gift in (BirthdayReward.objects
+                 .exclude(discount_code='')
+                 .filter(unexpired, redeemed_at__isnull=True)
+                 .select_related('user')):
+        try:
+            used = code_used(gift.discount_code)
+            checked += 1
+            if used:
+                gift.redeemed_at = timezone.now()
+                gift.save(update_fields=['redeemed_at'])
+                redeemed += 1
+                logger.info(
+                    f"Birthday code {gift.discount_code} "
+                    f"({gift.user.email}) marked redeemed"
+                )
+        except Exception as e:
+            logger.error(
+                f"Usage check failed for birthday code {gift.discount_code}: {e}",
+                exc_info=True,
+            )
+
+    # Cancelled redemptions were refunded (the admin action refuses to cancel
+    # a used code) and expired ones are dead - neither is shown as live in
+    # the app, so there is nothing to sweep.
+    for redemption in (Redemption.objects
+                       .exclude(discount_code='')
+                       .filter(unexpired, discount_code_used=False,
+                               status__in=['pending', 'completed'])
+                       .select_related('user')):
+        try:
+            used = code_used(redemption.discount_code)
+            checked += 1
+            if used:
+                redemption.discount_code_used = True
+                redemption.used_at = timezone.now()
+                redemption.save(update_fields=['discount_code_used', 'used_at'])
+                redeemed += 1
+                logger.info(
+                    f"Redemption code {redemption.discount_code} "
+                    f"({redemption.user.email}) marked used"
+                )
+        except Exception as e:
+            logger.error(
+                f"Usage check failed for redemption code "
+                f"{redemption.discount_code}: {e}",
+                exc_info=True,
+            )
+
+    logger.info(
+        f"Issued-code redemption sweep: {checked} checked, "
+        f"{redeemed} newly redeemed"
+    )
+    return {'checked': checked, 'redeemed': redeemed}
+
+
 def create_discount_code(user, config, code: str) -> Optional[Dict[str, Any]]:
     """
     Create a single-use Shopify discount code.

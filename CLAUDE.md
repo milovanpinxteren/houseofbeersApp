@@ -801,7 +801,17 @@ in fact been issued. Now:
 - Mobile: birthday cards render above redemptions in the Codes tab of
   `mobile/app/(tabs)/loyalty.tsx`, with copyable code and a "Korting
   verzilveren" button. i18n keys under `loyalty.*`.
-- Tests: `backend/loyalty/tests.py` (`BirthdayRewardApiTests`).
+- **Usage sweep (2026-10-09)**: used codes must stop showing as valid.
+  `check_issued_code_redemptions()` in `loyalty/services/discounts.py` sweeps
+  unexpired `BirthdayReward` rows (stamps `redeemed_at`) and live `Redemption`
+  rows (sets `discount_code_used`/`used_at`; cancelled/expired skipped) via
+  `get_discount_code_usage` — best-effort per code, mirroring the raffle-prize
+  sweep. Runs inside the existing daily-4AM `check_winner_redemptions` task
+  (each sweep guarded; no new beat entry). The API emits `redeemed_at` +
+  `used` on birthday gifts; `RedemptionSerializer` already had
+  `discount_code_used`.
+- Tests: `backend/loyalty/tests.py` (`BirthdayRewardApiTests`,
+  `IssuedCodeRedemptionSweepTests`).
 
 ## Pickup RSVP (Afhalen)
 

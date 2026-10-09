@@ -631,11 +631,11 @@ export default function LoyaltyScreen() {
         {activeTab === 'redemptions' && birthdayRewards.map((gift) => (
           <View
             key={`bday-${gift.id}`}
-            style={[styles.redemptionCard, styles.birthdayCard, gift.expired && styles.birthdayCardExpired]}
+            style={[styles.redemptionCard, styles.birthdayCard, (gift.used || gift.expired) && styles.birthdayCardExpired]}
           >
             <View style={styles.redemptionInfo}>
               <View style={styles.birthdayTitleRow}>
-                <Ionicons name="gift" size={18} color={gift.expired ? colors.textMuted : colors.primary} />
+                <Ionicons name="gift" size={18} color={gift.used || gift.expired ? colors.textMuted : colors.primary} />
                 <Text style={styles.redemptionName}>
                   {t('loyalty.birthdayGift')} {gift.year}
                 </Text>
@@ -644,7 +644,7 @@ export default function LoyaltyScreen() {
                 <Text style={styles.birthdayOffer}>{offerLabel(gift)}</Text>
               ) : null}
               {gift.expires_at ? (
-                <Text style={gift.expired ? styles.redemptionDate : styles.redemptionExpires}>
+                <Text style={gift.used || gift.expired ? styles.redemptionDate : styles.redemptionExpires}>
                   {gift.expired ? t('loyalty.expiredOn') : t('loyalty.expires')}: {formatDate(gift.expires_at)}
                 </Text>
               ) : null}
@@ -666,12 +666,16 @@ export default function LoyaltyScreen() {
                   size={20}
                   color={copiedCode === gift.discount_code ? colors.success : colors.primary}
                 />
-                <Text style={[styles.codeStatus, gift.expired && styles.codeUsed]}>
-                  {gift.expired ? t('loyalty.codeExpired') : t('loyalty.codeValid')}
+                <Text style={[styles.codeStatus, (gift.used || gift.expired) && styles.codeUsed]}>
+                  {gift.used
+                    ? t('loyalty.codeUsed')
+                    : gift.expired
+                      ? t('loyalty.codeExpired')
+                      : t('loyalty.codeValid')}
                 </Text>
               </View>
             </TouchableOpacity>
-            {gift.cart_url && !gift.expired ? (
+            {gift.cart_url && !gift.used && !gift.expired ? (
               <TouchableOpacity
                 style={styles.birthdayRedeem}
                 onPress={() => openUrl(gift.cart_url!)}
@@ -732,7 +736,7 @@ export default function LoyaltyScreen() {
                           redemption.discount_code_used && styles.codeUsed,
                         ]}
                       >
-                        {redemption.discount_code_used ? 'Used' : (redemption.status_display || 'Pending')}
+                        {redemption.discount_code_used ? t('loyalty.codeUsed') : (redemption.status_display || 'Pending')}
                       </Text>
                     </View>
                   </TouchableOpacity>

@@ -577,3 +577,169 @@ class BirthdayRewardApiTests(BirthdayScanTestCase):
 
         data = mock_notify.call_args.kwargs['data']
         self.assertEqual(data['url'], '/loyalty?tab=codes')
+
+    def test_unused_gift_is_not_flagged_used(self):
+        from django.utils import timezone
+
+        BirthdayReward.objects.create(
+            user=self.user, year=2026, discount_code='BDAY-FRESH',
+            expires_at=timezone.now() + timedelta(days=10),
+            discount_type='fixed_amount', discount_value=Decimal('5.00'),
+        )
+
+        gift = self.get_codes()['birthday_rewards'][0]
+        self.assertFalse(gift['used'])
+        self.assertIsNone(gift['redeemed_at'])
+
+    def test_redeemed_gift_is_flagged_used(self):
+        from django.utils import timezone
+
+        stamp = timezone.now() - timedelta(hours=2)
+        BirthdayReward.objects.create(
+            user=self.user, year=2026, discount_code='BDAY-SPENT',
+            expires_at=timezone.now() + timedelta(days=10),
+            discount_type='fixed_amount', discount_value=Decimal('5.00'),
+            redeemed_at=stamp,
+        )
+
+        gift = self.get_codes()['birthday_rewards'][0]
+        self.assertTrue(gift['used'])
+        self.assertIsNotNone(gift['redeemed_at'])
+
+
+# Where the usage lookup is patched: imported inside the sweep, so the source
+# module is what takes effect (same idiom as test_raffles.USAGE_TARGET).
+USAGE_TARGET = 'users.services.shopify.ShopifyService.get_discount_code_usage'
+
+
+class IssuedCodeRedemptionSweepTests(TestCase):
+    """
+    The daily sweep (check_issued_code_redemptions) that stops already-used
+    birthday and reward codes from showing as valid in the Codes tab.
+    """
+
+    def setUp(self):
+        from django.utils import timezone
+
+        self.user = User.objects.create_user(
+            username='sweep@example.com', email='sweep@example.com',
+            password='SuperSecret123!',
+        )
+        self.future = timezone.now() + timedelta(days=10)
+        self.past = timezone.now() - timedelta(days=1)
+
+    def make_gift(self, code, expires_at='future', redeemed_at=None, year=2026):
+        return BirthdayReward.objects.create(
+            user=self.user, year=year, discount_code=code,
+            expires_at=self.future if expires_at == 'future' else expires_at,
+            redeemed_at=redeemed_at,
+        )
+
+    def make_redemption(self, code, status='completed', used=False,
+                        expires_at='future'):
+        from loyalty.models import Redemption, Reward
+
+        reward, _ = Reward.objects.get_or_create(
+            name='€5 korting',
+            defaults={
+                'reward_type': 'fixed_discount',
+                'points_cost': 100,
+                'discount_amount': Decimal('5.00'),
+            },
+        )
+        return Redemption.objects.create(
+            user=self.user, reward=reward, points_spent=100, status=status,
+            discount_code=code, discount_code_used=used,
+            expires_at=self.future if expires_at == 'future' else expires_at,
+        )
+
+    def sweep(self, usage):
+        from loyalty.services.discounts import check_issued_code_redemptions
+
+        with patch(USAGE_TARGET) as mock_usage:
+            if callable(usage) or isinstance(usage, list):
+                mock_usage.side_effect = usage
+            else:
+                mock_usage.return_value = usage
+            result = check_issued_code_redemptions()
+        return result, mock_usage
+
+    def test_used_birthday_code_is_stamped(self):
+        gift = self.make_gift('BDAY-USED')
+
+        result, _ = self.sweep(1)
+
+        gift.refresh_from_db()
+        self.assertIsNotNone(gift.redeemed_at)
+        self.assertEqual(result, {'checked': 1, 'redeemed': 1})
+
+    def test_unused_or_unknown_code_left_alone(self):
+        unused = self.make_gift('BDAY-UNUSED')
+        unknown = self.make_gift('BDAY-GONE', year=2025)
+
+        result, _ = self.sweep([0, None])
+
+        unused.refresh_from_db()
+        unknown.refresh_from_db()
+        self.assertIsNone(unused.redeemed_at)
+        self.assertIsNone(unknown.redeemed_at)
+        self.assertEqual(result['redeemed'], 0)
+
+    def test_expired_and_already_stamped_gifts_not_checked(self):
+        self.make_gift('BDAY-EXPIRED', expires_at=self.past)
+        self.make_gift('BDAY-DONE', redeemed_at=self.past, year=2025)
+
+        result, mock_usage = self.sweep(1)
+
+        mock_usage.assert_not_called()
+        self.assertEqual(result, {'checked': 0, 'redeemed': 0})
+
+    def test_used_redemption_code_is_marked_used(self):
+        redemption = self.make_redemption('HOB-USED')
+
+        result, _ = self.sweep(1)
+
+        redemption.refresh_from_db()
+        self.assertTrue(redemption.discount_code_used)
+        self.assertIsNotNone(redemption.used_at)
+        self.assertEqual(result, {'checked': 1, 'redeemed': 1})
+
+    def test_cancelled_expired_and_already_used_redemptions_not_checked(self):
+        self.make_redemption('HOB-CANCELLED', status='cancelled')
+        self.make_redemption('HOB-EXPIRED', expires_at=self.past)
+        self.make_redemption('HOB-DONE', used=True)
+
+        result, mock_usage = self.sweep(1)
+
+        mock_usage.assert_not_called()
+        self.assertEqual(result, {'checked': 0, 'redeemed': 0})
+
+    def test_shopify_error_skips_only_that_code(self):
+        # Birthday gifts are swept first, redemptions second.
+        broken = self.make_gift('BDAY-ERR')
+        fine = self.make_redemption('HOB-OK')
+
+        result, _ = self.sweep([RuntimeError('boom'), 1])
+
+        broken.refresh_from_db()
+        fine.refresh_from_db()
+        self.assertIsNone(broken.redeemed_at)
+        self.assertTrue(fine.discount_code_used)
+        self.assertEqual(result, {'checked': 1, 'redeemed': 1})
+
+    def test_task_survives_one_sweep_failing(self):
+        """A raffle-sweep crash must not stop the issued-code sweep."""
+        from loyalty.tasks import check_winner_redemptions as task
+
+        gift = self.make_gift('BDAY-TASK')
+
+        with patch(
+            'loyalty.services.raffles.check_winner_redemptions',
+            side_effect=RuntimeError('raffle sweep down'),
+        ), patch(USAGE_TARGET, return_value=1):
+            result = task()
+
+        gift.refresh_from_db()
+        self.assertIsNotNone(gift.redeemed_at)
+        self.assertIn('error', result['raffle'])
+        self.assertEqual(result['issued_codes'], {'checked': 1, 'redeemed': 1})

@@ -327,6 +327,7 @@ export default {
     offerOff: 'korting',
     codeValid: 'Geldig',
     codeExpired: 'Verlopen',
+    codeUsed: 'Code gebruikt',
     redeemCode: 'Korting verzilveren',
     history: 'Puntengeschiedenis',
     tabRewards: 'Beloningen',
