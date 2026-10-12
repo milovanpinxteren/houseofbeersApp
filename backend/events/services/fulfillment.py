@@ -98,6 +98,12 @@ def _target_parts(target):
     return target.winner, target.shopify_variant_gid, target.title
 
 
+def _target_event_id(target):
+    if isinstance(target, RaffleWinner):
+        return target.raffle.event_id
+    return target.event_id
+
+
 def _store_failure(target, error):
     target.fulfillment_status = 'failed'
     target.fulfillment_error = error
@@ -120,8 +126,11 @@ def attach_to_winner(target):
             target, f'Geen Shopify-koppeling voor {user.email}.')
 
     try:
+        # Tags mark the draft as app-made (hob/Shopify can filter on them
+        # later, e.g. a per-event revenue view); only set on NEW drafts.
         result = ShopifyService().attach_variant_to_customer(
-            user.shopify_customer_id, variant_gid)
+            user.shopify_customer_id, variant_gid,
+            tags=['app-livestream', f'event-{_target_event_id(target)}'])
     except Exception as e:
         logger.error(f'Prize attach crashed for {target!r}: {e}', exc_info=True)
         result = {'error': str(e)}

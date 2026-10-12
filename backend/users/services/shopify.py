@@ -2125,13 +2125,57 @@ class ShopifyService:
         return {'draft_gid': draft.get('id') or draft_gid,
                 'invoice_url': draft.get('invoiceUrl')}
 
+    def get_draft_order_payment_state(self, draft_gid: str) -> Optional[dict]:
+        """
+        Payment state of a prize draft order: the draft's status plus the
+        real order it converted into (Shopify links it as `order` once the
+        customer completes checkout). Same signal hob's draft-order payment
+        sync reads, so both systems agree on paid/unpaid.
+
+        Returns None when the REQUEST failed (caller must skip, not
+        conclude anything), {'found': False} when the draft no longer
+        exists (deleted in Shopify admin), or:
+        {'found': True, 'status': 'OPEN'|'INVOICE_SENT'|'COMPLETED',
+         'order': None | {'order_gid', 'name', 'financial_status',
+                          'created_at'}}
+        """
+        query = """
+        query draftPaymentState($id: ID!) {
+            node(id: $id) {
+                ... on DraftOrder {
+                    id
+                    status
+                    order { id name displayFinancialStatus createdAt }
+                }
+            }
+        }
+        """
+        data = self._fulfillment_request(query, {"id": draft_gid})
+        if data is None:
+            return None
+        node = data.get('node') or {}
+        if not node.get('id'):
+            return {'found': False}
+        order = node.get('order') or None
+        if order:
+            order = {
+                'order_gid': order.get('id') or '',
+                'name': order.get('name') or '',
+                'financial_status': order.get('displayFinancialStatus') or '',
+                'created_at': order.get('createdAt'),
+            }
+        return {'found': True, 'status': node.get('status'), 'order': order}
+
     def attach_variant_to_customer(self, customer_id, variant_gid: str,
-                                   quantity: int = 1) -> dict:
+                                   quantity: int = 1, tags: list = None) -> dict:
         """
         Router: put a prize variant on the customer's open draft order, or
         create a new draft when they have none. (Editing already-PAID orders
         stays a separate, explicit edit_order_add_variant call — silently
         growing a paid order is never the default.)
+
+        `tags` are applied only when a NEW draft is created (merging into an
+        existing draft keeps whatever tags it has — it is not ours alone).
 
         Returns {'action': 'draft_updated'|'draft_created', 'draft_gid',
         'invoice_url'} or {'error': ...}. Aborts when the draft lookup
@@ -2154,6 +2198,7 @@ class ShopifyService:
         created = self.create_draft_order(
             customer_id,
             [{'variant_gid': variant_gid, 'quantity': quantity}],
+            tags=tags,
         )
         if not created:
             return {'error': 'failed to create draft order'}

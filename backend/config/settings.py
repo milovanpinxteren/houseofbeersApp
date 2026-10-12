@@ -305,6 +305,13 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'loyalty.tasks.check_winner_redemptions',
         'schedule': crontab(hour=4, minute=0),
     },
+    # Did livestream prize/auction winners pay their draft order? Stamps
+    # payment_status/paid_at on RaffleWinner/AuctionItem rows; the regie
+    # page also has a manual "Check betalingen" button for event week.
+    'check-prize-payments': {
+        'task': 'events.tasks.check_prize_payments',
+        'schedule': crontab(hour=4, minute=15),
+    },
 }
 
 # Web Push (VAPID)

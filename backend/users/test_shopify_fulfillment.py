@@ -448,7 +448,7 @@ class AttachRouterTests(SimpleTestCase):
 
         self.assertEqual(result['action'], 'draft_created')
         mock_create.assert_called_once_with(
-            777, [{'variant_gid': self.VARIANT, 'quantity': 2}]
+            777, [{'variant_gid': self.VARIANT, 'quantity': 2}], tags=None
         )
 
     def test_lookup_failure_aborts_instead_of_creating_duplicate(self):

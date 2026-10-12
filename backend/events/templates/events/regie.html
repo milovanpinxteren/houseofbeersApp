@@ -94,6 +94,19 @@
     background: #fdecea; color: #b71c1c; border-color: transparent;
   }
   .regie .f-error { color: #b71c1c; font-size: 12px; max-width: 320px; }
+  .regie .p-status {
+    display: inline-block; border-radius: 10px; padding: 1px 8px;
+    font-size: 12px; border: 1px solid transparent;
+  }
+  .regie .p-status.pending {
+    background: var(--darkened-bg, #f0f0f0);
+    border-color: var(--border-color, #ccc);
+  }
+  .regie .p-status.invoiced { background: #e3f2fd; color: #0d47a1; }
+  .regie .p-status.paid {
+    background: var(--message-success-bg, #e8f5e9); color: #2e7d32;
+  }
+  .regie .p-status.cancelled { background: #fdecea; color: #b71c1c; }
   .regie .f-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   .regie .draw-btn.small { padding: 4px 10px; font-size: 13px; }
 </style>
@@ -341,6 +354,16 @@
     zijn al automatisch bijgeschreven; een factuur sturen hoeft alleen bij
     een prijs met een bedrag.
   </p>
+  {% if payment_open_count %}
+  <form method="post" class="inline-form" style="margin-bottom: 10px;"
+        action="{% url 'admin:events_event_regie_fulfill_payments' event.pk %}">
+    {% csrf_token %}
+    <button type="submit" class="draw-btn secondary small">
+      Check betalingen ({{ payment_open_count }} open)
+    </button>
+    <span class="muted">Vraagt Shopify of de openstaande facturen inmiddels betaald zijn — loopt ook elke nacht automatisch.</span>
+  </form>
+  {% endif %}
 
   {% for raffle in fulfillment_raffles %}
   <div class="f-block">
@@ -388,6 +411,14 @@
             <td class="muted">{{ w.user.email }}</td>
             <td>
               <span class="f-status {{ w.fulfillment_status }}">{{ w.get_fulfillment_status_display }}</span>
+              {% if raffle.effective_price and w.shopify_order_gid %}
+                <span class="p-status {{ w.payment_status }}">
+                  {% if w.payment_status == 'paid' %}Betaald{% if w.paid_at %} {{ w.paid_at|date:"j b" }}{% endif %}{% if w.shopify_final_order_name %} · {{ w.shopify_final_order_name }}{% endif %}
+                  {% elif w.payment_status == 'invoiced' %}Factuur open
+                  {% elif w.payment_status == 'cancelled' %}Geannuleerd
+                  {% else %}Niet betaald{% endif %}
+                </span>
+              {% endif %}
               {% if w.fulfillment_error %}<div class="f-error">{{ w.fulfillment_error }}</div>{% endif %}
             </td>
             <td class="f-actions">
@@ -459,6 +490,14 @@
           <td class="muted">{{ item.winner.email }}</td>
           <td>
             <span class="f-status {{ item.fulfillment_status }}">{{ item.get_fulfillment_status_display }}</span>
+            {% if item.final_price and item.shopify_order_gid %}
+              <span class="p-status {{ item.payment_status }}">
+                {% if item.payment_status == 'paid' %}Betaald{% if item.paid_at %} {{ item.paid_at|date:"j b" }}{% endif %}{% if item.shopify_final_order_name %} · {{ item.shopify_final_order_name }}{% endif %}
+                {% elif item.payment_status == 'invoiced' %}Factuur open
+                {% elif item.payment_status == 'cancelled' %}Geannuleerd
+                {% else %}Niet betaald{% endif %}
+              </span>
+            {% endif %}
             {% if item.fulfillment_error %}<div class="f-error">{{ item.fulfillment_error }}</div>{% endif %}
           </td>
           <td class="f-actions">

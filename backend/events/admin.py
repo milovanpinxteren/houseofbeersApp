@@ -16,6 +16,7 @@ from .models import (
     Event, EventViewer, EventMessage, Raffle, RaffleWinner, AuctionItem, Bid,
 )
 from .services import fulfillment as fulfillment_service
+from .services import payments as payments_service
 
 
 def _winner_display(user):
@@ -146,6 +147,9 @@ class EventAdmin(admin.ModelAdmin):
             path('<int:event_id>/regie/fulfill/toggle/',
                  self.admin_site.admin_view(require_POST(self.regie_fulfill_toggle_view)),
                  name='events_event_regie_fulfill_toggle'),
+            path('<int:event_id>/regie/fulfill/payments/',
+                 self.admin_site.admin_view(require_POST(self.regie_fulfill_payments_view)),
+                 name='events_event_regie_fulfill_payments'),
         ]
         return custom + super().get_urls()
 
@@ -188,6 +192,7 @@ class EventAdmin(admin.ModelAdmin):
             raffle.effective_price = raffle.winner_price or 0
         sold_auction_items = [i for i in auction_items if i.status == 'sold']
         processed, total = fulfillment_service.fulfillment_progress(event)
+        payment_open_count = len(payments_service.payment_targets(event))
 
         return {
             **self.admin_site.each_context(request),
@@ -207,6 +212,7 @@ class EventAdmin(admin.ModelAdmin):
             'sold_auction_items': sold_auction_items,
             'fulfillment_processed': processed,
             'fulfillment_total': total,
+            'payment_open_count': payment_open_count,
         }
 
     def regie_view(self, request, event_id):
@@ -568,6 +574,31 @@ class EventAdmin(admin.ModelAdmin):
             messages.success(request, f'{label}: afgehandeld.')
         return redirect('admin:events_event_regie', event_id)
 
+    def regie_fulfill_payments_view(self, request, event_id):
+        """Synchronous payment sweep for this event — the manual 'Check
+        betalingen' button; the nightly task does the same shop-wide."""
+        if not (request.user.has_perm('events.change_raffle')
+                or request.user.has_perm('events.change_auctionitem')):
+            raise PermissionDenied
+        event = get_object_or_404(Event, pk=event_id)
+        summary = payments_service.sweep_payments(event)
+        if not any(summary.values()):
+            messages.info(request, 'Geen openstaande betalingen te checken.')
+        else:
+            messages.success(
+                request,
+                f"Betalingen gecheckt: {summary['checked']} gecontroleerd, "
+                f"{summary['paid']} betaald, {summary['changed']} status "
+                'gewijzigd.',
+            )
+            if summary['failed']:
+                messages.error(
+                    request,
+                    f"{summary['failed']} check(s) mislukt (Shopify) — "
+                    'probeer het later opnieuw.',
+                )
+        return redirect('admin:events_event_regie', event_id)
+
     def regie_policy_view(self, request, event_id, raffle_id):
         if not request.user.has_perm('events.change_raffle'):
             raise PermissionDenied
@@ -707,8 +738,9 @@ class RaffleAdmin(admin.ModelAdmin):
 
 @admin.register(RaffleWinner)
 class RaffleWinnerAdmin(admin.ModelAdmin):
-    list_display = ['user_email', 'raffle_prize', 'event_title', 'drawn_at']
-    list_filter = ['raffle__event']
+    list_display = ['user_email', 'raffle_prize', 'event_title',
+                    'fulfillment_status', 'payment_status', 'drawn_at']
+    list_filter = ['raffle__event', 'fulfillment_status', 'payment_status']
     search_fields = ['user__email', 'raffle__prize_name']
     readonly_fields = ['raffle', 'user', 'drawn_at']
     ordering = ['-drawn_at']
@@ -740,8 +772,9 @@ class RaffleWinnerAdmin(admin.ModelAdmin):
 @admin.register(AuctionItem)
 class AuctionItemAdmin(admin.ModelAdmin):
     list_display = ['event', 'title', 'starting_price', 'final_price',
-                    'winner_display', 'status', 'created_at']
-    list_filter = ['status', 'event']
+                    'winner_display', 'status', 'fulfillment_status',
+                    'payment_status', 'created_at']
+    list_filter = ['status', 'event', 'fulfillment_status', 'payment_status']
     search_fields = ['title', 'event__title']
     raw_id_fields = ['winner']
     ordering = ['-created_at']

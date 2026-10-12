@@ -120,6 +120,17 @@ FULFILLMENT_STATUS_CHOICES = [
     ('failed', 'Failed'),
 ]
 
+# Did the winner actually pay? Mirrors hob's draft-order payment vocabulary
+# (apps/integrations/shopify/orders.py sync_draft_order_status) so both
+# systems agree on what each state means. Only meaningful for priced prizes
+# with a draft order (shopify_order_gid set); €0 prizes are never tracked.
+PAYMENT_STATUS_CHOICES = [
+    ('pending', 'Not paid'),
+    ('invoiced', 'Invoice sent'),
+    ('paid', 'Paid'),
+    ('cancelled', 'Cancelled'),
+]
+
 
 class Raffle(models.Model):
     STATUS_CHOICES = [
@@ -392,6 +403,21 @@ class AuctionItem(models.Model):
     fulfillment_error = models.TextField(blank=True)
     shopify_order_gid = models.CharField(max_length=255, blank=True)
     fulfilled_at = models.DateTimeField(null=True, blank=True)
+    # Payment state of the winner's draft order (see PAYMENT_STATUS_CHOICES)
+    payment_status = models.CharField(
+        max_length=20, choices=PAYMENT_STATUS_CHOICES, default='pending',
+    )
+    paid_at = models.DateTimeField(null=True, blank=True)
+    payment_checked_at = models.DateTimeField(null=True, blank=True)
+    # The real order the draft converted into once the winner paid
+    shopify_final_order_gid = models.CharField(max_length=255, blank=True)
+    shopify_final_order_name = models.CharField(max_length=64, blank=True)
+    # Idempotency key for items pushed from hob's beer announcements
+    # (hob:auction:<run_id>:<entry_id>); NULL for hand-made items. A re-push
+    # updates the same row while the item is still 'pending'.
+    source_key = models.CharField(
+        max_length=100, null=True, blank=True, unique=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -448,6 +474,15 @@ class RaffleWinner(models.Model):
     fulfillment_error = models.TextField(blank=True)
     shopify_order_gid = models.CharField(max_length=255, blank=True)
     fulfilled_at = models.DateTimeField(null=True, blank=True)
+    # Payment state of the winner's draft order (see PAYMENT_STATUS_CHOICES)
+    payment_status = models.CharField(
+        max_length=20, choices=PAYMENT_STATUS_CHOICES, default='pending',
+    )
+    paid_at = models.DateTimeField(null=True, blank=True)
+    payment_checked_at = models.DateTimeField(null=True, blank=True)
+    # The real order the draft converted into once the winner paid
+    shopify_final_order_gid = models.CharField(max_length=255, blank=True)
+    shopify_final_order_name = models.CharField(max_length=64, blank=True)
 
     class Meta:
         unique_together = ['raffle', 'user']

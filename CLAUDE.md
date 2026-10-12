@@ -1037,6 +1037,65 @@ but open the finale to everyone including earlier winners.
   ahead so viewers wake their screens (locked phone = no polling = not
   eligible after 90s).
 
+### Prize payment tracking (2026-10-12)
+
+Fulfillment puts priced prizes/auction wins on a Shopify DRAFT order and
+emails the invoice — payment tracking answers "did the winner actually
+pay?". Architecture rule this follows (agreed 2026-10-12): **money flows
+app → Shopify → hob** (hob's 15-min order sync + AFAS pick up the paid
+order automatically once the draft converts — no app↔hob call), **content
+flows hob → app over the service API** (see hob auction push below).
+
+- Fields on BOTH `AuctionItem` and `RaffleWinner` (migration 0009):
+  `payment_status` (pending/invoiced/paid/cancelled), `paid_at`,
+  `payment_checked_at`, `shopify_final_order_gid`/`_name` (the real order
+  the draft converted into).
+- `events/services/payments.py`: `check_payment(target)` maps
+  `ShopifyService.get_draft_order_payment_state(draft_gid)` (draft status +
+  linked order's `displayFinancialStatus`) to our status — the mapping
+  deliberately MIRRORS hob's `sync_draft_order_status` so both systems
+  agree: order PAID/PARTIALLY_PAID/REFUNDED → paid; VOIDED → cancelled;
+  order-but-unpaid → invoiced; no order: INVOICE_SENT → invoiced,
+  COMPLETED → paid, draft deleted → cancelled. Transport failure = skip,
+  write nothing. `sweep_payments(event=None)` only selects open rows
+  (pending/invoiced) with a draft gid and a price > 0 — **€0 prizes are
+  never payment-tracked** and paid/cancelled rows are never re-checked.
+- Runs nightly 4:15 (`events.tasks.check_prize_payments`, the events
+  app's first beat entry) + the "Check betalingen (N open)" button in the
+  regie Afhandeling section (synchronous, for event week). Regie rows show
+  a payment chip (Betaald + date + order name / Factuur open / Niet
+  betaald / Geannuleerd); plain admin lists got payment_status columns.
+- New prize drafts are tagged `app-livestream` + `event-<id>`
+  (`attach_variant_to_customer(tags=...)`, only on CREATED drafts — a
+  merged existing draft is not ours alone). This keeps app-event revenue
+  filterable in Shopify/hob later.
+- Caveat: `paid` reflects the WHOLE draft (a prize merged into an existing
+  open draft is paid together with it). Loyalty side effect: the converted
+  paid order enters the nightly points sync like any order.
+- Tests: `backend/events/test_payments.py`.
+
+### Service events API & hob auction push (2026-10-12)
+
+Future auctions are authored in hob's beer-announcements (rich data:
+name, brewery, Untappd, image, starting bid `verkoop`, increment `opbod`)
+and pushed per entry via a manual **"Push naar app"** button (modal with
+event picker + prefilled editable fields) on hob's run detail page — hob
+repo `apps/beer_announcements/`, client methods on the existing
+`LoyaltyClient` (same `LOYALTY_API_URL`/`LOYALTY_API_HMAC_SECRET`
+credentials, no new secret).
+
+App side: `/api/service/events/` (`events/service_api.py` +
+`service_urls.py`), HMAC decorator reused from `loyalty.service_api`.
+Contract is FROZEN (hob implements against it):
+
+| Endpoint | Does |
+|---|---|
+| `upcoming-events/` | Scheduled/live events, soonest first (the picker) |
+| `auction-items/upsert/` | Create/update an `AuctionItem`, idempotent on `dedupe_key` (`hob:auction:<run_id>:<entry_id>` → `AuctionItem.source_key`, unique, NULL for hand-made items). Required: dedupe_key, event_id, title, starting_price ≥ 0; optional description/brewery/size/untappd_rating/image_url/min_increment. 201 created / 200 updated `{id, created, status, event_id}`; 400 validation or ended event; **409 once the item is active/sold** (a re-push cannot rewrite a running auction — fields stay untouched). |
+
+Re-push while `pending` updates everything including the event (move to
+another stream). Tests: `backend/events/test_service_api.py`.
+
 ---
 
 ## Planned Features (Not Yet Implemented)

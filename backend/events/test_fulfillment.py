@@ -221,7 +221,8 @@ class AttachToWinnerTests(TestCase):
         result = fulfillment.attach_to_winner(self.winner)
         self.assertTrue(result['ok'])
         mock_service.return_value.attach_variant_to_customer.assert_called_once_with(
-            '555001', PRODUCT_RESULT['variant_gid'])
+            '555001', PRODUCT_RESULT['variant_gid'],
+            tags=['app-livestream', f'event-{self.event.pk}'])
         self.winner.refresh_from_db()
         self.assertEqual(self.winner.fulfillment_status, 'draft_created')
         self.assertEqual(self.winner.shopify_order_gid,
