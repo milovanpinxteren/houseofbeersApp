@@ -337,6 +337,39 @@ class ParseAppOnlyProductTests(APITestCase):
         node['variants']['edges'] = node['variants']['edges'][:1]  # Sale only
         self.assertIsNone(ShopifyService._parse_app_only_product(node))
 
+    def _node_with_eta(self, value):
+        node = _app_only_node()
+        node['metafields']['edges'].append({'node': {
+            'key': 'estimated_delivery_date', 'value': value, 'type': 'date'}})
+        return node
+
+    def test_future_eta_marks_the_product_as_preorder(self):
+        # Pre-order beer (sold before the brewery delivery arrives) stays
+        # buyable in the app — deliberately — but must carry its ETA so the
+        # UI can say so.
+        from datetime import date, timedelta
+        eta = (date.today() + timedelta(days=5)).isoformat()
+        parsed = ShopifyService._parse_app_only_product(self._node_with_eta(eta))
+        self.assertEqual(parsed['estimated_delivery_date'], eta)
+        self.assertTrue(parsed['buyable'])
+
+    def test_past_eta_is_dropped(self):
+        # hob pushes ETAs forward when shipments slip, so a passed date means
+        # the beer arrived — showing it would read as stale.
+        from datetime import date, timedelta
+        eta = (date.today() - timedelta(days=1)).isoformat()
+        parsed = ShopifyService._parse_app_only_product(self._node_with_eta(eta))
+        self.assertIsNone(parsed['estimated_delivery_date'])
+
+    def test_unparseable_eta_is_dropped_not_crashed(self):
+        parsed = ShopifyService._parse_app_only_product(
+            self._node_with_eta('soon™'))
+        self.assertIsNone(parsed['estimated_delivery_date'])
+
+    def test_no_eta_metafield_means_none(self):
+        parsed = ShopifyService._parse_app_only_product(_app_only_node())
+        self.assertIsNone(parsed['estimated_delivery_date'])
+
     @patch.object(ShopifyService, '_graphql_request')
     def test_sorted_buyable_first_then_newest(self, mock_graphql):
         def make(pid, created_at, tags=('app-only',)):

@@ -7,9 +7,9 @@ import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
 import { colors, spacing, borderRadius, fonts } from '../../../src/theme/colors';
 import { EmptyState, Screen, SkeletonCard } from '../../../src/components/ui';
-import { AppShopProduct, getAppShop, isAppShopMissed } from '../../../src/api/recommendations';
+import { AppShopProduct, appShopEta, getAppShop, isAppShopMissed } from '../../../src/api/recommendations';
 import { trackEvent } from '../../../src/api/analytics';
-import { AppShopDetailSheet } from '../../../src/components/AppShopSection';
+import { AppShopDetailSheet, formatEtaDate } from '../../../src/components/AppShopSection';
 
 const SHOP_BASE_URL = 'https://houseofbeers.nl';
 const CHECKOUT_BAR_HEIGHT = 72;
@@ -254,6 +254,16 @@ export default function AppShopScreen() {
                           <Ionicons name="star" size={9} color={colors.background} />
                           <Text style={styles.ratingChipText}>
                             {product.untappd_rating.toFixed(2)}
+                          </Text>
+                        </View>
+                      )}
+                      {appShopEta(product) && (
+                        <View style={styles.etaChip}>
+                          <Ionicons name="time-outline" size={9} color={colors.primary} />
+                          <Text style={styles.etaChipText}>
+                            {t('discover.appShopEtaShort', {
+                              date: formatEtaDate(appShopEta(product)!, language),
+                            })}
                           </Text>
                         </View>
                       )}
@@ -503,6 +513,21 @@ const styles = StyleSheet.create({
     fontFamily: fonts.heading,
     fontSize: 10,
     color: colors.background,
+  },
+  etaChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: colors.primary + '1A',
+    borderRadius: 10,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+  etaChipText: {
+    fontFamily: fonts.heading,
+    fontSize: 10,
+    letterSpacing: 0.3,
+    color: colors.primary,
   },
   cardFooter: {
     flexDirection: 'row',

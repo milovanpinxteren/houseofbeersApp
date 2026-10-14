@@ -338,6 +338,10 @@ export interface AppShopProduct {
   country: string;
   volume: string;
   deposit: string;
+  // Pre-order: future expected-delivery date (YYYY-MM-DD) — the beer is sold
+  // before the brewery shipment arrives. Absent/null = in stock. Optional so
+  // a response from an older backend keeps rendering as a normal product.
+  estimated_delivery_date?: string | null;
   cart_url: string | null;
 }
 
@@ -349,6 +353,14 @@ export async function getAppShop(): Promise<{ products: AppShopProduct[] }> {
 // backend without the field must keep rendering as buyable.
 export function isAppShopMissed(product: AppShopProduct): boolean {
   return product.buyable === false;
+}
+
+// Pre-order ETA to display, or null. Pre-orders stay orderable (that's the
+// app perk) but must be labeled; gemist cards skip the label — the deal is
+// over, the delivery date is noise.
+export function appShopEta(product: AppShopProduct): string | null {
+  if (isAppShopMissed(product)) return null;
+  return product.estimated_delivery_date || null;
 }
 
 // Lightweight prefetch of the style filter chips — no beer is picked.

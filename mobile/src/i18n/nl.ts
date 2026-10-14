@@ -136,6 +136,10 @@ export default {
     appShopQtyPlus: 'Eén meer',
     appShopQtyMinus: 'Eén minder',
     appShopMissed: 'Sale voorbij',
+    appShopPreorderBadge: 'Pre-order',
+    appShopEtaShort: 'Verwacht {{date}}',
+    appShopEtaNotice:
+      'Pre-order: dit bier is onderweg van de brouwerij — verwachte levering {{date}}. Je bestelt nu, wij versturen zodra het binnen is.',
     appShopWaPrice: 'WhatsApp-prijs',
     appShopAppPrice: 'App-prijs',
     appShopMissedInfo:

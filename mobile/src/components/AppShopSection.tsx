@@ -11,10 +11,33 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { t } from '../i18n';
+import { useLanguage } from '../context/LanguageContext';
 import { colors, spacing, borderRadius, fonts } from '../theme/colors';
 import { SectionHeader } from './ui';
-import { AppShopProduct, isAppShopMissed } from '../api/recommendations';
+import { AppShopProduct, appShopEta, isAppShopMissed } from '../api/recommendations';
 import { trackEvent } from '../api/analytics';
+
+/**
+ * Format a pre-order ETA (YYYY-MM-DD) for display: "16 okt" / "16 Oct"
+ * (short, for card chips) or "16 oktober" / "16 October" (long, for the
+ * detail sheet). No year — ETAs are always near-future.
+ */
+export function formatEtaDate(
+  iso: string,
+  locale: string,
+  style: 'short' | 'long' = 'short'
+): string {
+  const date = new Date(`${iso}T00:00:00`);
+  if (isNaN(date.getTime())) return iso;
+  try {
+    return date.toLocaleDateString(locale === 'nl' ? 'nl-NL' : 'en-GB', {
+      day: 'numeric',
+      month: style === 'long' ? 'long' : 'short',
+    });
+  } catch {
+    return iso;
+  }
+}
 
 // The Ontdek rail is a teaser: the full page shows everything.
 const RAIL_MAX_PRODUCTS = 6;
@@ -79,6 +102,14 @@ export function AppShopSection({
                 </Text>
               </View>
             )}
+            {appShopEta(product) && (
+              <View style={styles.preorderBadge}>
+                <Ionicons name="time-outline" size={10} color={colors.background} />
+                <Text style={styles.preorderBadgeText}>
+                  {t('discover.appShopPreorderBadge')}
+                </Text>
+              </View>
+            )}
             <View style={styles.body}>
               <Text style={styles.title} numberOfLines={2}>
                 {product.title}
@@ -119,6 +150,8 @@ export function AppShopDetailSheet({
   product: AppShopProduct | null;
   onClose: () => void;
 }) {
+  const { language } = useLanguage();
+
   function order(selected: AppShopProduct) {
     if (!selected.cart_url) return;
     trackEvent('app_shop_checkout', { items: 1, total: selected.price, single: true });
@@ -159,6 +192,14 @@ export function AppShopDetailSheet({
                   <Ionicons name="sparkles" size={12} color={colors.primary} />
                   <Text style={styles.exclusiveText}>{t('discover.appShopBadge')}</Text>
                 </View>
+                {appShopEta(product) && (
+                  <View style={styles.exclusiveBadge}>
+                    <Ionicons name="time-outline" size={12} color={colors.primary} />
+                    <Text style={styles.exclusiveText}>
+                      {t('discover.appShopPreorderBadge')}
+                    </Text>
+                  </View>
+                )}
                 {isAppShopMissed(product) && (
                   <View style={styles.missedBadge}>
                     <Ionicons name="time-outline" size={12} color={colors.textMuted} />
@@ -195,6 +236,16 @@ export function AppShopDetailSheet({
 
               {!isAppShopMissed(product) ? (
                 <>
+                  {appShopEta(product) && (
+                    <View style={styles.preorderNotice}>
+                      <Ionicons name="time-outline" size={16} color={colors.primary} />
+                      <Text style={styles.preorderNoticeText}>
+                        {t('discover.appShopEtaNotice', {
+                          date: formatEtaDate(appShopEta(product)!, language, 'long'),
+                        })}
+                      </Text>
+                    </View>
+                  )}
                   <Pressable
                     onPress={() => order(product)}
                     style={({ pressed }) => [styles.orderBtn, pressed && { opacity: 0.85 }]}
@@ -304,6 +355,27 @@ const styles = StyleSheet.create({
     fontFamily: fonts.heading,
     fontSize: 11,
     color: colors.background,
+  },
+  // Pre-order marker on the rail card: top-right of the image (the rating
+  // badge owns top-left).
+  preorderBadge: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: colors.text,
+    borderRadius: 10,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+  preorderBadgeText: {
+    fontFamily: fonts.heading,
+    fontSize: 10,
+    letterSpacing: 0.4,
+    color: colors.background,
+    textTransform: 'uppercase',
   },
   body: {
     padding: spacing.sm,
@@ -463,6 +535,23 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     color: colors.textMuted,
     marginBottom: spacing.md,
+  },
+  preorderNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.primary + '1A',
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  preorderNoticeText: {
+    flex: 1,
+    fontFamily: fonts.serif,
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.text,
   },
   orderBtn: {
     backgroundColor: colors.primary,

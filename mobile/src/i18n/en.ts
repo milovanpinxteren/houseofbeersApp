@@ -147,6 +147,10 @@ export default {
     appShopQtyPlus: 'One more',
     appShopQtyMinus: 'One less',
     appShopMissed: 'Sale over',
+    appShopPreorderBadge: 'Pre-order',
+    appShopEtaShort: 'Expected {{date}}',
+    appShopEtaNotice:
+      'Pre-order: this beer is on its way from the brewery — expected delivery {{date}}. Order now, we ship as soon as it arrives.',
     appShopWaPrice: 'WhatsApp price',
     appShopAppPrice: 'App price',
     appShopMissedInfo:

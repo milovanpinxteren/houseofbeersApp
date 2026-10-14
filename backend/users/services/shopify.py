@@ -540,6 +540,21 @@ class ShopifyService:
 
         image = node.get('featuredImage') or {}
 
+        # Pre-order: hob's custom.estimated_delivery_date metafield (date,
+        # YYYY-MM-DD) marks beer sold BEFORE the brewery delivery arrives.
+        # Selling those in the app window is deliberate (decided 2026-10-14 —
+        # pre-ordering is an app perk) but the app must SAY so. A past ETA is
+        # dropped: hob's standing policy is that ETAs are pushed forward when
+        # shipments slip, so a passed date means the beer arrived.
+        eta = metafields.get('estimated_delivery_date') or None
+        if eta:
+            from datetime import date as _date
+            try:
+                if _date.fromisoformat(eta) < _date.today():
+                    eta = None
+            except (TypeError, ValueError):
+                eta = None
+
         return {
             'id': node.get('legacyResourceId'),
             'title': metafields.get('app_title') or node.get('title'),
@@ -562,6 +577,8 @@ class ShopifyService:
             'country': metafields.get('land_van_herkomst') or '',
             'volume': metafields.get('inhoud') or '',
             'deposit': metafields.get('deposit') or '',
+            # Future delivery date = pre-order; the app labels the card
+            'estimated_delivery_date': eta,
         }
 
     # Every discount code the app mints carries one of these prefixes, so a
