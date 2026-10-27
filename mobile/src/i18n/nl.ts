@@ -414,6 +414,24 @@ export default {
     emailTaken: 'Er bestaat al een account met dit e-mailadres. Log hieronder in.',
   },
 
+  // Stap na registratie: welkomstbonus + WhatsApp-community
+  welcome: {
+    kicker: 'Je bent lid',
+    title: 'Welkom bij House of Beers',
+    intro: 'Je account staat klaar. Nog één ding, dan mis je geen sale meer.',
+    bonusLabel: 'Welkomstbonus',
+    bonusPoints: '{{points}} punten',
+    bonusWorth: 'Genoeg voor {{reward}}. Inwisselen doe je bij Loyalty.',
+    bonusPointsOnly: 'Ze staan op je account. Bij Loyalty zie je waar je ze voor inwisselt.',
+    rewardAmount: '€{{amount}} korting',
+    rewardPercentage: '{{percent}}% korting',
+    whatsappTitle: 'Kom in de WhatsApp-community',
+    whatsappBody:
+      'Daar kondigen we de sales aan, vaak in kleine aantallen. In de groep hoor je het als eerste.',
+    join: 'Naar de WhatsApp-groep',
+    skip: 'Later, ga naar de app',
+  },
+
   // Recommendations
   recommendations: {
     title: 'Aanbevelingen',

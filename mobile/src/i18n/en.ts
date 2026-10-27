@@ -415,6 +415,24 @@ export default {
     emailTaken: 'An account with this email already exists. Log in below.',
   },
 
+  // Post-registration step: welcome bonus + WhatsApp community
+  welcome: {
+    kicker: "You're in",
+    title: 'Welcome to House of Beers',
+    intro: 'Your account is ready. One more thing and you will not miss a sale.',
+    bonusLabel: 'Welcome bonus',
+    bonusPoints: '{{points}} points',
+    bonusWorth: 'Enough for {{reward}}. You redeem points under Loyalty.',
+    bonusPointsOnly: 'They are on your account. Loyalty shows what you can redeem them for.',
+    rewardAmount: '€{{amount}} off',
+    rewardPercentage: '{{percent}}% off',
+    whatsappTitle: 'Join the WhatsApp community',
+    whatsappBody:
+      'That is where we announce the sales, often in small numbers. In the group you hear it first.',
+    join: 'Open the WhatsApp group',
+    skip: 'Later, take me to the app',
+  },
+
   // Recommendations
   recommendations: {
     title: 'Recommendations',

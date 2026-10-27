@@ -93,10 +93,20 @@ export default function RegisterScreen() {
 
     setIsLoading(true);
     try {
-      await register(email, password, firstName, lastName, normalizeSignupCode(signupCode));
-      // Used (or at least recorded) - do not offer it again on this device.
+      const code = normalizeSignupCode(signupCode);
+      // Dropped BEFORE the request, not after: logging in flips
+      // isAuthenticated, which wakes SignupCodeNotice. If the code were still
+      // in storage at that moment it would toast "this code is for new
+      // members" at the person who just used it. The code is already in this
+      // component's state, so a failed attempt can still be retried.
       await clearStoredSignupCode();
-      router.replace('/(tabs)');
+      const result = await register(email, password, firstName, lastName, code);
+      // The welcome bonus is reported by the register response only, so it
+      // travels to the next screen as a param.
+      router.replace({
+        pathname: '/welcome',
+        params: { points: String(result.signupBonusPoints) },
+      } as any);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Registration failed';
       // The one failure worth translating: someone who already has an account

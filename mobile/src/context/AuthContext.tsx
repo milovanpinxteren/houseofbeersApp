@@ -13,6 +13,17 @@ interface User {
   birthdate_locked?: boolean;
 }
 
+/**
+ * What the caller of `register` needs from the register response. The
+ * register endpoint is the ONLY place that reports the welcome bonus, so it
+ * is handed back rather than swallowed.
+ */
+export interface RegisterResult {
+  /** Welcome bonus actually awarded; 0 when there was none. */
+  signupBonusPoints: number;
+  shopifyLinked: boolean;
+}
+
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
@@ -24,7 +35,7 @@ interface AuthContextType {
     firstName?: string,
     lastName?: string,
     signupCode?: string
-  ) => Promise<void>;
+  ) => Promise<RegisterResult>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
 }
@@ -74,8 +85,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     firstName?: string,
     lastName?: string,
     signupCode?: string
-  ) {
-    await apiRegister({
+  ): Promise<RegisterResult> {
+    const response = await apiRegister({
       email,
       password,
       password_confirm: password,
@@ -86,6 +97,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signup_code: signupCode || undefined,
     });
     await login(email, password);
+    // Older backends (and a response shape that ever changes) must not break
+    // registration itself, so both fields are read defensively.
+    return {
+      signupBonusPoints: Number(response?.signup_bonus_points) || 0,
+      shopifyLinked: !!response?.shopify_linked,
+    };
   }
 
   async function logout() {

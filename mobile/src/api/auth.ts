@@ -16,6 +16,19 @@ export interface SignupCodeInfo {
   points: number;
 }
 
+/**
+ * What `POST /auth/register/` answers (users/views.py RegisterView.create).
+ * `signup_bonus_points` is the welcome bonus that was actually awarded, and 0
+ * when there was no code or the code won nothing. It is only reported here,
+ * so the post-registration step has to be told now; after this response the
+ * bonus is just another earned transaction in the ledger.
+ */
+export interface RegisterResponse {
+  message: string;
+  shopify_linked: boolean;
+  signup_bonus_points: number;
+}
+
 interface LoginData {
   email: string;
   password: string;
@@ -39,8 +52,8 @@ interface User {
   is_staff?: boolean;
 }
 
-export async function register(data: RegisterData): Promise<void> {
-  await apiFetch('/auth/register/', {
+export async function register(data: RegisterData): Promise<RegisterResponse> {
+  return apiFetch<RegisterResponse>('/auth/register/', {
     method: 'POST',
     body: JSON.stringify(data),
   });

@@ -22,8 +22,7 @@ import { getEvents, joinEvent, Event } from '../../src/api/events';
 import { getLoyaltySummary, LoyaltySummary } from '../../src/api/loyalty';
 import IOSInstallPrompt from '../../src/components/IOSInstallPrompt';
 import { RaffleSection } from '../../src/components/RaffleCard';
-
-const WHATSAPP_COMMUNITY_URL = 'https://chat.whatsapp.com/Fxm21pECUyD0dbvJpidnXe';
+import { WHATSAPP_COMMUNITY_URL } from '../../src/constants/community';
 
 const notificationIcons: Record<string, keyof typeof Ionicons.glyphMap> = {
   announcement: 'megaphone',
