@@ -411,8 +411,11 @@ export default {
     signupCode: 'Promo code (optional)',
     signupCodeHint: 'Got a flyer? Enter its code for welcome points.',
     signupCodeBonus: 'You get %{points} welcome points',
-    signupCodeAlreadyMember: 'This welcome code is for new members — share it with a friend.',
+    signupCodeAlreadyMember: 'This welcome code is for new members, share it with a friend.',
     emailTaken: 'An account with this email already exists. Log in below.',
+    fillRequired: 'Please fill in email, password and confirmation.',
+    passwordMismatch: 'The two passwords do not match.',
+    passwordTooShort: 'Your password must be at least %{count} characters long.',
   },
 
   // Post-registration step: welcome bonus + WhatsApp community

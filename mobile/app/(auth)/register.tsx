@@ -13,6 +13,9 @@ import {
 import { t } from '../../src/i18n';
 import { colors, spacing, borderRadius } from '../../src/theme/colors';
 
+// Mirrors the backend rule, so the message and the server agree.
+const PASSWORD_MIN_LENGTH = 8;
+
 export default function RegisterScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -77,17 +80,17 @@ export default function RegisterScreen() {
     setErrorMessage('');
 
     if (!email || !password || !confirmPassword) {
-      setErrorMessage('Please fill in all required fields');
+      setErrorMessage(t('auth.fillRequired'));
       return;
     }
 
     if (password !== confirmPassword) {
-      setErrorMessage('Passwords do not match');
+      setErrorMessage(t('auth.passwordMismatch'));
       return;
     }
 
-    if (password.length < 8) {
-      setErrorMessage('Password must be at least 8 characters');
+    if (password.length < PASSWORD_MIN_LENGTH) {
+      setErrorMessage(t('auth.passwordTooShort', { count: PASSWORD_MIN_LENGTH }));
       return;
     }
 
@@ -144,6 +147,9 @@ export default function RegisterScreen() {
               placeholderTextColor={colors.textMuted}
               value={firstName}
               onChangeText={setFirstName}
+              autoComplete="given-name"
+              autoCapitalize="words"
+              returnKeyType="next"
             />
             <TextInput
               style={[styles.input, styles.halfInput]}
@@ -151,6 +157,9 @@ export default function RegisterScreen() {
               placeholderTextColor={colors.textMuted}
               value={lastName}
               onChangeText={setLastName}
+              autoComplete="family-name"
+              autoCapitalize="words"
+              returnKeyType="next"
             />
           </View>
 
@@ -162,6 +171,9 @@ export default function RegisterScreen() {
             onChangeText={setEmail}
             keyboardType="email-address"
             autoCapitalize="none"
+            autoComplete="email"
+            autoCorrect={false}
+            returnKeyType="next"
           />
           <TextInput
             style={styles.input}
@@ -170,6 +182,9 @@ export default function RegisterScreen() {
             value={password}
             onChangeText={setPassword}
             secureTextEntry
+            autoComplete="new-password"
+            autoCapitalize="none"
+            returnKeyType="next"
           />
           <TextInput
             style={styles.input}
@@ -178,6 +193,10 @@ export default function RegisterScreen() {
             value={confirmPassword}
             onChangeText={setConfirmPassword}
             secureTextEntry
+            autoComplete="new-password"
+            autoCapitalize="none"
+            returnKeyType="done"
+            onSubmitEditing={handleRegister}
           />
 
           {showCodeField ? (
@@ -232,12 +251,18 @@ export default function RegisterScreen() {
 const styles = StyleSheet.create({
   scrollContainer: {
     flexGrow: 1,
+    backgroundColor: colors.background,
   },
   container: {
     flex: 1,
     padding: spacing.lg,
     justifyContent: 'center',
     backgroundColor: colors.background,
+    // Without a ceiling the form stretches the full window on the PWA: the
+    // fields were 1473px wide on a desktop browser.
+    width: '100%',
+    maxWidth: 480,
+    alignSelf: 'center',
   },
   header: {
     marginBottom: spacing.xl,
@@ -286,6 +311,11 @@ const styles = StyleSheet.create({
   },
   halfInput: {
     flex: 1,
+    // On web a TextInput is a DOM <input>, which carries an intrinsic width of
+    // roughly 214px. Flex items default to min-width:auto, so the pair refuses
+    // to shrink below ~445px and the second field hangs off a phone screen.
+    // Native is unaffected, which is why this only ever showed up in the PWA.
+    minWidth: 0,
   },
   codeField: {
     gap: spacing.xs,

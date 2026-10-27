@@ -410,8 +410,11 @@ export default {
     signupCode: 'Actiecode (optioneel)',
     signupCodeHint: 'Heb je een flyer? Vul de code in voor welkomstpunten.',
     signupCodeBonus: 'Je krijgt %{points} welkomstpunten',
-    signupCodeAlreadyMember: "Deze welkomstcode is voor nieuwe leden — deel 'm met een vriend.",
+    signupCodeAlreadyMember: "Deze welkomstcode is voor nieuwe leden, deel 'm met een vriend.",
     emailTaken: 'Er bestaat al een account met dit e-mailadres. Log hieronder in.',
+    fillRequired: 'Vul e-mail, wachtwoord en bevestiging in.',
+    passwordMismatch: 'De twee wachtwoorden zijn niet gelijk.',
+    passwordTooShort: 'Je wachtwoord moet minstens %{count} tekens lang zijn.',
   },
 
   // Stap na registratie: welkomstbonus + WhatsApp-community
