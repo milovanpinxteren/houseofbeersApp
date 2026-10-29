@@ -285,6 +285,150 @@ class AnalyticsDashboardAdmin(admin.ModelAdmin):
             },
         ]
 
+        # --- Signup sources (window): where new members came from ---
+        #
+        # Attribution is already recorded on the user row (users.models:
+        # signup_code FK when the code was redeemable at arrival,
+        # signup_code_raw whatever they actually arrived with), so this block
+        # is pure DB aggregation: a FIXED number of queries no matter how many
+        # codes exist, and — like the rest of this view — no Shopify call.
+        #
+        # Honest about what it cannot know: this starts at a COMPLETED
+        # registration. Visitors who opened the register screen and bounced
+        # are not tracked anywhere, because ClientEventView is IsAuthenticated
+        # and there is no user yet. Same convention as the Random Beer funnel's
+        # note — say so rather than show a zero that reads as "nobody came".
+        from django.db.models import Q
+        from django.db.models.functions import Trim, Upper
+
+        # Exactly the test used for users_with_shopify above.
+        linked_q = Q(shopify_customer_id__isnull=False) & ~Q(shopify_customer_id='')
+        # ProcessedOrder is the right source: loyalty's sync creates one row
+        # per Shopify order it awards points for and skips anything that is
+        # not financial_status='paid' (loyalty/services/points.py), so a row
+        # existing means "this member has a paid order". It is also the only
+        # order record readable without calling Shopify.
+        paid_order_q = Q(processed_orders__isnull=False)
+
+        def _window_counts(qs, group_fields):
+            """signups / of-those-linked / of-those-with-a-paid-order, grouped."""
+            return list(
+                qs.values(*group_fields).annotate(
+                    # distinct=True because the paid-order filter joins a
+                    # multi-valued relation; without it a member with three
+                    # orders would count three times in every column.
+                    signups=Count('id', distinct=True),
+                    linked=Count('id', distinct=True, filter=linked_q),
+                    buyers=Count('id', distinct=True, filter=linked_q & paid_order_q),
+                )
+            )
+
+        users_window = User.objects.filter(
+            date_joined__gte=window_start, date_joined__lt=window_end
+        )
+        # Two populations, deliberately kept apart: the FK is set only when the
+        # code was redeemable (and it IS the max_uses meter), so everyone else
+        # is grouped on the NORMALIZED raw value they arrived with — an
+        # expired, exhausted or mistyped code, or '' for "no code at all".
+        # Normalizing in SQL mirrors SignupCode.normalize() so "popup" and
+        # "POPUP " land in one group.
+        CODE_FIELDS = [
+            'signup_code__code', 'signup_code__label', 'signup_code__max_uses',
+        ]
+        NO_CODE_KEY = ''
+
+        window_coded = _window_counts(
+            users_window.filter(signup_code__isnull=False), CODE_FIELDS
+        )
+        window_raw = _window_counts(
+            users_window.filter(signup_code__isnull=True)
+            .annotate(raw_code=Upper(Trim('signup_code_raw'))),
+            ['raw_code'],
+        )
+        # Lifetime context. The coded total is what SignupCode.check_usable()
+        # measures max_uses against, so "uses left" is computed from it.
+        lifetime_coded = list(
+            User.objects.filter(signup_code__isnull=False)
+            .values(*CODE_FIELDS)
+            .annotate(total=Count('id'))
+        )
+        lifetime_raw = {
+            row['raw_code']: row['total']
+            for row in User.objects.filter(signup_code__isnull=True)
+            .annotate(raw_code=Upper(Trim('signup_code_raw')))
+            .values('raw_code')
+            .annotate(total=Count('id'))
+        }
+
+        window_coded_map = {r['signup_code__code']: r for r in window_coded}
+        signup_sources = []
+        for life in lifetime_coded:
+            # Every code that has ever been redeemed is listed, even with zero
+            # signups in the window, so the max_uses meter stays visible when
+            # you narrow the range.
+            counts = window_coded_map.get(life['signup_code__code'])
+            max_uses = life['signup_code__max_uses']
+            signup_sources.append({
+                'code': life['signup_code__code'],
+                'label': life['signup_code__label'],
+                'signups': counts['signups'] if counts else 0,
+                'linked': counts['linked'] if counts else 0,
+                'buyers': counts['buyers'] if counts else 0,
+                'lifetime': life['total'],
+                'max_uses': max_uses,
+                'remaining': (
+                    max(max_uses - life['total'], 0)
+                    if max_uses is not None else None
+                ),
+                'note': '',
+            })
+
+        # Unredeeemable-code and no-code groups. Only the groups that actually
+        # occurred in the window are listed (a typo from two years ago is
+        # noise), except "no code", which is always shown — leave it out and
+        # the shares stop describing where members come from.
+        window_raw_map = {r['raw_code']: r for r in window_raw}
+        for key in sorted(set(window_raw_map) | {NO_CODE_KEY}):
+            counts = window_raw_map.get(key)
+            signup_sources.append({
+                'code': key or 'No code',
+                'label': (
+                    'Registered without a signup code' if key == NO_CODE_KEY
+                    else 'Code was not redeemable at signup'
+                ),
+                'signups': counts['signups'] if counts else 0,
+                'linked': counts['linked'] if counts else 0,
+                'buyers': counts['buyers'] if counts else 0,
+                'lifetime': lifetime_raw.get(key, 0),
+                # No FK, so these signups never counted against max_uses.
+                'max_uses': None,
+                'remaining': None,
+                'note': (
+                    '' if key == NO_CODE_KEY
+                    else 'unknown, expired or exhausted — no welcome bonus paid'
+                ),
+            })
+
+        signup_sources.sort(
+            key=lambda r: (-r['signups'], -r['lifetime'], r['code'])
+        )
+        signup_sources_total = sum(r['signups'] for r in signup_sources)
+        max_signups = max((r['signups'] for r in signup_sources), default=1) or 1
+        for row in signup_sources:
+            row['bar_width'] = int(row['signups'] / max_signups * 100)
+            row['share'] = (
+                round(row['signups'] / signup_sources_total * 100)
+                if signup_sources_total else 0
+            )
+        signup_sources_note = (
+            'Completed registrations only. Visitors who opened the register '
+            'screen and left are not tracked at all — client events need '
+            'an authenticated user and there is none yet — so this block '
+            'has no top of funnel. "Paid order" counts any paid order the '
+            'loyalty sync has processed for that member, including orders '
+            'placed before they joined the app.'
+        )
+
         # --- Top screens (window, from screen_view metadata) ---
         from django.db.models.fields.json import KeyTextTransform
 
@@ -357,6 +501,9 @@ class AnalyticsDashboardAdmin(admin.ModelAdmin):
             'revenue_built_at': revenue_built_at,
             'sixpack_minted': sixpack_minted,
             'funnels': funnels,
+            'signup_sources': signup_sources,
+            'signup_sources_total': signup_sources_total,
+            'signup_sources_note': signup_sources_note,
             'top_screens': top_screens,
             'failed_sync_count': failed_syncs.count(),
             'stuck_sync_count': stuck_syncs,

@@ -1,9 +1,17 @@
 """
 Tests for the client event endpoint: only whitelisted event types are
 accepted, metadata is sanitized, and auth is required.
+
+Plus the "Signup Sources" block on the analytics dashboard.
 """
 
+from datetime import timedelta
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
+from django.test import TestCase
+from django.urls import reverse
+from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from .models import UsageEvent

@@ -504,6 +504,64 @@
         {% endfor %}
     </div>
 
+    <!-- Signup sources -->
+    <div class="section">
+        <h2>Signup Sources ({{ start_date|date:'j M' }} &ndash; {{ end_date|date:'j M Y' }})</h2>
+        <p class="funnel-note" style="margin: 0 0 16px 0;">{{ signup_sources_note }}</p>
+        <table class="recent-table">
+            <thead>
+                <tr>
+                    <th>Source</th>
+                    <th>Share</th>
+                    <th style="text-align: right;">Registered</th>
+                    <th style="text-align: right;">Shopify linked</th>
+                    <th style="text-align: right;">Paid order</th>
+                    <th style="text-align: right;">Lifetime</th>
+                    <th style="text-align: right;">Uses left</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in signup_sources %}
+                <tr>
+                    <td>
+                        <span class="event-badge">{{ row.code }}</span>
+                        <div class="sub-count">{{ row.label }}</div>
+                        {% if row.note %}<div class="funnel-note">{{ row.note }}</div>{% endif %}
+                    </td>
+                    <td>
+                        <div class="bar-container" style="margin: 0; min-width: 100px;">
+                            <div class="bar" style="width: {{ row.bar_width }}%;"></div>
+                        </div>
+                    </td>
+                    <td style="text-align: right;">
+                        <strong>{{ row.signups }}</strong>
+                        <span class="sub-count">{{ row.share }}%</span>
+                    </td>
+                    <td style="text-align: right;">{{ row.linked }}</td>
+                    <td style="text-align: right;">{{ row.buyers }}</td>
+                    <td style="text-align: right;">{{ row.lifetime }}</td>
+                    <td style="text-align: right;">
+                        {% if row.max_uses %}{{ row.remaining }} / {{ row.max_uses }}{% else %}&ndash;{% endif %}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="7" style="color: #999; font-style: italic;">No registrations recorded in this range.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            {% if signup_sources %}
+            <tfoot>
+                <tr>
+                    <td colspan="2"><strong>Total registrations</strong></td>
+                    <td style="text-align: right;"><strong>{{ signup_sources_total }}</strong></td>
+                    <td colspan="4"></td>
+                </tr>
+            </tfoot>
+            {% endif %}
+        </table>
+    </div>
+
     <!-- Daily activity chart -->
     <div class="section">
         <h2>Daily Activity ({{ start_date|date:'j M' }} &ndash; {{ end_date|date:'j M Y' }})</h2>
