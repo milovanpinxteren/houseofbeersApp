@@ -12,6 +12,7 @@ urlpatterns = [
     # Server-to-server surface (HMAC-signed, used by hob) — not for the app.
     path('api/service/loyalty/', include('loyalty.service_urls')),
     path('api/service/events/', include('events.service_urls')),
+    path('api/service/fulfillment/', include('fulfillment.service_urls')),
     path('api/pickup/', include('fulfillment.urls')),
     path('api/recommendations/', include('recommendations.urls')),
     path('api/community/', include('community.urls')),

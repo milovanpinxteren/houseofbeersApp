@@ -1,11 +1,11 @@
 """
 Fulfillment: user-facing fulfillment requests around Shopify orders.
 
-Today this is only the pickup RSVP feature (members tell us on which
-store-open day they will collect their order, replacing a WhatsApp poll).
-The app is deliberately named broadly — future requests like "ship my
-orders" / "check my orders" belong here too — but nothing beyond pickup
-is built yet.
+Today this holds the pickup RSVP feature (members tell us on which
+store-open day they will collect their order, replacing a WhatsApp poll)
+and the missed-items records hob pushes (models_missed.py). The app is
+deliberately named broadly — future requests like "ship my orders" /
+"check my orders" belong here too.
 """
 from django.conf import settings
 from django.db import models
@@ -141,3 +141,6 @@ class PickupActionLog(models.Model):
 
     def __str__(self):
         return f"{self.user.email} {self.action} {self.pickup_date} [{self.sync_status}]"
+
+
+from .models_missed import *  # noqa

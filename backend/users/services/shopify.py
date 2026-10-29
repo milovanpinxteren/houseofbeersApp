@@ -290,6 +290,16 @@ class ShopifyService:
                 claim_pending_grants(user)
             except Exception as e:
                 logger.error(f"Pending grant claim failed for {user.email}: {e}")
+
+            # Missed-items snapshots are parked the same way, keyed on the
+            # Shopify customer id — the link makes them attachable too.
+            try:
+                from fulfillment.services.missed import claim_pending_missed
+                claim_pending_missed(user)
+            except Exception as e:
+                logger.error(
+                    f"Pending missed-items claim failed for {user.email}: {e}"
+                )
             return True
 
         logger.info(f"No Shopify customer found for {search_email}")
@@ -1297,6 +1307,78 @@ class ShopifyService:
 
         return result
 
+    METAFIELD_CHUNK_SIZE = 250
+
+    def get_products_metafields_bulk(self, product_ids: list, namespace: str,
+                                     keys: list) -> tuple:
+        """
+        Several metafields for many products, chunked.
+
+        Exists because get_products_metafields silently truncates at 250
+        products (one query, Shopify's alias budget) — an orders screen
+        pooling ids across orders AND drafts can exceed that, and a
+        truncated fetch is indistinguishable from "no metafield", which the
+        state derivation reads as "in warehouse". Chunking keeps every id;
+        a chunk whose GraphQL call fails (after one retry) lands its ids in
+        `unresolved_ids` so the caller can say "unknown" instead of lying.
+
+        Returns (values, unresolved_ids):
+            values: {product_id_str: {key: value}} — a key is present only
+                when the product has that metafield.
+            unresolved_ids: set of product_id_strs whose chunk failed twice.
+        """
+        values = {}
+        unresolved_ids = set()
+        if not product_ids:
+            return values, unresolved_ids
+
+        # Keys double as GraphQL aliases (metafield keys are identifier-shaped:
+        # estimated_delivery_date, app_title). Sorted ids keep chunks
+        # deterministic, which the tests rely on.
+        unique_ids = sorted({str(pid) for pid in product_ids})
+        for start in range(0, len(unique_ids), self.METAFIELD_CHUNK_SIZE):
+            chunk = unique_ids[start:start + self.METAFIELD_CHUNK_SIZE]
+
+            query_parts = []
+            for i, pid in enumerate(chunk):
+                gid = f"gid://shopify/Product/{pid}"
+                metafield_parts = " ".join(
+                    f'{key}: metafield(namespace: "{namespace}", '
+                    f'key: "{key}") {{ value }}'
+                    for key in keys
+                )
+                query_parts.append(
+                    f'product_{i}: product(id: "{gid}") {{ id {metafield_parts} }}'
+                )
+            query = "query { " + " ".join(query_parts) + " }"
+
+            data = self._graphql_request(query)
+            if data is None:
+                # One retry: a single throttle/blip must not blank a whole
+                # chunk of the orders screen.
+                data = self._graphql_request(query)
+            if data is None:
+                logger.error(
+                    f"Metafield chunk of {len(chunk)} products failed twice; "
+                    f"marking them unresolved"
+                )
+                unresolved_ids.update(chunk)
+                continue
+
+            for i, pid in enumerate(chunk):
+                product_data = data.get(f"product_{i}")
+                if not product_data:
+                    continue
+                product_values = {}
+                for key in keys:
+                    metafield = product_data.get(key)
+                    if metafield and metafield.get("value") is not None:
+                        product_values[key] = metafield["value"]
+                if product_values:
+                    values[pid] = product_values
+
+        return values, unresolved_ids
+
     # ============ Customer Metafields (warehouse queue/priority) ============
 
     def get_customer_pickup_state(self, customer_id) -> Optional[dict]:
@@ -1819,6 +1901,91 @@ class ShopifyService:
             logger.error(f"productCreateMedia errors: {result['mediaUserErrors']}")
             return False
         return True
+
+    def get_customer_draft_orders(self, customer_id) -> list:
+        """
+        All OPEN / INVOICE_SENT draft orders of a customer, newest first,
+        shaped for the app's orders screen.
+
+        Deliberately separate from find_open_draft_order below: that method
+        is load-bearing for the livestream prize-attach router (it must
+        distinguish "no draft" from "lookup failed" and only needs variant
+        ids), while this one is read-only display. Here a failure returns []
+        — the orders screen degrades to orders-only rather than erroring.
+
+        Custom lines (no variant) are KEPT with product None: the rendered
+        lines must sum to the draft's total, and a hand-added discount line
+        is part of what the customer owes.
+        """
+        query = """
+        query customerDrafts($query: String!) {
+            draftOrders(first: 25, query: $query, reverse: true) {
+                edges {
+                    node {
+                        id
+                        name
+                        status
+                        createdAt
+                        invoiceUrl
+                        totalPriceSet { shopMoney { amount currencyCode } }
+                        lineItems(first: 100) {
+                            edges {
+                                node {
+                                    title
+                                    quantity
+                                    originalUnitPriceSet { shopMoney { amount } }
+                                    variant { title product { id } }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        """
+        numeric_id = str(customer_id).rsplit('/', 1)[-1]
+        data = self._fulfillment_request(query, {"query": f"customer_id:{numeric_id}"})
+        if data is None:
+            logger.error(f"Draft order list failed for customer {customer_id}")
+            return []
+
+        drafts = []
+        for edge in ((data.get('draftOrders') or {}).get('edges') or []):
+            node = edge.get('node') or {}
+            if node.get('status') not in ('OPEN', 'INVOICE_SENT'):
+                continue
+
+            line_items = []
+            for li_edge in ((node.get('lineItems') or {}).get('edges') or []):
+                li = li_edge.get('node') or {}
+                variant = li.get('variant') or {}
+                product = variant.get('product') or {}
+                product_gid = product.get('id')
+                price = ((li.get('originalUnitPriceSet') or {})
+                         .get('shopMoney') or {}).get('amount')
+                line_items.append({
+                    'title': li.get('title'),
+                    'variant_title': variant.get('title'),
+                    'quantity': li.get('quantity') or 0,
+                    'price': price,
+                    'product_id': (
+                        product_gid.rsplit('/', 1)[-1] if product_gid else None
+                    ),
+                })
+
+            money = ((node.get('totalPriceSet') or {}).get('shopMoney') or {})
+            drafts.append({
+                # gid -> numeric string, matching how hob references drafts.
+                'id': str(node.get('id', '')).rsplit('/', 1)[-1],
+                'name': node.get('name'),
+                'status': node.get('status'),
+                'created_at': node.get('createdAt'),
+                'invoice_url': node.get('invoiceUrl'),
+                'total_price': money.get('amount'),
+                'currency': money.get('currencyCode'),
+                'line_items': line_items,
+            })
+        return drafts
 
     def find_open_draft_order(self, customer_id) -> Optional[dict]:
         """
