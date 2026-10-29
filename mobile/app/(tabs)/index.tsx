@@ -5,6 +5,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   Linking,
+  ImageBackground,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -20,6 +21,7 @@ import {
 } from '../../src/api/notifications';
 import { getEvents, joinEvent, Event } from '../../src/api/events';
 import { getLoyaltySummary, LoyaltySummary } from '../../src/api/loyalty';
+import { getOrders } from '../../src/api/orders';
 import IOSInstallPrompt from '../../src/components/IOSInstallPrompt';
 import { RaffleSection } from '../../src/components/RaffleCard';
 import { WHATSAPP_COMMUNITY_URL } from '../../src/constants/community';
@@ -42,6 +44,46 @@ export default function HomeScreen() {
   const [loyalty, setLoyalty] = useState<LoyaltySummary | null>(null);
   // Bumped on pull-to-refresh so the raffle section refetches along with the rest.
   const [raffleRefresh, setRaffleRefresh] = useState(0);
+  // Live numbers for the Bestellingen card. Fetched OUTSIDE fetchData: the
+  // orders endpoint does several Shopify round-trips, so it must never delay
+  // the rest of Home — the card renders as a plain link until this arrives,
+  // and stays one on failure.
+  const [orderStats, setOrderStats] = useState<{
+    ready: number;
+    incoming: number;
+    due: number;
+  } | null>(null);
+
+  const fetchOrderStats = useCallback(() => {
+    if (!user?.shopify_customer_id) return;
+    getOrders()
+      .then((data) => {
+        let ready = 0;
+        let incoming = 0;
+        for (const order of data.orders) {
+          for (const item of order.line_items) {
+            if (item.state === 'in_warehouse') ready += 1;
+            if (item.state === 'incoming') incoming += 1;
+          }
+        }
+        for (const draft of data.drafts) {
+          for (const item of draft.line_items) {
+            if (item.state === 'in_warehouse') ready += 1;
+            if (item.state === 'incoming') incoming += 1;
+          }
+        }
+        const due = data.drafts.reduce(
+          (sum, draft) => sum + (parseFloat(draft.total_price) || 0),
+          0
+        );
+        setOrderStats({ ready, incoming, due });
+      })
+      .catch(() => {});
+  }, [user?.shopify_customer_id]);
+
+  useEffect(() => {
+    fetchOrderStats();
+  }, [fetchOrderStats]);
 
   const fetchData = useCallback(async () => {
     try {
@@ -75,9 +117,10 @@ export default function HomeScreen() {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     setRaffleRefresh((k) => k + 1);
+    fetchOrderStats();
     await fetchData();
     setRefreshing(false);
-  }, [fetchData]);
+  }, [fetchData, fetchOrderStats]);
 
   const handleDismiss = async (notificationId: number) => {
     try {
@@ -153,12 +196,42 @@ export default function HomeScreen() {
 
   return (
     <Screen refreshing={refreshing} onRefresh={onRefresh}>
-      {/* Editorial greeting */}
-      <View style={styles.header}>
-        <Text style={styles.greeting}>
-          {t('home.welcome')}{user?.first_name ? `, ${user.first_name}` : ''}
-        </Text>
-        <Text style={styles.tagline}>{t('home.tagline')}</Text>
+      {/* Brand hero: the shop interior from houseofbeers.nl with the
+          greeting overlaid — the webshop's welcome, in app form. */}
+      <ImageBackground
+        source={require('../../assets/hero-shop.jpg')}
+        style={styles.hero}
+        imageStyle={styles.heroImage}
+        resizeMode="cover"
+      >
+        <View style={styles.heroOverlay} />
+        <View style={styles.heroContent}>
+          <View style={styles.heroChip}>
+            <Ionicons name="beer-outline" size={12} color={colors.primary} />
+            <Text style={styles.heroChipText}>{t('home.tagline')}</Text>
+          </View>
+          <Text style={styles.greeting}>
+            {t('home.welcome')}{user?.first_name ? `, ${user.first_name}` : ''}
+          </Text>
+        </View>
+      </ImageBackground>
+
+      {/* The webshop's brand stats strip */}
+      <View style={styles.statsRow}>
+        <View style={styles.statItem}>
+          <Text style={styles.statValue}>2500+</Text>
+          <Text style={styles.statLabel}>{t('home.statBeers')}</Text>
+        </View>
+        <View style={styles.statDivider} />
+        <View style={styles.statItem}>
+          <Text style={styles.statValue}>12°C</Text>
+          <Text style={styles.statLabel}>{t('home.statStorage')}</Text>
+        </View>
+        <View style={styles.statDivider} />
+        <View style={styles.statItem}>
+          <Text style={styles.statValue}>4.6★</Text>
+          <Text style={styles.statLabel}>Trustpilot</Text>
+        </View>
       </View>
 
       <IOSInstallPrompt />
@@ -248,57 +321,90 @@ export default function HomeScreen() {
             </>
           )}
 
-          {/* Always-visible navigation cards so the page never feels empty */}
+          {/* Always-visible navigation so the page never feels empty */}
           <SectionHeader title={t('home.forYou')} />
 
-          <Card variant="accent" onPress={() => router.push('/(tabs)/loyalty' as any)} style={styles.navCard}>
+          {/* Bestellingen first: "what do you have of mine and what do I owe"
+              is the #1 customer question — Home leads straight to the answer.
+              The summary line and amount fill in when the (slow) orders
+              fetch lands; until then the card is a plain link. */}
+          <Card
+            variant="accent"
+            onPress={() => router.push('/(profile)/orders' as any)}
+            style={styles.navCard}
+          >
             <View style={styles.navIconWrap}>
-              <Ionicons name="star" size={24} color={colors.primary} />
+              <Ionicons name="cube-outline" size={24} color={colors.primary} />
             </View>
             <View style={styles.navText}>
-              <Text style={styles.navTitle}>{t('home.yourPoints')}</Text>
-              <Text style={styles.navSubtitle}>{t('home.pointsHint')}</Text>
+              <Text style={styles.navTitle}>{t('tabs.orders')}</Text>
+              <Text style={styles.navSubtitle}>
+                {orderStats && orderStats.ready + orderStats.incoming > 0
+                  ? t('home.ordersSummary', {
+                      ready: orderStats.ready,
+                      incoming: orderStats.incoming,
+                    })
+                  : t('home.ordersHint')}
+              </Text>
             </View>
-            {loyalty ? (
-              <View style={styles.pointsPill}>
-                <Text style={styles.pointsPillText}>{loyalty.balance}</Text>
+            {orderStats && orderStats.due > 0 ? (
+              <View style={styles.duePill}>
+                <Text style={styles.duePillText}>
+                  {new Intl.NumberFormat(language === 'nl' ? 'nl-NL' : 'en-US', {
+                    style: 'currency',
+                    currency: 'EUR',
+                  }).format(orderStats.due)}
+                </Text>
               </View>
             ) : null}
             <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
           </Card>
 
-          <Card onPress={() => router.push('/(tabs)/ontdek' as any)} style={styles.navCard}>
-            <View style={styles.navIconWrap}>
-              <Ionicons name="compass" size={24} color={colors.primary} />
-            </View>
-            <View style={styles.navText}>
-              <Text style={styles.navTitle}>{t('tabs.discover')}</Text>
-              <Text style={styles.navSubtitle}>{t('discover.recommendationsSubtitle')}</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
-          </Card>
+          {/* The remaining shortcuts as a compact 2×2 tile grid — they only
+              echo the tab bar, so they earn less space than they used to. */}
+          <View style={styles.tileGrid}>
+            <Card onPress={() => router.push('/(tabs)/loyalty' as any)} style={styles.tile}>
+              <View style={styles.tileTop}>
+                <View style={styles.tileIconWrap}>
+                  <Ionicons name="star" size={20} color={colors.primary} />
+                </View>
+                {loyalty ? (
+                  <View style={styles.pointsPill}>
+                    <Text style={styles.pointsPillText}>{loyalty.balance}</Text>
+                  </View>
+                ) : null}
+              </View>
+              <Text style={styles.tileTitle}>{t('home.yourPoints')}</Text>
+            </Card>
 
-          <Card onPress={() => router.push('/(tabs)/community' as any)} style={styles.navCard}>
-            <View style={styles.navIconWrap}>
-              <Ionicons name="people" size={24} color={colors.primary} />
-            </View>
-            <View style={styles.navText}>
-              <Text style={styles.navTitle}>{t('tabs.community')}</Text>
-              <Text style={styles.navSubtitle}>{t('home.communityHint')}</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
-          </Card>
+            <Card onPress={() => router.push('/(tabs)/ontdek' as any)} style={styles.tile}>
+              <View style={styles.tileTop}>
+                <View style={styles.tileIconWrap}>
+                  <Ionicons name="compass" size={20} color={colors.primary} />
+                </View>
+              </View>
+              <Text style={styles.tileTitle}>{t('tabs.discover')}</Text>
+            </Card>
 
-          <Card onPress={() => Linking.openURL(WHATSAPP_COMMUNITY_URL)} style={styles.navCard}>
-            <View style={styles.navIconWrap}>
-              <Ionicons name="logo-whatsapp" size={24} color={colors.primary} />
-            </View>
-            <View style={styles.navText}>
-              <Text style={styles.navTitle}>{t('home.whatsapp')}</Text>
-              <Text style={styles.navSubtitle}>{t('home.whatsappHint')}</Text>
-            </View>
-            <Ionicons name="open-outline" size={18} color={colors.textMuted} />
-          </Card>
+            <Card onPress={() => router.push('/(tabs)/community' as any)} style={styles.tile}>
+              <View style={styles.tileTop}>
+                <View style={styles.tileIconWrap}>
+                  <Ionicons name="people" size={20} color={colors.primary} />
+                </View>
+              </View>
+              <Text style={styles.tileTitle}>{t('tabs.community')}</Text>
+            </Card>
+
+            <Card onPress={() => Linking.openURL(WHATSAPP_COMMUNITY_URL)} style={styles.tile}>
+              <View style={styles.tileTop}>
+                <View style={styles.tileIconWrap}>
+                  <Ionicons name="logo-whatsapp" size={20} color={colors.primary} />
+                </View>
+                <Ionicons name="open-outline" size={14} color={colors.textMuted} />
+              </View>
+              <Text style={styles.tileTitle}>{t('home.whatsapp')}</Text>
+            </Card>
+          </View>
         </>
       )}
     </Screen>
@@ -306,18 +412,81 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  header: {
-    paddingTop: spacing.lg,
-    paddingBottom: spacing.sm,
+  hero: {
+    // Explicit width: on web an ImageBackground otherwise shrinks to the
+    // image's intrinsic pixel width instead of filling the column.
+    width: '100%',
+    height: 180,
+    marginTop: spacing.md,
+    borderRadius: borderRadius.lg,
+    overflow: 'hidden',
+    justifyContent: 'flex-end',
+  },
+  heroImage: {
+    borderRadius: borderRadius.lg,
+  },
+  heroOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    // No gradient dependency: one warm scrim + text shadows carry legibility.
+    backgroundColor: 'rgba(12, 10, 8, 0.42)',
+  },
+  heroContent: {
+    padding: spacing.md,
+    gap: spacing.sm,
+  },
+  heroChip: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(12, 10, 8, 0.55)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.borderStrong,
+    borderRadius: borderRadius.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  heroChipText: {
+    fontFamily: fonts.heading,
+    fontSize: 10,
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
+    color: colors.primary,
   },
   greeting: {
     ...type.display,
+    textShadowColor: 'rgba(0, 0, 0, 0.6)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 6,
   },
-  tagline: {
-    fontFamily: fonts.serifItalic,
+  statsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: spacing.sm + spacing.xs,
+    paddingHorizontal: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  statItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  statValue: {
+    fontFamily: fonts.headingBold,
     fontSize: 17,
+    letterSpacing: 0.4,
     color: colors.primary,
-    marginTop: spacing.xs,
+  },
+  statLabel: {
+    fontFamily: fonts.serif,
+    fontSize: 12,
+    color: colors.textMuted,
+    marginTop: 1,
+  },
+  statDivider: {
+    width: StyleSheet.hairlineWidth,
+    height: 26,
+    backgroundColor: colors.borderStrong,
   },
   notificationCard: {
     marginBottom: spacing.sm,
@@ -450,12 +619,54 @@ const styles = StyleSheet.create({
   pointsPill: {
     backgroundColor: colors.primary,
     borderRadius: borderRadius.pill,
-    paddingHorizontal: 12,
-    paddingVertical: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
   },
   pointsPillText: {
     fontFamily: fonts.headingBold,
-    fontSize: 16,
+    fontSize: 14,
     color: colors.background,
+  },
+  duePill: {
+    backgroundColor: colors.warning + '1f',
+    borderRadius: borderRadius.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  duePillText: {
+    fontFamily: fonts.headingBold,
+    fontSize: 13,
+    letterSpacing: 0.3,
+    color: colors.warning,
+  },
+  tileGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  tile: {
+    flexBasis: '47%',
+    flexGrow: 1,
+    marginBottom: 0,
+  },
+  tileTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: spacing.sm + spacing.xs,
+  },
+  tileIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: colors.primary + '14',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  tileTitle: {
+    fontFamily: fonts.heading,
+    fontSize: 15,
+    letterSpacing: 0.4,
+    color: colors.text,
   },
 });

@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
 import { Link, router } from 'expo-router';
 import { requestPasswordReset } from '../../src/api/auth';
+import { useLanguage } from '../../src/context/LanguageContext';
+import { t } from '../../src/i18n';
 import { colors, spacing, borderRadius } from '../../src/theme/colors';
 
 export default function ForgotPasswordScreen() {
@@ -9,13 +11,15 @@ export default function ForgotPasswordScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  // Subscribe so the screen re-renders when the language changes.
+  useLanguage();
 
   async function handleSubmit() {
     setErrorMessage('');
     setMessage('');
 
     if (!email) {
-      setErrorMessage('Please enter your email address');
+      setErrorMessage(t('auth.enterEmail'));
       return;
     }
 
@@ -23,10 +27,10 @@ export default function ForgotPasswordScreen() {
     try {
       console.log('[ForgotPassword] Requesting reset for:', email);
       await requestPasswordReset(email);
-      setMessage('If an account exists with this email, a reset link has been sent. Check your inbox.');
+      setMessage(t('auth.resetEmailSent'));
     } catch (error) {
       console.log('[ForgotPassword] Error:', error);
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to send reset email');
+      setErrorMessage(t('auth.resetEmailError'));
     } finally {
       setIsLoading(false);
     }
@@ -36,7 +40,7 @@ export default function ForgotPasswordScreen() {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>House of Beers</Text>
-        <Text style={styles.subtitle}>Reset your password</Text>
+        <Text style={styles.subtitle}>{t('auth.forgotSubtitle')}</Text>
       </View>
 
       <View style={styles.form}>
@@ -53,12 +57,12 @@ export default function ForgotPasswordScreen() {
         ) : null}
 
         <Text style={styles.instructions}>
-          Enter your email address and we'll send you a link to reset your password.
+          {t('auth.forgotInstructions')}
         </Text>
 
         <TextInput
           style={styles.input}
-          placeholder="Email"
+          placeholder={t('auth.email')}
           placeholderTextColor={colors.textMuted}
           value={email}
           onChangeText={setEmail}
@@ -72,14 +76,14 @@ export default function ForgotPasswordScreen() {
           disabled={isLoading}
         >
           <Text style={styles.buttonText}>
-            {isLoading ? 'Sending...' : 'Send Reset Link'}
+            {isLoading ? t('auth.sending') : t('auth.sendResetLink')}
           </Text>
         </TouchableOpacity>
 
         <Link href="/(auth)/login" asChild>
           <TouchableOpacity style={styles.linkButton}>
             <Text style={styles.linkText}>
-              Back to <Text style={styles.linkHighlight}>Sign in</Text>
+              {t('auth.backTo')} <Text style={styles.linkHighlight}>{t('auth.signIn')}</Text>
             </Text>
           </TouchableOpacity>
         </Link>

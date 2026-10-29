@@ -83,7 +83,7 @@ export default function OntdekScreen() {
       }
     } catch (err: any) {
       console.log('[Ontdek] Favorite toggle error:', err);
-      showToast(err?.message || 'Error', 'error');
+      showToast(t('common.genericError'), 'error');
     } finally {
       setTogglingIds((ids) => {
         const next = new Set(ids);

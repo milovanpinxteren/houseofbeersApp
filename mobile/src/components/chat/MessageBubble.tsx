@@ -1,5 +1,6 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { getCurrentLanguage } from '../../i18n';
 import { colors, spacing, borderRadius, fonts } from '../../theme/colors';
 import { Avatar } from './Avatar';
 import { ReactionBar } from './ReactionBar';
@@ -66,7 +67,10 @@ export function MessageBubble({
         borderBottomLeftRadius: hasNextInRun ? 6 : 4,
       };
 
-  const time = new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const time = new Date(createdAt).toLocaleTimeString(
+    getCurrentLanguage() === 'nl' ? 'nl-NL' : 'en-US',
+    { hour: '2-digit', minute: '2-digit' }
+  );
   const hasGutter = !isOwn && avatarName !== undefined;
 
   const bubble = (

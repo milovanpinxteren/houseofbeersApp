@@ -12,7 +12,7 @@ import {
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
-import { t } from '../i18n';
+import { t, getCurrentLanguage } from '../i18n';
 import { colors, spacing, borderRadius, fonts } from '../theme/colors';
 import { Button } from './ui';
 import { winnersWithPrizes } from '../utils/rafflePrizes';
@@ -535,7 +535,9 @@ export function RaffleReveal({
                       {t('raffle.codeExpires', {
                         date: formatDate
                           ? formatDate(myCodeExpiresAt)
-                          : new Date(myCodeExpiresAt).toLocaleDateString(),
+                          : new Date(myCodeExpiresAt).toLocaleDateString(
+                              getCurrentLanguage() === 'nl' ? 'nl-NL' : 'en-US'
+                            ),
                       })}
                     </Text>
                   ) : null}

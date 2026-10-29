@@ -10,7 +10,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
-import { t } from '../i18n';
+import { t, getCurrentLanguage } from '../i18n';
 import { colors, spacing, borderRadius, fonts } from '../theme/colors';
 import { updateBirthdate } from '../api/auth';
 import { usePushSubscription } from '../hooks/usePushSubscription';
@@ -33,7 +33,8 @@ function isRealDate(iso: string): boolean {
 function formatDate(iso: string): string {
   try {
     const [year, month, day] = iso.split('-').map(Number);
-    return new Date(year, month - 1, day).toLocaleDateString();
+    const locale = getCurrentLanguage() === 'nl' ? 'nl-NL' : 'en-US';
+    return new Date(year, month - 1, day).toLocaleDateString(locale);
   } catch {
     return iso;
   }

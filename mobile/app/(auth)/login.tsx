@@ -18,7 +18,7 @@ export default function LoginScreen() {
     setErrorMessage('');
 
     if (!email || !password) {
-      setErrorMessage('Please fill in all fields');
+      setErrorMessage(t('auth.fillLoginRequired'));
       return;
     }
 
@@ -27,8 +27,10 @@ export default function LoginScreen() {
       await login(email, password);
       router.replace('/(tabs)');
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Login failed';
-      setErrorMessage(message);
+      // Keep the technical detail in the console; the user gets a friendly,
+      // localized message (a login failure is nearly always bad credentials).
+      console.log('[Login] Error:', error);
+      setErrorMessage(t('auth.loginFailed'));
     } finally {
       setIsLoading(false);
     }

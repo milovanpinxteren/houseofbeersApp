@@ -54,7 +54,9 @@ export default function TabsLayout() {
         tabBarInactiveTintColor: colors.textMuted,
         tabBarStyle: {
           backgroundColor: colors.surfaceLow,
-          borderTopColor: colors.border,
+          // No hairline: the outline→filled icon swap plus tint carries the
+          // active state; the bar separates from content by elevation alone.
+          borderTopWidth: 0,
           // Grow by the device's bottom inset so the bar sits above the
           // system gesture/navigation area instead of underneath it.
           height: 60 + insets.bottom,
@@ -86,8 +88,8 @@ export default function TabsLayout() {
         options={{
           headerTitle: () => <LogoTitle />,
           tabBarLabel: t('tabs.home'),
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="home" size={size} color={color} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons name={focused ? 'home' : 'home-outline'} size={size} color={color} />
           ),
         }}
       />
@@ -96,8 +98,8 @@ export default function TabsLayout() {
         options={{
           title: t('tabs.discover'),
           tabBarLabel: t('tabs.discover'),
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="compass" size={size} color={color} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons name={focused ? 'compass' : 'compass-outline'} size={size} color={color} />
           ),
         }}
       />
@@ -106,9 +108,9 @@ export default function TabsLayout() {
         options={{
           title: t('tabs.community'),
           tabBarLabel: t('tabs.community'),
-          tabBarIcon: ({ color, size }) => (
+          tabBarIcon: ({ color, size, focused }) => (
             <View>
-              <Ionicons name="people" size={size} color={color} />
+              <Ionicons name={focused ? 'people' : 'people-outline'} size={size} color={color} />
               {unreadCount > 0 && (
                 <View style={styles.badge}>
                   <Text style={styles.badgeText}>
@@ -125,8 +127,8 @@ export default function TabsLayout() {
         options={{
           title: t('tabs.loyalty'),
           tabBarLabel: t('tabs.loyalty'),
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="star" size={size} color={color} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons name={focused ? 'star' : 'star-outline'} size={size} color={color} />
           ),
         }}
       />
@@ -135,8 +137,8 @@ export default function TabsLayout() {
         options={{
           title: t('tabs.profile'),
           tabBarLabel: t('tabs.profile'),
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="person" size={size} color={color} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons name={focused ? 'person' : 'person-outline'} size={size} color={color} />
           ),
         }}
       />

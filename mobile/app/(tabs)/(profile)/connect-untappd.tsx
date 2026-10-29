@@ -76,7 +76,10 @@ export default function ConnectUntappdScreen() {
         if (err.message.includes('not found or is private')) {
           setError(t('recommendations.profilePrivateOrNotFound'));
         } else {
-          setError(err.message);
+          // Anything else is a network/server hiccup; the raw message is
+          // English and technical, so show the localized generic error
+          // (the detail is already logged above).
+          setError(t('recommendations.connectError'));
         }
       } else {
         setError(t('recommendations.connectError'));
@@ -138,7 +141,10 @@ export default function ConnectUntappdScreen() {
           <Text style={styles.connectedUsername}>@{profile.username}</Text>
           {profile.linked_at && (
             <Text style={styles.syncedText}>
-              {t('recommendations.linkedOn')}: {new Date(profile.linked_at).toLocaleDateString()}
+              {t('recommendations.linkedOn')}:{' '}
+              {new Date(profile.linked_at).toLocaleDateString(
+                language === 'nl' ? 'nl-NL' : 'en-US'
+              )}
             </Text>
           )}
           <Button

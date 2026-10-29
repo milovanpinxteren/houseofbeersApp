@@ -111,7 +111,7 @@ export default function RegisterScreen() {
         params: { points: String(result.signupBonusPoints) },
       } as any);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Registration failed';
+      const message = error instanceof Error ? error.message : t('auth.registerFailed');
       // The one failure worth translating: someone who already has an account
       // arriving from a flyer. The raw backend string names the field, which
       // reads like a form bug rather than "you are already a member".

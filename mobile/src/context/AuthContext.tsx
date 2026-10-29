@@ -60,6 +60,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [user?.id]);
 
   async function checkAuth() {
+    // Demo mode (see api/orders.ts): a fixture user so the orders screen is
+    // reachable without a backend. Inert in real builds — the flag is never
+    // set in .env.production and EXPO_PUBLIC_* is inlined at build time.
+    if (process.env.EXPO_PUBLIC_MOCK_ORDERS) {
+      setUser({
+        id: 0,
+        email: 'demo@houseofbeers.nl',
+        first_name: 'Demo',
+        last_name: 'Proever',
+        shopify_customer_id: '9001',
+      });
+      setIsLoading(false);
+      return;
+    }
     try {
       const tokens = await getTokens();
       if (tokens) {

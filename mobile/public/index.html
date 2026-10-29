@@ -123,7 +123,16 @@
 
   <!-- Service Worker Registration -->
   <script>
-    if ('serviceWorker' in navigator) {
+    // Never on localhost: the SW caches the dev bundle, and a stale cache
+    // renders the Expo dev server as a black screen on every reload. Any SW
+    // left over from an earlier session is unregistered so dev stays clean.
+    var isLocalDev = ['localhost', '127.0.0.1'].indexOf(location.hostname) !== -1;
+    if ('serviceWorker' in navigator && isLocalDev) {
+      navigator.serviceWorker.getRegistrations().then(function(regs) {
+        regs.forEach(function(reg) { reg.unregister(); });
+      });
+    }
+    if ('serviceWorker' in navigator && !isLocalDev) {
       window.addEventListener('load', function() {
         navigator.serviceWorker.register('/service-worker.js')
           .then(function(registration) {

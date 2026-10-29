@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
   TouchableOpacity,
   Pressable,
+  Linking,
 } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -213,6 +214,25 @@ export default function ProfileScreen() {
           label={t('profile.language')}
           subtitle={currentLanguage?.nativeName}
           onPress={() => setShowLanguagePicker(true)}
+          last
+        />
+      </Card>
+
+      {/* Help & contact — straight lines to customer service. The WhatsApp
+          number is the HoB service number (the wa_inbox on the other side). */}
+      <SectionHeader title={t('profile.help')} />
+      <Card padded={false}>
+        <ListItem
+          icon="logo-whatsapp"
+          label={t('profile.helpWhatsapp')}
+          subtitle="+31 6 45554096"
+          onPress={() => Linking.openURL('https://wa.me/31645554096')}
+        />
+        <ListItem
+          icon="mail-outline"
+          label={t('profile.helpEmail')}
+          subtitle="info@houseofbeers.nl"
+          onPress={() => Linking.openURL('mailto:info@houseofbeers.nl')}
           last
         />
       </Card>

@@ -5,7 +5,7 @@
  * component stays presentational.
  */
 
-import { Order, LineItem } from '../api/orders';
+import { Order, LineItem, ItemState } from '../api/orders';
 import { normalize, fuzzyScore } from './fuzzySearch';
 
 export interface SearchableOrder {
@@ -35,8 +35,11 @@ export function buildOrderSearchIndex(
 ): SearchableOrder[] {
   return orders.map((order) => ({
     order,
+    // display_title is what the card renders, so search matches what you see.
     itemHaystacks: order.line_items.map((item) =>
-      normalize([item.title, item.variant_title, item.sku].filter(Boolean).join(' '))
+      normalize(
+        [item.display_title, item.variant_title, item.sku].filter(Boolean).join(' ')
+      )
     ),
     orderHaystack: normalize(
       [order.name, String(order.order_number), formatDate(order.created_at), order.financial_status]
@@ -103,36 +106,34 @@ export function countMatchedItems(matches: OrderMatch[]): number {
   );
 }
 
-/** The three buckets the shipping filter offers. */
-export type ItemStatus = 'unfulfilled' | 'partial' | 'fulfilled';
-export type ItemStatusFilter = ItemStatus | 'all';
-
-export const ITEM_STATUSES: ItemStatus[] = ['unfulfilled', 'partial', 'fulfilled'];
-
 /**
- * Shopify leaves `fulfillment_status` null until something ships; any status we
- * don't know reads as "not shipped yet" too, matching what the card renders.
+ * The single item-level filter dimension. The server decides each item's state;
+ * 'unknown' is deliberately not offered as a chip (too rare) and matches only
+ * 'all'.
  */
-export function itemStatus(item: LineItem): ItemStatus {
-  if (item.fulfillment_status === 'fulfilled') return 'fulfilled';
-  if (item.fulfillment_status === 'partial') return 'partial';
-  return 'unfulfilled';
-}
+export type StateFilter = 'all' | ItemState;
+
+export const ITEM_STATE_FILTERS: Exclude<StateFilter, 'all' | 'unknown'>[] = [
+  'in_warehouse',
+  'incoming',
+  'shipped',
+  'partial',
+];
 
 /**
- * Narrow matches down to items with the given status. Orders left without a
+ * Narrow matches down to items with the given state. Orders left without a
  * single matching item drop out, so every card on screen has something to show.
  * Runs after searchOrders, so search and filter compose.
  */
-export function filterMatchesByItemStatus(
+export function filterMatchesByState(
   matches: OrderMatch[],
-  filter: ItemStatusFilter
+  filter: StateFilter
 ): OrderMatch[] {
   if (filter === 'all') return matches;
 
   const results: OrderMatch[] = [];
   for (const match of matches) {
-    const matchedItems = match.matchedItems.filter((item) => itemStatus(item) === filter);
+    const matchedItems = match.matchedItems.filter((item) => item.state === filter);
     if (matchedItems.length === 0) continue;
     // These items are now an explicit selection rather than the "show
     // everything" fallback an order-number match produces, so they count
@@ -142,80 +143,75 @@ export function filterMatchesByItemStatus(
   return results;
 }
 
-/** Item counts per status, for the filter chip labels. */
-export function countItemsByStatus(matches: OrderMatch[]): Record<ItemStatus, number> {
-  const counts: Record<ItemStatus, number> = { unfulfilled: 0, partial: 0, fulfilled: 0 };
+/** Item counts per state, for the filter chip labels. */
+export function countItemsByState(matches: OrderMatch[]): Record<ItemState, number> {
+  const counts: Record<ItemState, number> = {
+    shipped: 0,
+    partial: 0,
+    in_warehouse: 0,
+    incoming: 0,
+    unknown: 0,
+  };
   for (const match of matches) {
-    for (const item of match.matchedItems) counts[itemStatus(item)] += 1;
+    for (const item of match.matchedItems) counts[item.state] += 1;
   }
   return counts;
 }
 
-/** Local calendar day as YYYY-MM-DD — comparable as a plain string. */
-export function toDateKey(date: Date): string {
-  const month = `${date.getMonth() + 1}`.padStart(2, '0');
-  const day = `${date.getDate()}`.padStart(2, '0');
-  return `${date.getFullYear()}-${month}-${day}`;
+export interface OrderStateSummary {
+  inWarehouse: number;
+  incoming: number;
+  shipped: number;
+  partial: number;
+  unknown: number;
+  /** MAX estimated_delivery_date among incoming items — the box is complete
+   *  at the last arrival. Null when no incoming item carries a date. */
+  latestEta: string | null;
 }
 
-/** Expected-delivery buckets. Only two of them are offered as filters. */
-export type EtaBucket = 'upcoming' | 'past' | 'none';
-export type EtaFilter = 'all' | 'upcoming' | 'none';
-
-/**
- * The date comes from a product metafield, so it is whatever the shop typed.
- * ISO dates compare lexicographically, which sidesteps timezone drift entirely;
- * anything else still goes through Date. A value we cannot read at all counts as
- * upcoming — the card shows it as an expected delivery, so the filter agrees.
- */
-export function etaBucket(raw: string | null, today: string): EtaBucket {
-  const value = raw?.trim();
-  if (!value) return 'none';
-  if (/^\d{4}-\d{2}-\d{2}/.test(value)) {
-    return value.slice(0, 10) < today ? 'past' : 'upcoming';
-  }
-  const parsed = Date.parse(value);
-  if (Number.isNaN(parsed)) return 'upcoming';
-  return toDateKey(new Date(parsed)) < today ? 'past' : 'upcoming';
-}
-
-/** Same item-level narrowing as the status filter, on the delivery date. */
-export function filterMatchesByEta(
-  matches: OrderMatch[],
-  filter: EtaFilter,
-  today: string
-): OrderMatch[] {
-  if (filter === 'all') return matches;
-
-  const results: OrderMatch[] = [];
-  for (const match of matches) {
-    const matchedItems = match.matchedItems.filter(
-      (item) => etaBucket(item.estimated_delivery_date, today) === filter
-    );
-    if (matchedItems.length === 0) continue;
-    results.push({ ...match, matchedItems, orderLevelMatch: false });
-  }
-  return results;
-}
-
-/** Item counts per delivery bucket, for the filter chip labels. */
-export function countItemsByEta(
-  matches: OrderMatch[],
-  today: string
-): Record<EtaBucket, number> {
-  const counts: Record<EtaBucket, number> = { upcoming: 0, past: 0, none: 0 };
-  for (const match of matches) {
-    for (const item of match.matchedItems) {
-      counts[etaBucket(item.estimated_delivery_date, today)] += 1;
+/** Per-order roll-up for the collapsed card's status line. */
+export function orderStateSummary(
+  items: Pick<LineItem, 'state' | 'estimated_delivery_date'>[]
+): OrderStateSummary {
+  const summary: OrderStateSummary = {
+    inWarehouse: 0,
+    incoming: 0,
+    shipped: 0,
+    partial: 0,
+    unknown: 0,
+    latestEta: null,
+  };
+  for (const item of items) {
+    switch (item.state) {
+      case 'in_warehouse':
+        summary.inWarehouse += 1;
+        break;
+      case 'incoming':
+        summary.incoming += 1;
+        if (
+          item.estimated_delivery_date &&
+          (summary.latestEta === null || item.estimated_delivery_date > summary.latestEta)
+        ) {
+          summary.latestEta = item.estimated_delivery_date;
+        }
+        break;
+      case 'shipped':
+        summary.shipped += 1;
+        break;
+      case 'partial':
+        summary.partial += 1;
+        break;
+      default:
+        summary.unknown += 1;
     }
   }
-  return counts;
+  return summary;
 }
 
 /**
  * Period filter, encoded as a string so it can live in one state value:
- * 'all', '3m', or 'y:2026'. Unlike the other two this is order-level — it never
- * touches which line items are shown.
+ * 'all', '3m', or 'y:2026'. Unlike the state filter this is order-level — it
+ * never touches which line items are shown.
  */
 export const PERIOD_ALL = 'all';
 export const PERIOD_3M = '3m';

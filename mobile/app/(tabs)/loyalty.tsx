@@ -141,7 +141,8 @@ export default function LoyaltyScreen() {
         await loadData();
       }
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Sync failed', 'error');
+      console.log('[Loyalty] Sync error:', err);
+      showToast(t('loyalty.syncError'), 'error');
     } finally {
       setIsSyncing(false);
     }
@@ -158,10 +159,13 @@ export default function LoyaltyScreen() {
           setActiveTab('redemptions');
         }
       } else {
-        showToast(result.error || 'Redemption failed', 'error');
+        // result.error is a server-provided, user-facing reason (e.g. not
+        // enough points); only the generic fallback is localized here.
+        showToast(result.error || t('loyalty.redeemError'), 'error');
       }
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Redemption failed', 'error');
+      console.log('[Loyalty] Redeem error:', err);
+      showToast(t('loyalty.redeemError'), 'error');
     } finally {
       setIsRedeeming(null);
     }

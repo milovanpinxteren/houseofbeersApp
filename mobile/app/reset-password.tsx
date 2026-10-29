@@ -1,8 +1,13 @@
 import { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { confirmPasswordReset } from '../src/api/auth';
+import { useLanguage } from '../src/context/LanguageContext';
+import { t } from '../src/i18n';
 import { colors, spacing, borderRadius } from '../src/theme/colors';
+
+// Mirrors the backend rule, so the message and the server agree.
+const PASSWORD_MIN_LENGTH = 8;
 
 export default function ResetPasswordScreen() {
   const { uid, token } = useLocalSearchParams<{ uid: string; token: string }>();
@@ -11,10 +16,12 @@ export default function ResetPasswordScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  // Subscribe so the screen re-renders when the language changes.
+  useLanguage();
 
   useEffect(() => {
     if (!uid || !token) {
-      setErrorMessage('Invalid password reset link.');
+      setErrorMessage(t('auth.invalidResetLink'));
     }
   }, [uid, token]);
 
@@ -23,22 +30,22 @@ export default function ResetPasswordScreen() {
     setMessage('');
 
     if (!password || !confirmPassword) {
-      setErrorMessage('Please fill in all fields');
+      setErrorMessage(t('auth.fillAllFields'));
       return;
     }
 
     if (password !== confirmPassword) {
-      setErrorMessage('Passwords do not match');
+      setErrorMessage(t('auth.passwordMismatch'));
       return;
     }
 
-    if (password.length < 8) {
-      setErrorMessage('Password must be at least 8 characters');
+    if (password.length < PASSWORD_MIN_LENGTH) {
+      setErrorMessage(t('auth.passwordTooShort', { count: PASSWORD_MIN_LENGTH }));
       return;
     }
 
     if (!uid || !token) {
-      setErrorMessage('Invalid reset link');
+      setErrorMessage(t('auth.invalidResetLink'));
       return;
     }
 
@@ -46,10 +53,10 @@ export default function ResetPasswordScreen() {
     try {
       console.log('[ResetPassword] Confirming reset');
       await confirmPasswordReset(uid, token, password);
-      setMessage('Password has been reset successfully! You can now sign in.');
+      setMessage(t('auth.resetSuccess'));
     } catch (error) {
       console.log('[ResetPassword] Error:', error);
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to reset password');
+      setErrorMessage(t('auth.resetError'));
     } finally {
       setIsLoading(false);
     }
@@ -57,9 +64,11 @@ export default function ResetPasswordScreen() {
 
   return (
     <View style={styles.container}>
+      {/* Localized header title (overrides the static fallback in app/_layout.tsx) */}
+      <Stack.Screen options={{ title: t('auth.resetPasswordTitle') }} />
       <View style={styles.header}>
         <Text style={styles.title}>House of Beers</Text>
-        <Text style={styles.subtitle}>Set new password</Text>
+        <Text style={styles.subtitle}>{t('auth.setNewPassword')}</Text>
       </View>
 
       <View style={styles.form}>
@@ -70,7 +79,7 @@ export default function ResetPasswordScreen() {
               style={styles.loginButton}
               onPress={() => router.replace('/(auth)/login')}
             >
-              <Text style={styles.buttonText}>Go to Sign In</Text>
+              <Text style={styles.buttonText}>{t('auth.goToSignIn')}</Text>
             </TouchableOpacity>
           </View>
         ) : (
@@ -83,7 +92,7 @@ export default function ResetPasswordScreen() {
 
             <TextInput
               style={styles.input}
-              placeholder="New password (min 8 characters)"
+              placeholder={t('auth.newPasswordPlaceholder', { count: PASSWORD_MIN_LENGTH })}
               placeholderTextColor={colors.textMuted}
               value={password}
               onChangeText={setPassword}
@@ -92,7 +101,7 @@ export default function ResetPasswordScreen() {
 
             <TextInput
               style={styles.input}
-              placeholder="Confirm new password"
+              placeholder={t('auth.confirmNewPassword')}
               placeholderTextColor={colors.textMuted}
               value={confirmPassword}
               onChangeText={setConfirmPassword}
@@ -105,7 +114,7 @@ export default function ResetPasswordScreen() {
               disabled={isLoading || !uid || !token}
             >
               <Text style={styles.buttonText}>
-                {isLoading ? 'Resetting...' : 'Reset Password'}
+                {isLoading ? t('auth.resetting') : t('auth.resetPassword')}
               </Text>
             </TouchableOpacity>
           </>

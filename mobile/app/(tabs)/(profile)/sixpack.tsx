@@ -398,7 +398,9 @@ export default function SixpackScreen() {
         setBuildingProfile(false);
         setBusy(false);
         setReelStates(Array(6).fill('stopped'));
-        showToast(err?.message || t('sixpack.errorGeneric'), 'error');
+        // Technical detail stays in the console (logged above); the toast is
+        // always the friendly localized message.
+        showToast(t('sixpack.errorGeneric'), 'error');
         if (!slots.some(Boolean)) {
           setPhase('wizard');
         }

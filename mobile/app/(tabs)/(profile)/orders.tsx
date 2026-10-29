@@ -13,30 +13,38 @@ import { useLocalSearchParams } from 'expo-router';
 import { useAuth } from '../../../src/context/AuthContext';
 import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
-import { getOrders, Order } from '../../../src/api/orders';
+import {
+  getOrders,
+  Order,
+  DraftOrder,
+  MissedSale,
+} from '../../../src/api/orders';
 import { colors, spacing, borderRadius, fonts } from '../../../src/theme/colors';
 import { EmptyState, SkeletonCard } from '../../../src/components/ui';
 import { PickupSection } from '../../../src/components/PickupSection';
+import { DraftOrdersSection } from '../../../src/components/DraftOrdersSection';
+import { MissedItemsBlock } from '../../../src/components/MissedItemsBlock';
+import { MissedSalesSection } from '../../../src/components/MissedSalesSection';
+import {
+  ItemStateBadge,
+  formatShortDate,
+} from '../../../src/components/ItemStateBadge';
 import { tokenize, highlightRanges } from '../../../src/utils/fuzzySearch';
 import {
   buildOrderSearchIndex,
   searchOrders,
   countMatchedItems,
-  filterMatchesByItemStatus,
-  countItemsByStatus,
-  filterMatchesByEta,
-  countItemsByEta,
+  filterMatchesByState,
+  countItemsByState,
   filterMatchesByPeriod,
+  orderStateSummary,
   orderYears,
   threeMonthsBefore,
-  toDateKey,
   periodForYear,
   PERIOD_ALL,
   PERIOD_3M,
-  ITEM_STATUSES,
-  ItemStatus,
-  ItemStatusFilter,
-  EtaFilter,
+  ITEM_STATE_FILTERS,
+  StateFilter,
 } from '../../../src/utils/orderSearch';
 
 /** Renders text with the matched portions emphasised. */
@@ -112,19 +120,36 @@ function FilterChip({
   );
 }
 
+/** One "dot + text" segment of the collapsed card's status roll-up. */
+function RollupSegment({ color, text }: { color: string; text: string }) {
+  return (
+    <View style={styles.rollupSegment}>
+      <View style={[styles.rollupDot, { backgroundColor: color }]} />
+      <Text style={[styles.rollupText, { color }]}>{text}</Text>
+    </View>
+  );
+}
+
 export default function OrdersScreen() {
   const { user } = useAuth();
   const { language } = useLanguage();
   // /pickup deep link lands here with ?pickup=1 → open the RSVP section.
-  const { pickup } = useLocalSearchParams<{ pickup?: string }>();
+  // ?missed=1 mirrors it for the missed section: a future push notification
+  // "je hebt bieren gemist" deep-links to /orders?missed=1 and lands on the
+  // open answer.
+  const { pickup, missed: missedParam } = useLocalSearchParams<{
+    pickup?: string;
+    missed?: string;
+  }>();
   const [orders, setOrders] = useState<Order[]>([]);
+  const [drafts, setDrafts] = useState<DraftOrder[]>([]);
+  const [missed, setMissed] = useState<MissedSale[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [expandedOrderId, setExpandedOrderId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<ItemStatusFilter>('all');
-  const [etaFilter, setEtaFilter] = useState<EtaFilter>('all');
+  const [stateFilter, setStateFilter] = useState<StateFilter>('all');
   const [periodFilter, setPeriodFilter] = useState<string>(PERIOD_ALL);
   const [filtersOpen, setFiltersOpen] = useState(false);
   // While searching or filtering, matching items are shown automatically; this
@@ -145,7 +170,9 @@ export default function OrdersScreen() {
     try {
       setError('');
       const data = await getOrders();
-      setOrders(data);
+      setOrders(data.orders ?? []);
+      setDrafts(data.drafts ?? []);
+      setMissed(data.missed ?? []);
     } catch (err) {
       console.log('[Orders] Error:', err);
       setError(err instanceof Error ? err.message : 'Failed to load orders');
@@ -180,19 +207,13 @@ export default function OrdersScreen() {
   }
 
   /** A card left on "show all items" would ignore the new filter entirely. */
-  function selectStatus(filter: ItemStatusFilter) {
-    setStatusFilter(filter);
-    setShowAllItemsFor(new Set());
-  }
-
-  function selectEta(filter: EtaFilter) {
-    setEtaFilter(filter);
+  function selectState(filter: StateFilter) {
+    setStateFilter(filter);
     setShowAllItemsFor(new Set());
   }
 
   function clearFilters() {
-    setStatusFilter('all');
-    setEtaFilter('all');
+    setStateFilter('all');
     setPeriodFilter(PERIOD_ALL);
     setShowAllItemsFor(new Set());
   }
@@ -212,43 +233,32 @@ export default function OrdersScreen() {
     [searchIndex, queryTokens]
   );
 
-  // Pinned to the payload rather than rendered fresh each pass, so "today" and
-  // the 3-month cutoff can't shift mid-interaction.
+  // Pinned to the payload rather than rendered fresh each pass, so the
+  // 3-month cutoff can't shift mid-interaction.
   const now = useMemo(() => new Date(), [orders]);
-  const today = useMemo(() => toDateKey(now), [now]);
 
   const periodMatches = useMemo(
     () => filterMatchesByPeriod(searchMatches, periodFilter, now),
     [searchMatches, periodFilter, now]
   );
-  const statusMatches = useMemo(
-    () => filterMatchesByItemStatus(periodMatches, statusFilter),
-    [periodMatches, statusFilter]
-  );
 
   const matches = useMemo(
-    () => filterMatchesByEta(statusMatches, etaFilter, today),
-    [statusMatches, etaFilter, today]
+    () => filterMatchesByState(periodMatches, stateFilter),
+    [periodMatches, stateFilter]
   );
 
-  // Faceted counts: each dimension is counted with the OTHER filters applied but
-  // not its own, so a chip always says what tapping it would actually give you
-  // (and the active chip never reads "0").
-  const statusCounts = useMemo(
-    () => countItemsByStatus(filterMatchesByEta(periodMatches, etaFilter, today)),
-    [periodMatches, etaFilter, today]
-  );
-  const etaCounts = useMemo(() => countItemsByEta(statusMatches, today), [statusMatches, today]);
+  // Faceted counts: the state dimension is counted with the other filters
+  // applied but not itself, so a chip always says what tapping it would give
+  // you (and the active chip never reads "0").
+  const stateCounts = useMemo(() => countItemsByState(periodMatches), [periodMatches]);
 
   const activeFilterCount =
-    (statusFilter !== 'all' ? 1 : 0) +
-    (etaFilter !== 'all' ? 1 : 0) +
-    (periodFilter !== PERIOD_ALL ? 1 : 0);
+    (stateFilter !== 'all' ? 1 : 0) + (periodFilter !== PERIOD_ALL ? 1 : 0);
   const isFiltering = activeFilterCount > 0;
 
   // Period is order-level: it changes which cards show, not which items inside
-  // them, so it must NOT auto-expand every card the way the item filters do.
-  const isItemNarrowed = isSearching || statusFilter !== 'all' || etaFilter !== 'all';
+  // them, so it must NOT auto-expand every card the way the item filter does.
+  const isItemNarrowed = isSearching || stateFilter !== 'all';
 
   const matchedItemCount = useMemo(
     () => (isItemNarrowed ? countMatchedItems(matches) : 0),
@@ -257,16 +267,10 @@ export default function OrdersScreen() {
 
   // Only offer an option when it separates something, and never drop the one
   // that's active or it couldn't be switched off.
-  const availableStatuses = ITEM_STATUSES.filter(
-    (s) => statusCounts[s] > 0 || s === statusFilter
+  const availableStates = ITEM_STATE_FILTERS.filter(
+    (s) => stateCounts[s] > 0 || s === stateFilter
   );
-  const showStatusGroup = availableStatuses.length > 1 || statusFilter !== 'all';
-
-  const etaTotal = etaCounts.upcoming + etaCounts.past + etaCounts.none;
-  const availableEtas: EtaFilter[] = (['upcoming', 'none'] as const).filter(
-    (bucket) => (etaCounts[bucket] > 0 && etaCounts[bucket] < etaTotal) || bucket === etaFilter
-  );
-  const showEtaGroup = availableEtas.length > 0;
+  const showStateGroup = availableStates.length > 1 || stateFilter !== 'all';
 
   // Years and the 3-month shortcut only earn a chip if some order falls outside.
   const years = useMemo(() => orderYears(orders), [orders]);
@@ -280,7 +284,42 @@ export default function OrdersScreen() {
   ];
   const showPeriodGroup = periodOptions.length > 0;
 
-  const showFilters = showStatusGroup || showEtaGroup || showPeriodGroup;
+  const showFilters = showStateGroup || showPeriodGroup;
+
+  // Attach each missed-sale entry to its draft (handled inside the drafts
+  // section), to its order, or keep it standalone. Draft attachment wins.
+  const { missedForOrder, standaloneMissed } = useMemo(() => {
+    const draftIds = new Set(drafts.map((d) => d.id));
+    const orderIds = new Set(orders.map((o) => String(o.id)));
+    const byOrder = new Map<string, MissedSale>();
+    const standalone: MissedSale[] = [];
+    for (const entry of missed) {
+      if (entry.draft_order_id && draftIds.has(entry.draft_order_id)) continue;
+      if (entry.shopify_order_id && orderIds.has(entry.shopify_order_id)) {
+        byOrder.set(entry.shopify_order_id, entry);
+      } else {
+        standalone.push(entry);
+      }
+    }
+    return { missedForOrder: byOrder, standaloneMissed: standalone };
+  }, [missed, drafts, orders]);
+
+  // Staleness guard for STANDALONE missed cards: a full miss whose product
+  // shows up in ANY live order/draft line was delivered after all.
+  const allLiveProductIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const order of orders) {
+      for (const item of order.line_items) {
+        if (item.product_id !== null) ids.add(item.product_id);
+      }
+    }
+    for (const draft of drafts) {
+      for (const item of draft.line_items) {
+        if (item.product_id !== null) ids.add(item.product_id);
+      }
+    }
+    return ids;
+  }, [orders, drafts]);
 
   function formatDate(dateString: string): string {
     const date = new Date(dateString);
@@ -314,16 +353,22 @@ export default function OrdersScreen() {
     }
   }
 
-  function getFulfillmentLabel(status: string | null): string {
+  /** Shopify financial_status → translated badge text; unknown values render raw. */
+  function getStatusLabel(status: string | null): string {
     switch (status) {
-      case 'fulfilled':
-        return t('orders.delivered');
-      case 'partial':
-        return t('orders.partiallyShipped');
-      case null:
-        return t('orders.processing');
+      case 'paid':
+        return t('orders.statusPaid');
+      case 'pending':
+      case 'authorized':
+        return t('orders.statusPending');
+      case 'refunded':
+        return t('orders.statusRefunded');
+      case 'partially_refunded':
+        return t('orders.statusPartiallyRefunded');
+      case 'voided':
+        return t('orders.statusVoided');
       default:
-        return status;
+        return status ?? '';
     }
   }
 
@@ -341,19 +386,17 @@ export default function OrdersScreen() {
   }
 
   /** Short chip label — the full item labels are too long for a chip row. */
-  function getFilterLabel(status: ItemStatus): string {
-    switch (status) {
-      case 'fulfilled':
-        return t('orders.filterFulfilled');
-      case 'partial':
-        return t('orders.filterPartial');
+  function getFilterLabel(state: Exclude<StateFilter, 'all'>): string {
+    switch (state) {
+      case 'in_warehouse':
+        return t('orders.filterInWarehouse');
+      case 'incoming':
+        return t('orders.filterIncoming');
+      case 'shipped':
+        return t('orders.filterShipped');
       default:
-        return t('orders.filterUnfulfilled');
+        return t('orders.filterPartial');
     }
-  }
-
-  function getEtaLabel(bucket: EtaFilter): string {
-    return bucket === 'upcoming' ? t('orders.filterEtaUpcoming') : t('orders.filterEtaNone');
   }
 
   function getPeriodLabel(period: string): string {
@@ -365,8 +408,7 @@ export default function OrdersScreen() {
   /** Names the active filters, so a collapsed panel still says what's on. */
   function getActiveFilterLabels(): string[] {
     const labels: string[] = [];
-    if (statusFilter !== 'all') labels.push(getFilterLabel(statusFilter));
-    if (etaFilter !== 'all') labels.push(getEtaLabel(etaFilter));
+    if (stateFilter !== 'all') labels.push(getFilterLabel(stateFilter));
     if (periodFilter !== PERIOD_ALL) labels.push(getPeriodLabel(periodFilter));
     return labels;
   }
@@ -387,26 +429,61 @@ export default function OrdersScreen() {
     return [count, ...getActiveFilterLabels()].join('  ·  ');
   }
 
-  function getItemFulfillmentLabel(status: string | null): string {
-    switch (status) {
-      case 'fulfilled':
-        return t('orders.itemFulfilled');
-      case 'partial':
-        return t('orders.itemPartial');
-      default:
-        return t('orders.itemUnfulfilled');
-    }
-  }
+  /**
+   * Collapsed-card status line: all shipped collapses to one calm success
+   * line; anything else becomes compact per-state segments.
+   */
+  function renderRollup(order: Order) {
+    const summary = orderStateSummary(order.line_items);
+    const total = order.line_items.length;
 
-  function getItemFulfillmentColor(status: string | null): string {
-    switch (status) {
-      case 'fulfilled':
-        return colors.success;
-      case 'partial':
-        return colors.warning;
-      default:
-        return colors.textMuted;
+    if (total > 0 && summary.shipped === total) {
+      return <RollupSegment color={colors.success} text={t('orders.delivered')} />;
     }
+
+    const segments: { color: string; text: string }[] = [];
+    if (summary.inWarehouse > 0) {
+      segments.push({
+        color: colors.success,
+        text: t('orders.rollupReady', { count: summary.inWarehouse }),
+      });
+    }
+    if (summary.incoming > 0) {
+      segments.push({
+        color: colors.warning,
+        text: summary.latestEta
+          ? t('orders.rollupIncoming', {
+              count: summary.incoming,
+              date: formatShortDate(summary.latestEta, language),
+            })
+          : t('orders.rollupIncomingNoEta', { count: summary.incoming }),
+      });
+    }
+    if (summary.partial > 0) {
+      segments.push({
+        color: colors.warning,
+        text: t('orders.rollupPartial', { count: summary.partial }),
+      });
+    }
+    if (summary.shipped > 0) {
+      segments.push({
+        color: colors.textMuted,
+        text: t('orders.rollupShipped', { count: summary.shipped }),
+      });
+    }
+    if (summary.unknown > 0) {
+      segments.push({
+        color: colors.textMuted,
+        text: t('orders.rollupToShip', { count: summary.unknown }),
+      });
+    }
+
+    return segments.map((segment, i) => (
+      <View key={i} style={styles.rollupSegmentWrap}>
+        {i > 0 && <Text style={styles.rollupSeparator}>·</Text>}
+        <RollupSegment color={segment.color} text={segment.text} />
+      </View>
+    ));
   }
 
   const pickupSection = (
@@ -423,7 +500,8 @@ export default function OrdersScreen() {
   if (!user?.shopify_customer_id) {
     return (
       <View style={styles.container}>
-        {pickupSection}
+        {/* Outside the padded list here, so it brings its own margins. */}
+        <View style={styles.standalonePickupWrap}>{pickupSection}</View>
         <View style={styles.centerContainer}>
           <EmptyState
             icon="link-outline"
@@ -462,162 +540,157 @@ export default function OrdersScreen() {
     );
   }
 
-  if (orders.length === 0) {
-    return (
-      <View style={styles.container}>
-        {pickupSection}
-        <View style={styles.centerContainer}>
-          <EmptyState
-            icon="receipt-outline"
-            title={t('orders.noOrdersTitle')}
-            message={t('orders.noOrdersText')}
-          />
-        </View>
-      </View>
-    );
-  }
+  // Drafts and missed sales must render even with zero orders, so the screen
+  // is one scrolling list and "no orders" is only the LIST's empty state.
+  const listHeader = (
+    <View>
+      {pickupSection}
+
+      <DraftOrdersSection
+        drafts={drafts}
+        missed={missed}
+        language={language}
+        formatPrice={formatPrice}
+        formatDate={formatDate}
+        style={styles.draftsSection}
+      />
+
+      <MissedSalesSection
+        entries={standaloneMissed}
+        fulfilledProductIds={allLiveProductIds}
+        language={language}
+        formatDate={formatDate}
+        autoExpand={missedParam != null}
+        style={styles.missedSection}
+      />
+
+      {orders.length > 0 && (
+        <>
+          <View style={styles.searchBar}>
+            <Ionicons name="search" size={18} color={colors.textMuted} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder={t('orders.searchPlaceholder')}
+              placeholderTextColor={colors.textMuted}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              autoCorrect={false}
+              autoCapitalize="none"
+              returnKeyType="search"
+              clearButtonMode="never"
+            />
+            {searchQuery ? (
+              <Pressable
+                onPress={() => setSearchQuery('')}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                style={({ pressed }) => pressed && styles.pressed}
+              >
+                <Ionicons name="close-circle" size={18} color={colors.textMuted} />
+              </Pressable>
+            ) : null}
+          </View>
+
+          {showFilters && (
+            <View style={styles.toolbar}>
+              <Pressable
+                onPress={() => setFiltersOpen((open) => !open)}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: filtersOpen }}
+                style={({ pressed }) => [
+                  styles.filterToggle,
+                  (filtersOpen || isFiltering) && styles.filterToggleOn,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Ionicons
+                  name="options-outline"
+                  size={15}
+                  color={filtersOpen || isFiltering ? colors.background : colors.text}
+                />
+                <Text
+                  style={[
+                    styles.filterToggleText,
+                    (filtersOpen || isFiltering) && styles.filterToggleTextOn,
+                  ]}
+                >
+                  {t('orders.filters')}
+                  {activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
+                </Text>
+                <Ionicons
+                  name={filtersOpen ? 'chevron-up' : 'chevron-down'}
+                  size={13}
+                  color={filtersOpen || isFiltering ? colors.background : colors.textMuted}
+                />
+              </Pressable>
+
+              {isFiltering && (
+                <Pressable
+                  onPress={clearFilters}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  style={({ pressed }) => pressed && styles.pressed}
+                >
+                  <Text style={styles.clearFilters}>{t('orders.filterClearAll')}</Text>
+                </Pressable>
+              )}
+            </View>
+          )}
+
+          {showFilters && filtersOpen && (
+            <View style={styles.filterPanel}>
+              {showStateGroup && (
+                <FilterGroup label={t('orders.filterGroupStatus')}>
+                  <FilterChip
+                    label={t('orders.filterAll')}
+                    active={stateFilter === 'all'}
+                    onPress={() => selectState('all')}
+                  />
+                  {availableStates.map((state) => (
+                    <FilterChip
+                      key={state}
+                      label={getFilterLabel(state)}
+                      count={stateCounts[state]}
+                      active={stateFilter === state}
+                      onPress={() => selectState(stateFilter === state ? 'all' : state)}
+                    />
+                  ))}
+                </FilterGroup>
+              )}
+
+              {showPeriodGroup && (
+                <FilterGroup label={t('orders.filterGroupPeriod')}>
+                  <FilterChip
+                    label={t('orders.filterAll')}
+                    active={periodFilter === PERIOD_ALL}
+                    onPress={() => setPeriodFilter(PERIOD_ALL)}
+                  />
+                  {periodOptions.map((period) => (
+                    <FilterChip
+                      key={period}
+                      label={getPeriodLabel(period)}
+                      active={periodFilter === period}
+                      onPress={() =>
+                        setPeriodFilter(periodFilter === period ? PERIOD_ALL : period)
+                      }
+                    />
+                  ))}
+                </FilterGroup>
+              )}
+            </View>
+          )}
+
+          {/* Zero matches are covered by the list's empty state below. */}
+          {(isSearching || isFiltering) && matches.length > 0 && (
+            <Text style={styles.resultSummary} numberOfLines={1}>
+              {getResultSummary()}
+            </Text>
+          )}
+        </>
+      )}
+    </View>
+  );
 
   return (
     <View style={styles.container}>
-      {pickupSection}
-      <View style={styles.searchBar}>
-        <Ionicons name="search" size={18} color={colors.textMuted} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder={t('orders.searchPlaceholder')}
-          placeholderTextColor={colors.textMuted}
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          autoCorrect={false}
-          autoCapitalize="none"
-          returnKeyType="search"
-          clearButtonMode="never"
-        />
-        {searchQuery ? (
-          <Pressable
-            onPress={() => setSearchQuery('')}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            style={({ pressed }) => pressed && styles.pressed}
-          >
-            <Ionicons name="close-circle" size={18} color={colors.textMuted} />
-          </Pressable>
-        ) : null}
-      </View>
-
-      {showFilters && (
-        <View style={styles.toolbar}>
-          <Pressable
-            onPress={() => setFiltersOpen((open) => !open)}
-            accessibilityRole="button"
-            accessibilityState={{ expanded: filtersOpen }}
-            style={({ pressed }) => [
-              styles.filterToggle,
-              (filtersOpen || isFiltering) && styles.filterToggleOn,
-              pressed && styles.pressed,
-            ]}
-          >
-            <Ionicons
-              name="options-outline"
-              size={15}
-              color={filtersOpen || isFiltering ? colors.background : colors.text}
-            />
-            <Text
-              style={[
-                styles.filterToggleText,
-                (filtersOpen || isFiltering) && styles.filterToggleTextOn,
-              ]}
-            >
-              {t('orders.filters')}
-              {activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
-            </Text>
-            <Ionicons
-              name={filtersOpen ? 'chevron-up' : 'chevron-down'}
-              size={13}
-              color={filtersOpen || isFiltering ? colors.background : colors.textMuted}
-            />
-          </Pressable>
-
-          {isFiltering && (
-            <Pressable
-              onPress={clearFilters}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              style={({ pressed }) => pressed && styles.pressed}
-            >
-              <Text style={styles.clearFilters}>{t('orders.filterClearAll')}</Text>
-            </Pressable>
-          )}
-        </View>
-      )}
-
-      {showFilters && filtersOpen && (
-        <View style={styles.filterPanel}>
-          {showStatusGroup && (
-            <FilterGroup label={t('orders.filterGroupShipping')}>
-              <FilterChip
-                label={t('orders.filterAll')}
-                active={statusFilter === 'all'}
-                onPress={() => selectStatus('all')}
-              />
-              {availableStatuses.map((status) => (
-                <FilterChip
-                  key={status}
-                  label={getFilterLabel(status)}
-                  count={statusCounts[status]}
-                  active={statusFilter === status}
-                  onPress={() => selectStatus(statusFilter === status ? 'all' : status)}
-                />
-              ))}
-            </FilterGroup>
-          )}
-
-          {showEtaGroup && (
-            <FilterGroup label={t('orders.filterGroupDelivery')}>
-              <FilterChip
-                label={t('orders.filterAll')}
-                active={etaFilter === 'all'}
-                onPress={() => selectEta('all')}
-              />
-              {availableEtas.map((bucket) => (
-                <FilterChip
-                  key={bucket}
-                  label={getEtaLabel(bucket)}
-                  count={etaCounts[bucket as 'upcoming' | 'none']}
-                  active={etaFilter === bucket}
-                  onPress={() => selectEta(etaFilter === bucket ? 'all' : bucket)}
-                />
-              ))}
-            </FilterGroup>
-          )}
-
-          {showPeriodGroup && (
-            <FilterGroup label={t('orders.filterGroupPeriod')}>
-              <FilterChip
-                label={t('orders.filterAll')}
-                active={periodFilter === PERIOD_ALL}
-                onPress={() => setPeriodFilter(PERIOD_ALL)}
-              />
-              {periodOptions.map((period) => (
-                <FilterChip
-                  key={period}
-                  label={getPeriodLabel(period)}
-                  active={periodFilter === period}
-                  onPress={() =>
-                    setPeriodFilter(periodFilter === period ? PERIOD_ALL : period)
-                  }
-                />
-              ))}
-            </FilterGroup>
-          )}
-        </View>
-      )}
-
-      {/* Zero matches are covered by the list's empty state below. */}
-      {(isSearching || isFiltering) && matches.length > 0 && (
-        <Text style={styles.resultSummary} numberOfLines={1}>
-          {getResultSummary()}
-        </Text>
-      )}
-
       <FlatList
         data={matches}
         keyExtractor={(m) => m.order.id.toString()}
@@ -629,25 +702,38 @@ export default function OrdersScreen() {
             tintColor={colors.primary}
           />
         }
+        ListHeaderComponent={listHeader}
         ListEmptyComponent={
           // The filter is the more specific "why is this empty" when both are on.
           isFiltering ? (
-            <EmptyState
-              icon="funnel-outline"
-              title={t('orders.noResultsTitle')}
-              message={t('orders.noFilterResultsText', {
-                filters: getActiveFilterLabels().join(' + '),
-              })}
-              actionLabel={t('orders.filterClearAll')}
-              onAction={clearFilters}
-            />
+            <View style={styles.listEmpty}>
+              <EmptyState
+                icon="funnel-outline"
+                title={t('orders.noResultsTitle')}
+                message={t('orders.noFilterResultsText', {
+                  filters: getActiveFilterLabels().join(' + '),
+                })}
+                actionLabel={t('orders.filterClearAll')}
+                onAction={clearFilters}
+              />
+            </View>
           ) : isSearching ? (
-            <EmptyState
-              icon="search"
-              title={t('orders.noResultsTitle')}
-              message={t('orders.noResultsText', { query: searchQuery })}
-            />
-          ) : null
+            <View style={styles.listEmpty}>
+              <EmptyState
+                icon="search"
+                title={t('orders.noResultsTitle')}
+                message={t('orders.noResultsText', { query: searchQuery })}
+              />
+            </View>
+          ) : (
+            <View style={styles.listEmpty}>
+              <EmptyState
+                icon="receipt-outline"
+                title={t('orders.noOrdersTitle')}
+                message={t('orders.noOrdersText')}
+              />
+            </View>
+          )
         }
         renderItem={({ item: match }) => {
           const order = match.order;
@@ -658,6 +744,14 @@ export default function OrdersScreen() {
           const hiddenItemCount = order.line_items.length - match.matchedItems.length;
           const visibleItems =
             isItemNarrowed && !showingAll ? match.matchedItems : order.line_items;
+          const missedEntry = missedForOrder.get(String(order.id));
+          const orderProductIds = missedEntry
+            ? new Set(
+                order.line_items
+                  .map((item) => item.product_id)
+                  .filter((id): id is number => id !== null)
+              )
+            : null;
 
           return (
             <Pressable
@@ -694,16 +788,14 @@ export default function OrdersScreen() {
                         { color: getStatusColor(order.financial_status) },
                       ]}
                     >
-                      {order.financial_status}
+                      {getStatusLabel(order.financial_status)}
                     </Text>
                   </View>
                 </View>
               </View>
 
               <View style={styles.fulfillmentRow}>
-                <Text style={styles.fulfillmentLabel}>
-                  {getFulfillmentLabel(order.fulfillment_status)}
-                </Text>
+                <View style={styles.rollupRow}>{renderRollup(order)}</View>
                 <Text style={styles.itemCount}>
                   {getItemsLabel(order.line_items.length)}
                 </Text>
@@ -718,11 +810,15 @@ export default function OrdersScreen() {
                       style={[styles.lineItem, itemIndex === 0 && styles.lineItemFirst]}
                     >
                       <View style={styles.lineItemInfo}>
-                        <Highlighted
-                          text={item.title}
-                          tokens={queryTokens}
-                          style={styles.lineItemTitle}
-                        />
+                        <Text style={styles.lineItemTitle}>
+                          {/* Plain prefix outside Highlighted, so search
+                              matching never sees the quantity. */}
+                          {item.quantity > 1 ? `${item.quantity}× ` : ''}
+                          <Highlighted
+                            text={item.display_title}
+                            tokens={queryTokens}
+                          />
+                        </Text>
                         {item.variant_title && (
                           <Highlighted
                             text={item.variant_title}
@@ -730,50 +826,53 @@ export default function OrdersScreen() {
                             style={styles.lineItemVariant}
                           />
                         )}
-                        <View style={styles.itemFulfillmentBadge}>
-                          <View
-                            style={[
-                              styles.itemFulfillmentDot,
-                              { backgroundColor: getItemFulfillmentColor(item.fulfillment_status) },
-                            ]}
-                          />
-                          <Text
-                            style={[
-                              styles.itemFulfillmentText,
-                              { color: getItemFulfillmentColor(item.fulfillment_status) },
-                            ]}
-                          >
-                            {getItemFulfillmentLabel(item.fulfillment_status)}
-                          </Text>
-                        </View>
-                        {item.estimated_delivery_date && (
-                          <Text style={styles.estimatedDelivery}>
-                            {t('orders.estimatedDelivery')}: {item.estimated_delivery_date}
-                          </Text>
-                        )}
+                        <ItemStateBadge
+                          state={item.state}
+                          eta={item.estimated_delivery_date}
+                          language={language}
+                        />
                       </View>
                       <View style={styles.lineItemRight}>
-                        <Text style={styles.lineItemQty}>x{item.quantity}</Text>
                         <Text style={styles.lineItemPrice}>
                           {formatPrice(item.price, order.currency)}
                         </Text>
                       </View>
                     </View>
                   ))}
+
+                  {missedEntry && orderProductIds && (
+                    <>
+                      <View style={styles.divider} />
+                      <MissedItemsBlock
+                        missed={missedEntry}
+                        fulfilledProductIds={orderProductIds}
+                        language={language}
+                        style={styles.orderMissedBlock}
+                      />
+                    </>
+                  )}
                 </View>
               )}
 
-              <Text style={styles.expandHint}>
-                {!isItemNarrowed
-                  ? isExpanded
-                    ? t('orders.tapToCollapse')
-                    : t('orders.tapToExpand')
-                  : showingAll
-                  ? t('orders.tapToShowMatchesOnly')
-                  : hiddenItemCount > 0
-                  ? t('orders.tapToShowAllItems', { count: hiddenItemCount })
-                  : ''}
-              </Text>
+              {/* Default mode: a chevron says "tappable" without repeating a
+                  text hint down the whole list. Narrowed mode keeps the text —
+                  it carries a count a chevron can't. */}
+              {!isItemNarrowed ? (
+                <Ionicons
+                  name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                  size={14}
+                  color={colors.textMuted}
+                  style={styles.expandChevron}
+                />
+              ) : (
+                <Text style={styles.expandHint}>
+                  {showingAll
+                    ? t('orders.tapToShowMatchesOnly')
+                    : hiddenItemCount > 0
+                    ? t('orders.tapToShowAllItems', { count: hiddenItemCount })
+                    : ''}
+                </Text>
+              )}
             </Pressable>
           );
         }}
@@ -803,17 +902,31 @@ const styles = StyleSheet.create({
   listContent: {
     padding: spacing.md,
   },
-  pickupSection: {
-    marginHorizontal: spacing.md,
-    marginTop: spacing.md,
+  listEmpty: {
+    marginTop: spacing.lg,
   },
+  pickupSection: {
+    marginBottom: spacing.md,
+  },
+  standalonePickupWrap: {
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
+  },
+  draftsSection: {
+    marginBottom: spacing.sm,
+  },
+
+  // Consolidated section for missed sales with no draft/order to attach to
+  missedSection: {
+    marginBottom: spacing.md,
+  },
+
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
     backgroundColor: colors.surfaceLow,
-    marginHorizontal: spacing.md,
-    marginTop: spacing.md,
+    marginTop: spacing.sm,
     paddingHorizontal: spacing.md,
     borderRadius: borderRadius.md,
     minHeight: 46,
@@ -830,7 +943,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginTop: spacing.sm,
-    marginHorizontal: spacing.md,
   },
   filterToggle: {
     flexDirection: 'row',
@@ -862,7 +974,6 @@ const styles = StyleSheet.create({
   filterPanel: {
     backgroundColor: colors.surfaceLow,
     borderRadius: borderRadius.md,
-    marginHorizontal: spacing.md,
     marginTop: spacing.sm,
     paddingVertical: spacing.sm + spacing.xs,
   },
@@ -908,7 +1019,7 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 13,
     marginTop: spacing.sm,
-    marginHorizontal: spacing.md,
+    marginBottom: spacing.xs,
   },
   highlight: {
     color: colors.primary,
@@ -920,7 +1031,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderRadius: borderRadius.lg,
     padding: spacing.md,
-    marginBottom: spacing.sm,
+    marginTop: spacing.sm,
   },
   orderHeader: {
     flexDirection: 'row',
@@ -966,11 +1077,41 @@ const styles = StyleSheet.create({
   fulfillmentRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
     marginTop: spacing.sm,
   },
-  fulfillmentLabel: {
-    fontSize: 13,
+
+  // Status roll-up on the collapsed card
+  rollupRow: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    rowGap: 2,
+  },
+  rollupSegmentWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  rollupSegment: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  rollupDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 5,
+  },
+  rollupText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  rollupSeparator: {
+    fontSize: 12,
     color: colors.textMuted,
+    marginHorizontal: 6,
   },
   itemCount: {
     fontSize: 13,
@@ -1009,33 +1150,8 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     marginTop: 2,
   },
-  itemFulfillmentBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    marginTop: spacing.xs,
-  },
-  itemFulfillmentDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    marginRight: 5,
-  },
-  itemFulfillmentText: {
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  estimatedDelivery: {
-    fontSize: 12,
-    color: colors.primary,
-    marginTop: 4,
-  },
   lineItemRight: {
     alignItems: 'flex-end',
-  },
-  lineItemQty: {
-    fontSize: 12,
-    color: colors.textMuted,
   },
   lineItemPrice: {
     fontFamily: fonts.heading,
@@ -1044,10 +1160,17 @@ const styles = StyleSheet.create({
     color: colors.text,
     marginTop: 2,
   },
+  orderMissedBlock: {
+    marginTop: spacing.sm + spacing.xs,
+  },
   expandHint: {
     fontSize: 11,
     color: colors.textMuted,
     textAlign: 'center',
+    marginTop: spacing.sm + spacing.xs,
+  },
+  expandChevron: {
+    alignSelf: 'center',
     marginTop: spacing.sm + spacing.xs,
   },
 });
