@@ -470,6 +470,8 @@ export default {
     resetting: 'Bezig...',
     resetPassword: 'Wachtwoord resetten',
     goToSignIn: 'Naar inloggen',
+    showPassword: 'Toon wachtwoord',
+    hidePassword: 'Verberg wachtwoord',
   },
 
   // Stap na registratie: welkomstbonus + WhatsApp-community

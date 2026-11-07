@@ -5,7 +5,8 @@ from django.contrib.auth.tokens import default_token_generator
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.template.loader import render_to_string
-from django.shortcuts import render
+from django.shortcuts import redirect
+from urllib.parse import urlencode
 from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -48,10 +49,19 @@ class EmailTokenObtainPairView(TokenObtainPairView):
 
 
 def password_reset_page(request):
-    """Render the password reset page."""
-    uid = request.GET.get('uid', '')
-    token = request.GET.get('token', '')
-    return render(request, 'password_reset.html', {'uid': uid, 'token': token})
+    """
+    Redirect to the reset screen in the PWA.
+
+    The form must be served from APP_URL, not from this backend: iOS saves
+    the password it suggests under the serving domain, and a password saved
+    under appadmin.houseofbeers.nl never autofills in the app. This route
+    stays alive for links in already-sent reset emails.
+    """
+    params = urlencode({
+        'uid': request.GET.get('uid', ''),
+        'token': request.GET.get('token', ''),
+    })
+    return redirect(f"{settings.APP_URL}/reset-password?{params}")
 
 
 class RegisterView(generics.CreateAPIView):
@@ -255,8 +265,9 @@ class PasswordResetRequestView(APIView):
             token = default_token_generator.make_token(user)
             uid = urlsafe_base64_encode(force_bytes(user.pk))
             
-            # Build reset URL
-            reset_url = f"{settings.FRONTEND_URL}/reset-password?uid={uid}&token={token}"
+            # Build reset URL — the PWA's own reset screen, so iOS saves the
+            # new password under the app's domain (see password_reset_page).
+            reset_url = f"{settings.APP_URL}/reset-password?uid={uid}&token={token}"
             
             # Send email
             subject = 'House of Beers - Password Reset'
@@ -333,8 +344,13 @@ class PasswordResetConfirmView(APIView):
         user.save()
         
         logger.info(f"Password reset completed for {user.email}")
-        
-        return Response({'message': 'Password has been reset successfully.'})
+
+        # email lets the reset screen prefill the login form — members kept
+        # failing the login right after a successful reset.
+        return Response({
+            'message': 'Password has been reset successfully.',
+            'email': user.email,
+        })
 
 
 class UserOrdersView(APIView):

@@ -291,6 +291,71 @@ class LastActiveTests(APITestCase):
         self.assertIsNotNone(self.user.last_active_at)
 
 
+class PasswordResetDomainTests(APITestCase):
+    """
+    Reset links and the reset form must live on the PWA domain (APP_URL).
+    Served from the backend domain, iOS stores the suggested password under
+    appadmin.houseofbeers.nl and the app can never autofill it — members got
+    stuck in a reset loop (van Zeeland, 06-11-2026).
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='lotte@example.com',
+            email='lotte@example.com',
+            password='OldPassword123!',
+        )
+
+    def test_reset_email_links_to_app_domain(self):
+        from django.core import mail
+        from django.conf import settings
+
+        response = self.client.post(
+            reverse('password_reset'), {'email': 'lotte@example.com'}, format='json'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn(f"{settings.APP_URL}/reset-password?uid=", mail.outbox[0].body)
+
+    def test_legacy_reset_page_redirects_to_app_domain(self):
+        from django.conf import settings
+
+        response = self.client.get(
+            reverse('password_reset_page'), {'uid': 'abc', 'token': 'def-123'}
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            response['Location'],
+            f"{settings.APP_URL}/reset-password?uid=abc&token=def-123",
+        )
+
+    def test_confirm_returns_email_for_login_prefill(self):
+        from django.contrib.auth.tokens import default_token_generator
+        from django.utils.encoding import force_bytes
+        from django.utils.http import urlsafe_base64_encode
+
+        uid = urlsafe_base64_encode(force_bytes(self.user.pk))
+        token = default_token_generator.make_token(self.user)
+
+        response = self.client.post(
+            reverse('password_reset_confirm'),
+            {
+                'uid': uid,
+                'token': token,
+                'password': 'NewPassword456!',
+                'password_confirm': 'NewPassword456!',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['email'], 'lotte@example.com')
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('NewPassword456!'))
+
+
 class EmailCaseInsensitivityTests(APITestCase):
     """
     Phone keyboards auto-capitalize the email field, which used to strand

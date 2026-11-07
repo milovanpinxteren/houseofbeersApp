@@ -471,6 +471,8 @@ export default {
     resetting: 'Resetting...',
     resetPassword: 'Reset Password',
     goToSignIn: 'Go to Sign In',
+    showPassword: 'Show password',
+    hidePassword: 'Hide password',
   },
 
   // Post-registration step: welcome bonus + WhatsApp community

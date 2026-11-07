@@ -210,6 +210,11 @@ DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='noreply@houseofbeers.
 # Password Reset
 PASSWORD_RESET_TIMEOUT = 3600  # 1 hour
 FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:8081')
+# Where the PWA lives. Reset links MUST point here, not at this backend:
+# iOS saves the password suggested on the reset page under the serving
+# domain, so a reset on appadmin.houseofbeers.nl stores a password the app
+# domain can never autofill (members ended up locked out in a reset loop).
+APP_URL = config('APP_URL', default='https://app.houseofbeers.nl')
 
 # Cache
 # Shared Redis cache in production so state that must be consistent across

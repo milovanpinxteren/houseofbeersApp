@@ -97,8 +97,9 @@ export async function confirmPasswordReset(
   uid: string,
   token: string,
   password: string
-): Promise<void> {
-  await apiFetch('/auth/password-reset/confirm/', {
+): Promise<{ message: string; email?: string }> {
+  // email lets the reset screen hand the login form a prefilled address.
+  return apiFetch<{ message: string; email?: string }>('/auth/password-reset/confirm/', {
     method: 'POST',
     body: JSON.stringify({ uid, token, password, password_confirm: password }),
   });

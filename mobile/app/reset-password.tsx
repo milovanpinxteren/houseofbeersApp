@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { confirmPasswordReset } from '../src/api/auth';
 import { useLanguage } from '../src/context/LanguageContext';
 import { t } from '../src/i18n';
@@ -13,8 +14,10 @@ export default function ResetPasswordScreen() {
   const { uid, token } = useLocalSearchParams<{ uid: string; token: string }>();
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState('');
+  const [resetEmail, setResetEmail] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   // Subscribe so the screen re-renders when the language changes.
   useLanguage();
@@ -52,13 +55,24 @@ export default function ResetPasswordScreen() {
     setIsLoading(true);
     try {
       console.log('[ResetPassword] Confirming reset');
-      await confirmPasswordReset(uid, token, password);
+      const result = await confirmPasswordReset(uid, token, password);
+      setResetEmail(result?.email ?? '');
       setMessage(t('auth.resetSuccess'));
     } catch (error) {
       console.log('[ResetPassword] Error:', error);
       setErrorMessage(t('auth.resetError'));
     } finally {
       setIsLoading(false);
+    }
+  }
+
+  function goToLogin() {
+    // Prefill the login form: members kept failing the login right after a
+    // successful reset (wrong email variant, invisible typo).
+    if (resetEmail) {
+      router.replace({ pathname: '/(auth)/login', params: { email: resetEmail } });
+    } else {
+      router.replace('/(auth)/login');
     }
   }
 
@@ -75,10 +89,7 @@ export default function ResetPasswordScreen() {
         {message ? (
           <View style={styles.successContainer}>
             <Text style={styles.successText}>{message}</Text>
-            <TouchableOpacity
-              style={styles.loginButton}
-              onPress={() => router.replace('/(auth)/login')}
-            >
+            <TouchableOpacity style={styles.loginButton} onPress={goToLogin}>
               <Text style={styles.buttonText}>{t('auth.goToSignIn')}</Text>
             </TouchableOpacity>
           </View>
@@ -90,23 +101,44 @@ export default function ResetPasswordScreen() {
               </View>
             ) : null}
 
-            <TextInput
-              style={styles.input}
-              placeholder={t('auth.newPasswordPlaceholder', { count: PASSWORD_MIN_LENGTH })}
-              placeholderTextColor={colors.textMuted}
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry
-            />
+            <View style={styles.passwordRow}>
+              <TextInput
+                style={styles.passwordInput}
+                placeholder={t('auth.newPasswordPlaceholder', { count: PASSWORD_MIN_LENGTH })}
+                placeholderTextColor={colors.textMuted}
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry={!showPassword}
+                autoCapitalize="none"
+                autoComplete="new-password"
+                textContentType="newPassword"
+              />
+              <TouchableOpacity
+                style={styles.eyeButton}
+                onPress={() => setShowPassword(!showPassword)}
+                accessibilityLabel={t(showPassword ? 'auth.hidePassword' : 'auth.showPassword')}
+              >
+                <Ionicons
+                  name={showPassword ? 'eye-off-outline' : 'eye-outline'}
+                  size={22}
+                  color={colors.textMuted}
+                />
+              </TouchableOpacity>
+            </View>
 
-            <TextInput
-              style={styles.input}
-              placeholder={t('auth.confirmNewPassword')}
-              placeholderTextColor={colors.textMuted}
-              value={confirmPassword}
-              onChangeText={setConfirmPassword}
-              secureTextEntry
-            />
+            <View style={styles.passwordRow}>
+              <TextInput
+                style={styles.passwordInput}
+                placeholder={t('auth.confirmNewPassword')}
+                placeholderTextColor={colors.textMuted}
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                secureTextEntry={!showPassword}
+                autoCapitalize="none"
+                autoComplete="new-password"
+                textContentType="newPassword"
+              />
+            </View>
 
             <TouchableOpacity
               style={[styles.button, isLoading && styles.buttonDisabled]}
@@ -174,14 +206,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
   },
-  input: {
+  passwordRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: colors.surface,
     borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: colors.tertiary + '30',
+  },
+  passwordInput: {
+    flex: 1,
     padding: spacing.md,
     fontSize: 16,
     color: colors.text,
-    borderWidth: 1,
-    borderColor: colors.tertiary + '30',
+  },
+  eyeButton: {
+    padding: spacing.md,
   },
   button: {
     backgroundColor: colors.primary,

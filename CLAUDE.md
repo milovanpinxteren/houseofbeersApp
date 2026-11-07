@@ -20,7 +20,7 @@ A loyalty and community app for houseofbeers.nl. This is a new project built fro
   /users               → User model, auth, Shopify service
   /loyalty             → Points, rewards, notifications, campaigns & raffles, Campagne Studio, sync tasks
   /recommendations     → Beer recommendations, taste profiles, favorites
-  /templates           → Password reset web page
+  /templates           → Admin/analytics templates (reset page moved into the PWA)
 
 /mobile
   /app
@@ -36,7 +36,9 @@ A loyalty and community app for houseofbeers.nl. This is a new project built fro
         favorites.tsx        → Manage favorite beers
         orders.tsx           → Shopify order history
         connect-untappd.tsx  → Link/unlink Untappd account
-    reset-password.tsx → Password reset screen (unused, web version in backend)
+    reset-password.tsx → Password reset screen (THE reset form — reset emails
+                         link here; it must stay on app.houseofbeers.nl so iOS
+                         saves the new password under the app's domain)
     _layout.tsx        → Root layout with providers
   /src
     /api               → API client and endpoint functions
@@ -451,7 +453,7 @@ Key design decisions (`loyalty/models_grants.py`, `loyalty/services/grants.py`):
 |-----|-------------|
 | `/admin/` | Django admin panel |
 | `/admin/campaign-studio/` | Campagne Studio (staff-only campaign builder/preview/monitor) |
-| `/reset-password/` | Password reset form |
+| `/reset-password/` | Redirects to the PWA reset screen (`{APP_URL}/reset-password`) — kept for links in already-sent emails |
 
 ---
 
@@ -481,6 +483,10 @@ DEFAULT_FROM_EMAIL=noreply@houseofbeers.nl
 
 # Password reset links
 FRONTEND_URL=https://appadmin.houseofbeers.nl
+# PWA origin — reset emails link to {APP_URL}/reset-password. MUST be the app
+# domain, never appadmin: iOS saves the suggested password under the serving
+# domain, and a password saved under appadmin never autofills in the app.
+APP_URL=https://app.houseofbeers.nl  # also the code default
 
 # CORS (include PWA domain)
 CORS_ALLOWED_ORIGINS=https://appadmin.houseofbeers.nl,https://app.houseofbeers.nl
@@ -1191,7 +1197,7 @@ This keeps the bottom tab bar visible while navigating profile screens.
 - Check Shopify API permissions include write access to discounts
 
 ### Password reset email shows localhost
-- Set `FRONTEND_URL=https://appadmin.houseofbeers.nl` on Dokku
+- Set `APP_URL=https://app.houseofbeers.nl` on Dokku (reset links use APP_URL; FRONTEND_URL no longer drives them)
 
 ### Build fails on EAS
 - Check build logs at https://expo.dev

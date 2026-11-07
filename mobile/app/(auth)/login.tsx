@@ -1,14 +1,18 @@
 import { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
-import { Link, router } from 'expo-router';
+import { Link, router, useLocalSearchParams } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/context/AuthContext';
 import { useLanguage } from '../../src/context/LanguageContext';
 import { t } from '../../src/i18n';
 import { colors, spacing, borderRadius } from '../../src/theme/colors';
 
 export default function LoginScreen() {
-  const [email, setEmail] = useState('');
+  // Prefilled by the reset screen after a successful password reset.
+  const { email: prefillEmail } = useLocalSearchParams<{ email?: string }>();
+  const [email, setEmail] = useState(typeof prefillEmail === 'string' ? prefillEmail : '');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const { login } = useAuth();
@@ -58,15 +62,33 @@ export default function LoginScreen() {
           onChangeText={setEmail}
           keyboardType="email-address"
           autoCapitalize="none"
+          autoComplete="email"
+          textContentType="username"
         />
-        <TextInput
-          style={styles.input}
-          placeholder={t('auth.password')}
-          placeholderTextColor={colors.textMuted}
-          value={password}
-          onChangeText={setPassword}
-          secureTextEntry
-        />
+        <View style={styles.passwordRow}>
+          <TextInput
+            style={styles.passwordInput}
+            placeholder={t('auth.password')}
+            placeholderTextColor={colors.textMuted}
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry={!showPassword}
+            autoCapitalize="none"
+            autoComplete="current-password"
+            textContentType="password"
+          />
+          <TouchableOpacity
+            style={styles.eyeButton}
+            onPress={() => setShowPassword(!showPassword)}
+            accessibilityLabel={t(showPassword ? 'auth.hidePassword' : 'auth.showPassword')}
+          >
+            <Ionicons
+              name={showPassword ? 'eye-off-outline' : 'eye-outline'}
+              size={22}
+              color={colors.textMuted}
+            />
+          </TouchableOpacity>
+        </View>
 
         <TouchableOpacity
           style={[styles.button, isLoading && styles.buttonDisabled]}
@@ -143,6 +165,23 @@ const styles = StyleSheet.create({
     color: colors.text,
     borderWidth: 1,
     borderColor: colors.tertiary + '30',
+  },
+  passwordRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: colors.tertiary + '30',
+  },
+  passwordInput: {
+    flex: 1,
+    padding: spacing.md,
+    fontSize: 16,
+    color: colors.text,
+  },
+  eyeButton: {
+    padding: spacing.md,
   },
   button: {
     backgroundColor: colors.primary,
