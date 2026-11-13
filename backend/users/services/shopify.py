@@ -39,6 +39,10 @@ class ShopifyService:
         self.store_url = store_url
         self.access_token = settings.SHOPIFY_ACCESS_TOKEN
         self.api_version = '2024-01'
+        # Side-channel flag set by get_app_only_products() — see its
+        # docstring. Defaults False so callers that never call it (or call
+        # it before get_app_only_products ever runs) see a safe value.
+        self.presale_fetch_failed = False
 
     @property
     def headers(self) -> dict:
@@ -423,7 +427,29 @@ class ShopifyService:
         App variant is out of stock are excluded (sold out mid-window is a
         normal disappearance, not a missed deal). Buyable products sort
         first, newest first within each batch.
+
+        Also merges in **presale** products (tag `presale`, single-variant,
+        ACTIVE status — the shop's management system tags leftover presale
+        stock this way after a WhatsApp presale). Presale items sort FIRST
+        (ahead of the app-only batch): they're the current active campaign,
+        not a backlog of leftovers. A product carrying both `app-only` and
+        `presale` tags is deduped to its presale form only.
+
+        Sets `self.presale_fetch_failed` (bool) as a side effect: True when
+        the presale fetch itself failed (as opposed to genuinely finding no
+        presale products). The merged list returned here cannot represent
+        that on its own — regular app-only leftovers can make the overall
+        list non-empty even when presale fetch failed — so cache-writing
+        callers (recommendations/views.py, recommendations/tasks.py) must
+        check this flag and use the short TTL instead of the long one, or a
+        transient presale outage would hide presale items for the full
+        long-TTL window instead of being retried on the next cache miss.
         """
+        presale_products = self.get_presale_products()
+        self.presale_fetch_failed = presale_products is None
+        if presale_products is None:
+            presale_products = []
+        presale_ids = {p['id'] for p in presale_products}
         query = """
         query appOnlyProducts($cursor: String) {
             products(first: 50, after: $cursor, query: "tag:'app-only'") {
@@ -476,12 +502,238 @@ class ShopifyService:
                 break
             cursor = page_info.get('endCursor')
 
+        # Dedupe: a product carrying both tags is a presale product first.
+        products = [p for p in products if p['id'] not in presale_ids]
+
         # Buyable batch first, archived (gemist) wall after; newest first
         # within each batch (ISO timestamps compare lexicographically, and the
         # stable buyable pass preserves the date order per batch)
         products.sort(key=lambda p: p.get('created_at') or '', reverse=True)
         products.sort(key=lambda p: not p['buyable'])
+
+        # Presale (active campaign) first, newest first within the batch,
+        # then the app-only batch (buyable, then archived) as above.
+        presale_products.sort(key=lambda p: p.get('created_at') or '', reverse=True)
+        return presale_products + products
+
+    def get_presale_products(self) -> Optional[list]:
+        """
+        Fetch presale leftover products: after a WhatsApp presale, leftover
+        beer becomes ONE new ACTIVE product tagged `presale` (plus
+        `presale-run-<id>`, not used here), carrying
+        `custom.estimated_delivery_date` and generous inventory. Normally
+        single-variant — use variants[0] — but `_parse_presale_product`
+        guards against a product that was hand-tagged `presale` while still
+        carrying an `Editie` option (see its docstring).
+
+        `status:active` is explicit and load-bearing: the Admin API's
+        product search does NOT implicitly filter by status (see
+        `search_products`'s own explicit `status:active`), so a presale that
+        gets stopped — the management system flips it to DRAFT — must be
+        excluded here or it would keep appearing in the app after being
+        pulled.
+
+        Returns None (never []) when the first page request itself fails,
+        so callers can tell "fetch failed, unknown" apart from "fetched
+        successfully, genuinely no presale items right now" — the two must
+        not share a cache TTL (see get_app_only_products /
+        `presale_fetch_failed`). A failure on a LATER page (mid-pagination)
+        still returns whatever was collected so far, matching
+        `_paginated_request`'s `raise_on_error=False` behavior elsewhere in
+        this file.
+        """
+        query = """
+        query presaleProducts($cursor: String) {
+            products(first: 50, after: $cursor, query: "tag:'presale' AND status:active") {
+                pageInfo { hasNextPage endCursor }
+                edges {
+                    node {
+                        id
+                        legacyResourceId
+                        title
+                        handle
+                        status
+                        tags
+                        createdAt
+                        description(truncateAt: 600)
+                        featuredImage { url }
+                        variants(first: 5) {
+                            edges {
+                                node {
+                                    id
+                                    legacyResourceId
+                                    price
+                                    inventoryQuantity
+                                    selectedOptions { name value }
+                                }
+                            }
+                        }
+                        metafields(first: 30, namespace: "custom") {
+                            edges { node { key value type } }
+                        }
+                    }
+                }
+            }
+        }
+        """
+
+        products = []
+        cursor = None
+        fetched_any_page = False
+        for _page in range(10):  # safety bound; presale sets are small
+            data = self._graphql_request(query, {"cursor": cursor})
+            if not data:
+                if not fetched_any_page:
+                    logger.error(
+                        "Presale product fetch failed on the first page; "
+                        "returning None (unknown), not an empty list"
+                    )
+                    return None
+                break
+            fetched_any_page = True
+            conn = data.get('products') or {}
+            for edge in conn.get('edges') or []:
+                node = edge['node']
+                parsed = self._parse_presale_product(node)
+                if parsed:
+                    products.append(parsed)
+            page_info = conn.get('pageInfo') or {}
+            if not page_info.get('hasNextPage'):
+                break
+            cursor = page_info.get('endCursor')
+
         return products
+
+    @staticmethod
+    def _parse_presale_product(node: dict) -> Optional[dict]:
+        """Parse one GraphQL presale product node into the app-shop dict shape."""
+        import json as _json
+
+        variant_edges = (node.get('variants') or {}).get('edges') or []
+        if not variant_edges:
+            return None
+
+        # A human could hand-tag a regular two-variant (Editie Sale/App)
+        # product `presale` in Shopify admin. Blindly taking variants[0]
+        # would then risk exposing the Sale variant — the WhatsApp deal
+        # price and full sale inventory — in the app. If ANY variant
+        # carries an Editie option, this is really an app-only-shaped
+        # product wearing the wrong tag: prefer the App variant (same
+        # selector _parse_app_only_product uses); with no App variant,
+        # skip the product entirely rather than guess which one is safe.
+        variants = [edge['node'] for edge in variant_edges]
+        has_editie_option = any(
+            any(o.get('name') == 'Editie' for o in (v.get('selectedOptions') or []))
+            for v in variants
+        )
+        if has_editie_option:
+            variant = next(
+                (v for v in variants if any(
+                    o.get('name') == 'Editie' and o.get('value') == 'App'
+                    for o in (v.get('selectedOptions') or [])
+                )),
+                None,
+            )
+            if not variant:
+                logger.warning(
+                    f"Presale product {node.get('legacyResourceId')} carries "
+                    f"an Editie option with no App variant; skipping"
+                )
+                return None
+        else:
+            variant = variants[0]
+
+        inventory = variant.get('inventoryQuantity') or 0
+        # Unlike app-only leftovers (which keep a sold-out, non-archived item
+        # as the "gemist" card), a presale has no archive concept at all — a
+        # sold-out item here just means the current run is sold out, not that
+        # the campaign is over. Keeping it with buyable=False would make the
+        # PWA render it on the not-buyable branch, which is the missed-deal
+        # card (struck-through double prices, "sale voorbij" copy) — wrong
+        # for a still-running presale. So it is dropped outright, exactly
+        # like a sold-out app-only product without the archive tag.
+        if inventory <= 0:
+            return None
+        buyable = True  # no app-archived concept here
+
+        metafields = {}
+        for m_edge in (node.get('metafields') or {}).get('edges') or []:
+            m = m_edge['node']
+            metafields[m['key']] = m['value']
+
+        def _mf_json(key):
+            raw = metafields.get(key)
+            if not raw:
+                return None
+            try:
+                return _json.loads(raw)
+            except (ValueError, TypeError):
+                return None
+
+        rating = None
+        score = _mf_json('untappd_score')
+        if isinstance(score, dict):
+            try:
+                rating = float(score.get('value'))
+            except (TypeError, ValueError):
+                rating = None
+        if rating is None and metafields.get('untappd_rating'):
+            try:
+                rating = float(metafields['untappd_rating'])
+            except (TypeError, ValueError):
+                rating = None
+
+        untappd_link = _mf_json('untappd_link')
+        untappd_url = untappd_link.get('url') if isinstance(untappd_link, dict) else None
+
+        checkins = None
+        if metafields.get('untappd_checkins'):
+            try:
+                checkins = int(metafields['untappd_checkins'])
+            except (TypeError, ValueError):
+                checkins = None
+
+        image = node.get('featuredImage') or {}
+
+        # Presale: a FUTURE ETA is the normal case (the point is selling
+        # before the delivery arrives), unlike the app-only path where a
+        # future ETA marks an exceptional pre-order. A PAST ETA is
+        # deliberately NOT dropped here either: the shop's management system
+        # removes the `presale` tag server-side once the window closes, so
+        # this feed should just reflect whatever the product currently
+        # carries rather than re-deriving staleness client-side.
+        eta = metafields.get('estimated_delivery_date') or None
+
+        price = variant.get('price')
+
+        return {
+            'id': node.get('legacyResourceId'),
+            'title': metafields.get('app_title') or node.get('title'),
+            'shopify_title': node.get('title'),
+            'handle': node.get('handle'),
+            'description': node.get('description') or '',
+            'image_url': image.get('url') or '',
+            'tags': node.get('tags') or [],
+            'created_at': node.get('createdAt'),
+            'price': price,
+            # No separate WhatsApp price to show for a presale item.
+            'sale_price': price,
+            'buyable': buyable,
+            'variant_id': str(variant.get('legacyResourceId') or ''),
+            'inventory': inventory,
+            'untappd_rating': rating,
+            'untappd_checkins': checkins,
+            'untappd_url': untappd_url,
+            'style': metafields.get('soort_bier') or '',
+            'abv': metafields.get('alcoholpercentage') or '',
+            'country': metafields.get('land_van_herkomst') or '',
+            'volume': metafields.get('inhoud') or '',
+            'deposit': metafields.get('deposit') or '',
+            'estimated_delivery_date': eta,
+            # Additive marker so a future PWA build can tell presale items
+            # apart; older/current PWA code ignores unknown keys.
+            'is_presale': True,
+        }
 
     @staticmethod
     def _parse_app_only_product(node: dict) -> Optional[dict]:

@@ -395,6 +395,392 @@ class ParseAppOnlyProductTests(APITestCase):
         self.assertEqual([p['id'] for p in products], ['3', '1', '4', '2'])
 
 
+def _presale_node(**overrides):
+    """Raw GraphQL node for a presale leftover product (single variant,
+    no Editie option — unlike app-only products)."""
+    node = {
+        'id': 'gid://shopify/Product/200',
+        'legacyResourceId': '200',
+        'title': 'Presale Run 5 - Test Tripel',
+        'handle': 'presale-run-5-test-tripel',
+        'status': 'ACTIVE',
+        'tags': ['presale', 'presale-run-5'],
+        'createdAt': '2026-11-01T10:00:00Z',
+        'description': 'A presale beer.',
+        'featuredImage': None,
+        'variants': {'edges': [
+            {'node': {
+                'id': 'gid://shopify/ProductVariant/55', 'legacyResourceId': '55',
+                'price': '9.00', 'inventoryQuantity': 48,
+                'selectedOptions': [],
+            }},
+        ]},
+        'metafields': {'edges': []},
+    }
+    node.update(overrides)
+    return node
+
+
+def _set_presale_inventory(node, quantity):
+    node['variants']['edges'][0]['node']['inventoryQuantity'] = quantity
+    return node
+
+
+class ParsePresaleProductTests(APITestCase):
+    """
+    ShopifyService._parse_presale_product — single-variant presale items.
+
+    Deliberately NOT the same rules as app-only in most respects: no
+    app-archived concept, and a past ETA is never dropped (the management
+    system pulls the `presale` tag server-side instead). It DOES reuse the
+    app-only Editie-variant guard, for the case where a product was hand-
+    tagged `presale` while still carrying a Sale/App Editie option.
+    """
+
+    def test_buyable_presale_item_has_price_and_variant(self):
+        parsed = ShopifyService._parse_presale_product(_presale_node())
+        self.assertTrue(parsed['buyable'])
+        self.assertEqual(parsed['price'], '9.00')
+        self.assertEqual(parsed['sale_price'], '9.00')  # no separate WhatsApp price
+        self.assertEqual(parsed['variant_id'], '55')
+        self.assertEqual(parsed['inventory'], 48)
+        self.assertTrue(parsed['is_presale'])
+
+    def test_sold_out_presale_item_is_dropped_not_kept_as_not_buyable(self):
+        # A sold-out presale is NOT a missed deal (no archive concept here):
+        # keeping it with buyable=False would make the PWA render it on the
+        # not-buyable branch, which is the "gemist" missed-deal card
+        # (struck-through double prices, "sale voorbij" copy) — wrong for a
+        # still-running presale. It must be dropped outright instead.
+        node = _set_presale_inventory(_presale_node(), 0)
+        self.assertIsNone(ShopifyService._parse_presale_product(node))
+
+    def test_negative_inventory_is_also_dropped(self):
+        node = _set_presale_inventory(_presale_node(), -1)
+        self.assertIsNone(ShopifyService._parse_presale_product(node))
+
+    def test_product_without_variants_is_dropped(self):
+        node = _presale_node()
+        node['variants']['edges'] = []
+        self.assertIsNone(ShopifyService._parse_presale_product(node))
+
+    def test_editie_tagged_product_uses_app_variant_not_variants_zero(self):
+        # A human could hand-tag a regular two-variant (Editie Sale/App)
+        # product `presale` in Shopify admin. variants[0] must never win
+        # here — it would expose the Sale variant's WhatsApp price and full
+        # sale inventory in the app.
+        node = _presale_node()
+        node['variants']['edges'] = [
+            {'node': {
+                'id': 'gid://shopify/ProductVariant/11', 'legacyResourceId': '11',
+                'price': '10.00', 'inventoryQuantity': 3,
+                'selectedOptions': [{'name': 'Editie', 'value': 'Sale'}],
+            }},
+            {'node': {
+                'id': 'gid://shopify/ProductVariant/22', 'legacyResourceId': '22',
+                'price': '12.50', 'inventoryQuantity': 7,
+                'selectedOptions': [{'name': 'Editie', 'value': 'App'}],
+            }},
+        ]
+        parsed = ShopifyService._parse_presale_product(node)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed['variant_id'], '22')
+        self.assertEqual(parsed['price'], '12.50')
+        self.assertEqual(parsed['inventory'], 7)
+
+    def test_editie_tagged_product_without_app_variant_is_skipped(self):
+        # Only a Sale variant exists (no App variant at all) — there is no
+        # safe variant to expose, so the product is skipped entirely rather
+        # than falling back to variants[0] (which would be the Sale variant).
+        node = _presale_node()
+        node['variants']['edges'] = [
+            {'node': {
+                'id': 'gid://shopify/ProductVariant/11', 'legacyResourceId': '11',
+                'price': '10.00', 'inventoryQuantity': 3,
+                'selectedOptions': [{'name': 'Editie', 'value': 'Sale'}],
+            }},
+        ]
+        self.assertIsNone(ShopifyService._parse_presale_product(node))
+
+    def _node_with_eta(self, value):
+        node = _presale_node()
+        node['metafields']['edges'].append({'node': {
+            'key': 'estimated_delivery_date', 'value': value, 'type': 'date'}})
+        return node
+
+    def test_future_eta_is_kept(self):
+        from datetime import date, timedelta
+        eta = (date.today() + timedelta(days=10)).isoformat()
+        parsed = ShopifyService._parse_presale_product(self._node_with_eta(eta))
+        self.assertEqual(parsed['estimated_delivery_date'], eta)
+
+    def test_past_eta_is_NOT_dropped(self):
+        # Unlike app-only leftovers: a past ETA on a presale item is the
+        # normal end state right up until the management system pulls the
+        # `presale` tag — dropping it client-side would hide a still-live
+        # presale that merely hasn't had its ETA bumped yet.
+        from datetime import date, timedelta
+        eta = (date.today() - timedelta(days=2)).isoformat()
+        parsed = ShopifyService._parse_presale_product(self._node_with_eta(eta))
+        self.assertEqual(parsed['estimated_delivery_date'], eta)
+
+    def test_no_eta_metafield_means_none(self):
+        parsed = ShopifyService._parse_presale_product(_presale_node())
+        self.assertIsNone(parsed['estimated_delivery_date'])
+
+
+class PresaleMergeTests(APITestCase):
+    """
+    ShopifyService.get_app_only_products() — merging in presale leftovers
+    (tag `presale`, ACTIVE status) ahead of the app-only batch.
+    """
+
+    @staticmethod
+    def _graphql_side_effect(presale_edges, app_only_edges):
+        def side_effect(query, variables=None, *args, **kwargs):
+            if "presale" in query:
+                edges = presale_edges
+            else:
+                edges = app_only_edges
+            return {'products': {
+                'pageInfo': {'hasNextPage': False, 'endCursor': None},
+                'edges': edges,
+            }}
+        return side_effect
+
+    @patch.object(ShopifyService, '_graphql_request')
+    def test_presale_query_filters_status_active(self, mock_graphql):
+        # The Admin API's product search does not implicitly filter by
+        # status (see search_products's own explicit status:active) — a
+        # presale flipped to DRAFT when stopped must disappear automatically,
+        # so this term is load-bearing, not decorative.
+        mock_graphql.side_effect = self._graphql_side_effect([], [])
+        ShopifyService().get_app_only_products()
+        presale_call = next(
+            c for c in mock_graphql.call_args_list if "presale" in c.args[0]
+        )
+        self.assertIn("status:active", presale_call.args[0])
+
+    @patch.object(ShopifyService, '_graphql_request')
+    def test_presale_item_is_buyable_with_cart_url_and_sorted_first(self, mock_graphql):
+        mock_graphql.side_effect = self._graphql_side_effect(
+            [{'node': _presale_node()}], [{'node': _app_only_node()}],
+        )
+        products = ShopifyService().get_app_only_products()
+
+        self.assertEqual(products[0]['id'], '200')
+        self.assertTrue(products[0]['is_presale'])
+        self.assertTrue(products[0]['buyable'])
+        self.assertEqual(products[0]['variant_id'], '55')
+        self.assertEqual(products[1]['id'], '100')  # the app-only batch follows
+
+    @patch.object(ShopifyService, '_graphql_request')
+    def test_draft_presale_item_is_absent(self, mock_graphql):
+        # A stopped presale (DRAFT) never appears in the GraphQL response at
+        # all because of the status:active term — nothing left to filter
+        # client-side.
+        mock_graphql.side_effect = self._graphql_side_effect([], [])
+        products = ShopifyService().get_app_only_products()
+        self.assertEqual(products, [])
+
+    @patch.object(ShopifyService, '_graphql_request')
+    def test_past_eta_presale_item_not_dropped_in_full_feed(self, mock_graphql):
+        from datetime import date, timedelta
+        eta = (date.today() - timedelta(days=3)).isoformat()
+        node = _presale_node()
+        node['metafields']['edges'].append({'node': {
+            'key': 'estimated_delivery_date', 'value': eta, 'type': 'date'}})
+        mock_graphql.side_effect = self._graphql_side_effect([{'node': node}], [])
+
+        products = ShopifyService().get_app_only_products()
+
+        self.assertEqual(len(products), 1)
+        self.assertEqual(products[0]['estimated_delivery_date'], eta)
+
+    @patch.object(ShopifyService, '_graphql_request')
+    def test_dedupe_presale_wins_over_app_only(self, mock_graphql):
+        # A product that somehow carries both tags turns up in both GraphQL
+        # result sets under the same id — the presale parse must win and the
+        # app-only duplicate must not also appear.
+        shared_id = '100'
+        presale_node = _presale_node(
+            legacyResourceId=shared_id, id='gid://shopify/Product/100')
+        app_only_node = _app_only_node()  # legacyResourceId '100' by default
+        mock_graphql.side_effect = self._graphql_side_effect(
+            [{'node': presale_node}], [{'node': app_only_node}],
+        )
+
+        products = ShopifyService().get_app_only_products()
+
+        self.assertEqual(len(products), 1)
+        self.assertEqual(products[0]['id'], '100')
+        self.assertTrue(products[0]['is_presale'])
+
+    def test_cache_key_bumped_to_v3(self):
+        # The payload composition changed (presale merge) — the cache key
+        # must have moved past v2 so a stale cached list can't hide the new
+        # presale items behind the old TTL.
+        from .views import APP_SHOP_CACHE_KEY
+        self.assertTrue(APP_SHOP_CACHE_KEY.endswith(':v3'))
+        self.assertNotEqual(APP_SHOP_CACHE_KEY, 'recommendations:app_only_products:v2')
+
+    @patch.object(ShopifyService, '_graphql_request')
+    def test_presale_fetch_failure_falls_back_to_app_only_only(self, mock_graphql):
+        # The presale GraphQL call fails outright (None, as if the request
+        # errored); the app-only batch must still come through untouched.
+        def side_effect(query, variables=None, *args, **kwargs):
+            if "presale" in query:
+                return None
+            return {'products': {
+                'pageInfo': {'hasNextPage': False, 'endCursor': None},
+                'edges': [{'node': _app_only_node()}],
+            }}
+        mock_graphql.side_effect = side_effect
+
+        service = ShopifyService()
+        products = service.get_app_only_products()
+
+        self.assertEqual([p['id'] for p in products], ['100'])
+        self.assertTrue(service.presale_fetch_failed)
+
+    @patch.object(ShopifyService, '_graphql_request')
+    def test_successful_empty_presale_does_not_set_failure_flag(self, mock_graphql):
+        mock_graphql.side_effect = self._graphql_side_effect([], [])
+        service = ShopifyService()
+        service.get_app_only_products()
+        self.assertFalse(service.presale_fetch_failed)
+
+
+class GetPresaleProductsTests(APITestCase):
+    """
+    ShopifyService.get_presale_products — distinguishing a failed fetch
+    (None) from a genuinely empty result ([]), so callers never cache a
+    transient outage as "no presale items" for the long TTL.
+    """
+
+    @patch.object(ShopifyService, '_graphql_request')
+    def test_first_page_failure_returns_none_not_empty_list(self, mock_graphql):
+        mock_graphql.return_value = None
+        self.assertIsNone(ShopifyService().get_presale_products())
+
+    @patch.object(ShopifyService, '_graphql_request')
+    def test_successful_fetch_with_no_items_returns_empty_list(self, mock_graphql):
+        mock_graphql.return_value = {'products': {
+            'pageInfo': {'hasNextPage': False, 'endCursor': None},
+            'edges': [],
+        }}
+        self.assertEqual(ShopifyService().get_presale_products(), [])
+
+    @patch.object(ShopifyService, '_graphql_request')
+    def test_failure_on_a_later_page_returns_partial_results(self, mock_graphql):
+        # A failure AFTER at least one successful page is a different case
+        # (mid-pagination hiccup): keep what was already fetched, matching
+        # _paginated_request's raise_on_error=False behavior elsewhere.
+        mock_graphql.side_effect = [
+            {'products': {
+                'pageInfo': {'hasNextPage': True, 'endCursor': 'cursor1'},
+                'edges': [{'node': _presale_node()}],
+            }},
+            None,
+        ]
+        products = ShopifyService().get_presale_products()
+        self.assertEqual(len(products), 1)
+
+
+@override_settings(CACHES={
+    'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}
+})
+class AppShopCacheTtlTests(APITestCase):
+    """
+    _app_shop_cache_ttl / the app-shop view's cache write — a presale fetch
+    failure must get the SHORT TTL even when the merged list (app-only
+    leftovers included) is non-empty, so a transient presale outage is
+    retried soon instead of being hidden for the long TTL.
+    """
+
+    def setUp(self):
+        from .views import APP_SHOP_CACHE_KEY
+        self.cache_key = APP_SHOP_CACHE_KEY
+        cache.delete(self.cache_key)
+        self.url = reverse('app-shop')
+        self.user = User.objects.create_user(
+            username='beerfan3', email='beerfan3@example.com', password='SuperSecret123!'
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def test_ttl_helper_uses_short_ttl_on_presale_failure_even_if_nonempty(self):
+        from .views import _app_shop_cache_ttl, APP_SHOP_CACHE_TTL
+
+        class _FakeService:
+            presale_fetch_failed = True
+
+        ttl = _app_shop_cache_ttl(_FakeService(), [{'id': '1'}])
+        self.assertEqual(ttl, 300)
+        self.assertNotEqual(ttl, APP_SHOP_CACHE_TTL)
+
+    def test_ttl_helper_uses_long_ttl_when_presale_ok_and_nonempty(self):
+        from .views import _app_shop_cache_ttl, APP_SHOP_CACHE_TTL
+
+        class _FakeService:
+            presale_fetch_failed = False
+
+        self.assertEqual(_app_shop_cache_ttl(_FakeService(), [{'id': '1'}]), APP_SHOP_CACHE_TTL)
+
+    def test_ttl_helper_defaults_to_long_ttl_when_flag_missing(self):
+        # Callers that never ran get_app_only_products (e.g. a bare mock in
+        # other tests) must not be treated as a presale failure.
+        from .views import _app_shop_cache_ttl, APP_SHOP_CACHE_TTL
+
+        class _FakeServiceNoFlag:
+            pass
+
+        self.assertEqual(
+            _app_shop_cache_ttl(_FakeServiceNoFlag(), [{'id': '1'}]), APP_SHOP_CACHE_TTL
+        )
+
+    @patch('recommendations.views.cache.set')
+    @patch('recommendations.views.ShopifyService')
+    def test_view_caches_short_ttl_when_presale_fetch_failed(
+        self, mock_service_cls, mock_cache_set
+    ):
+        from .views import APP_SHOP_CACHE_TTL
+
+        mock_service = mock_service_cls.return_value
+        mock_service.get_app_only_products.return_value = [
+            {'id': '1', 'title': 'App-only leftover', 'variant_id': '22',
+             'price': '12.50', 'sale_price': '10.00', 'buyable': True, 'inventory': 7},
+        ]
+        mock_service.presale_fetch_failed = True
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data['products']), 1)
+        mock_cache_set.assert_called_once()
+        cached_ttl = mock_cache_set.call_args.args[2]
+        self.assertEqual(cached_ttl, 300)
+        self.assertNotEqual(cached_ttl, APP_SHOP_CACHE_TTL)
+
+    @patch('recommendations.views.cache.set')
+    @patch('recommendations.views.ShopifyService')
+    def test_view_caches_long_ttl_when_presale_fetch_succeeds(
+        self, mock_service_cls, mock_cache_set
+    ):
+        from .views import APP_SHOP_CACHE_TTL
+
+        mock_service = mock_service_cls.return_value
+        mock_service.get_app_only_products.return_value = [
+            {'id': '1', 'title': 'App-only leftover', 'variant_id': '22',
+             'price': '12.50', 'sale_price': '10.00', 'buyable': True, 'inventory': 7},
+        ]
+        mock_service.presale_fetch_failed = False
+
+        self.client.get(self.url)
+
+        cached_ttl = mock_cache_set.call_args.args[2]
+        self.assertEqual(cached_ttl, APP_SHOP_CACHE_TTL)
+
+
 @override_settings(CACHES={
     'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}
 })

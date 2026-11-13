@@ -39,9 +39,15 @@ def refresh_app_only_products():
     is cached too.
     """
     from users.services.shopify import ShopifyService
-    from recommendations.views import APP_SHOP_CACHE_KEY, APP_SHOP_CACHE_TTL
+    from recommendations.views import _app_shop_cache_ttl, APP_SHOP_CACHE_KEY
 
-    products = ShopifyService().get_app_only_products()
-    cache.set(APP_SHOP_CACHE_KEY, products, APP_SHOP_CACHE_TTL if products else 300)
+    service = ShopifyService()
+    products = service.get_app_only_products()
+    cache.set(APP_SHOP_CACHE_KEY, products, _app_shop_cache_ttl(service, products))
+    if service.presale_fetch_failed:
+        logger.warning(
+            "Presale fetch failed during app-shop refresh; cached with the "
+            "short TTL so it's retried soon"
+        )
     logger.info(f"Refreshed app-shop cache: {len(products)} products")
     return {'products': len(products)}

@@ -664,7 +664,13 @@ class NewArrivalsView(APIView):
 # App-exclusive shop — leftover WhatsApp-sale stock tagged `app-only` by the
 # hob pipeline, sold at the secondary app price. Products are UNLISTED in the
 # webshop; the App variant (never variants[0]) carries price and stock.
-APP_SHOP_CACHE_KEY = 'recommendations:app_only_products:v2'
+#
+# Also carries presale leftovers (tag `presale`, single-variant, ACTIVE
+# status) merged in by ShopifyService.get_app_only_products() itself, sorted
+# first — see that method's docstring. v3: payload composition changed
+# (presale merge), bump forces a cold cache instead of serving a v2-shaped
+# list with no presale items until the 15-min TTL expires.
+APP_SHOP_CACHE_KEY = 'recommendations:app_only_products:v3'
 APP_SHOP_CACHE_TTL = 60 * 15  # 15 min — bounds how long sold-out items stay visible
 
 # Local-dev fixtures: run the backend with APP_SHOP_DEMO=1 (DEBUG only) to see
@@ -770,21 +776,99 @@ _APP_SHOP_DEMO_PRODUCTS = [
         'country': 'België', 'volume': '75 CL', 'deposit': '0.10',
         'cart_url': None,
     },
+    # Presale demo items: modeled on tonight's real presale (run 113) — sold
+    # before the brewery delivery arrives (see get_presale_products /
+    # _parse_presale_product). No separate WhatsApp price (sale_price == price),
+    # full inventory already up front (no App/Sale variant split), and an
+    # estimated_delivery_date that drives the pre-order badge/ETA notice in
+    # AppShopSection / AppShopDetailSheet (appShopEta()).
+    {
+        'id': '8', 'title': 'Bourbon County Brand Stout (2026) [DEMO]',
+        'shopify_title': 'Presale - Goose Island - Bourbon County Brand Stout (2026)',
+        'handle': 'demo-8',
+        'description': 'Demo-presale: nog niet geleverd. Imperial stout gerijpt op '
+                       'bourbonvaten, vol van vanille, karamel en eik.',
+        'image_url': 'https://cdn.shopify.com/s/files/1/0807/5624/4818/files/674a70651e3c622d1171eb9fe37dc45a.png?v=1706722294',
+        'tags': ['presale', 'presale-run-113'], 'created_at': '2026-11-13T18:00:00Z',
+        'price': '11.95', 'sale_price': '11.95', 'buyable': True,
+        'variant_id': '900000000008', 'inventory': 24,
+        'untappd_rating': 4.31, 'untappd_checkins': 28410,
+        'untappd_url': None, 'style': 'Stout - Imperial', 'abv': '14.0',
+        'country': 'Verenigde Staten', 'volume': '35.5 CL', 'deposit': '0.15',
+        'estimated_delivery_date': '2026-12-22',
+        'is_presale': True,
+        'cart_url': 'https://houseofbeers.nl/',
+    },
+    {
+        'id': '9', 'title': 'Half Acre Benthic X [DEMO]',
+        'shopify_title': 'Presale - Half Acre - Benthic X', 'handle': 'demo-9',
+        'description': 'Demo-presale: nog niet geleverd. Barrel-aged barleywine, '
+                       'rijk en stroperig met tonen van rum en toffee.',
+        'image_url': '',
+        'tags': ['presale', 'presale-run-113'], 'created_at': '2026-11-13T18:00:00Z',
+        'price': '34.95', 'sale_price': '34.95', 'buyable': True,
+        'variant_id': '900000000009', 'inventory': 18,
+        'untappd_rating': 4.47, 'untappd_checkins': 3920,
+        'untappd_url': None, 'style': 'Barleywine', 'abv': '15.2',
+        'country': 'Verenigde Staten', 'volume': '47.5 CL', 'deposit': '0.15',
+        'estimated_delivery_date': '2026-12-22',
+        'is_presale': True,
+        'cart_url': 'https://houseofbeers.nl/',
+    },
+    {
+        'id': '10', 'title': 'Old Irving Barrel-Aged Krampus Cookies (2026) [DEMO]',
+        'shopify_title': 'Presale - Old Irving - Barrel-Aged Krampus Cookies (2026)',
+        'handle': 'demo-10',
+        'description': 'Demo-presale: nog niet geleverd. Winterse imperial stout met '
+                       'koek- en kruidnotentonen, gerijpt op whiskyvaten.',
+        'image_url': 'https://cdn.shopify.com/s/files/1/0807/5624/4818/files/674a70651e3c622d1171eb9fe37dc45a.png?v=1706722294',
+        'tags': ['presale', 'presale-run-113'], 'created_at': '2026-11-13T18:00:00Z',
+        'price': '27.95', 'sale_price': '27.95', 'buyable': True,
+        'variant_id': '900000000010', 'inventory': 30,
+        'untappd_rating': 4.19, 'untappd_checkins': 1680,
+        'untappd_url': None, 'style': 'Stout - Spiced', 'abv': '12.5',
+        'country': 'Verenigde Staten', 'volume': '47.5 CL', 'deposit': '0.15',
+        'estimated_delivery_date': '2026-11-27',
+        'is_presale': True,
+        'cart_url': 'https://houseofbeers.nl/',
+    },
 ]
+
+
+def _app_shop_cache_ttl(service, products) -> int:
+    """
+    TTL to use when caching the result of ShopifyService.get_app_only_products().
+
+    Normally: the long TTL for a non-empty list, the short one for an empty
+    list (which usually means the fetch failed outright — see the 'no
+    leftovers right now' note below). But a presale-fetch failure must NOT
+    get the long TTL just because the merged list is non-empty — regular
+    app-only leftovers can mask a transient presale outage for the entire
+    APP_SHOP_CACHE_TTL window, hiding presale items far longer than
+    necessary. `service.presale_fetch_failed` (set by get_app_only_products)
+    overrides to the short TTL in that case so the next request retries soon.
+    """
+    if getattr(service, 'presale_fetch_failed', False):
+        return 300
+    return APP_SHOP_CACHE_TTL if products else 300
 
 
 def _get_app_only_products() -> list:
     import os as _os
     if settings.DEBUG and _os.environ.get('APP_SHOP_DEMO') == '1':
-        return _APP_SHOP_DEMO_PRODUCTS
+        # Mirror the real merge: presale items sort first (stable, so the
+        # relative order within each group is unchanged) — otherwise the
+        # rail's RAIL_MAX_PRODUCTS=6 cutoff would hide the presale cards
+        # behind the longer app-only demo list.
+        return sorted(_APP_SHOP_DEMO_PRODUCTS, key=lambda p: not p.get('is_presale'))
     """App-only products (cached). Empty list is cached briefly (5 min):
     'no leftovers right now' is a normal state, unlike the active-product
     cache where empty means the fetch failed."""
     products = cache.get(APP_SHOP_CACHE_KEY)
     if products is None:
-        products = ShopifyService().get_app_only_products()
-        ttl = APP_SHOP_CACHE_TTL if products else 300
-        cache.set(APP_SHOP_CACHE_KEY, products, ttl)
+        service = ShopifyService()
+        products = service.get_app_only_products()
+        cache.set(APP_SHOP_CACHE_KEY, products, _app_shop_cache_ttl(service, products))
     return products
 
 
