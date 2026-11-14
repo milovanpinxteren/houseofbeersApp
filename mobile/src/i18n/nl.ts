@@ -174,7 +174,7 @@ export default {
     learnMore: 'Meer info',
     forYou: 'Voor jou',
     ordersHint: 'Bekijk je bestellingen en betalingen',
-    ordersSummary: '{{ready}} klaar · {{incoming}} onderweg',
+    ordersSummary: '{{ready}} op voorraad · {{incoming}} verwacht',
     yourPoints: 'Jouw punten',
     pointsHint: 'Bekijk beloningen en je geschiedenis',
     communityHint: 'Praat mee met andere beerhunters',
@@ -273,10 +273,12 @@ export default {
     filterAll: 'Alles',
     filterGroupStatus: 'Status',
     filterGroupPeriod: 'Periode',
-    filterInWarehouse: 'Ligt klaar',
+    filterInWarehouse: 'Op voorraad',
     filterIncoming: 'Verwacht',
     filterShipped: 'Verzonden',
     filterPartial: 'Gedeeltelijk',
+    filterHandled: 'Afgehandeld',
+    filterCancelled: 'Geannuleerd',
     filterPeriod3m: 'Laatste 3 maanden',
     filterPeriodThisYear: 'Dit jaar',
     filterClearAll: 'Wis filters',
@@ -289,19 +291,35 @@ export default {
     statusPartiallyRefunded: 'Deels terugbetaald',
     statusVoided: 'Geannuleerd',
     // Roll-up segments on the collapsed order card
-    rollupReady: '{{count}} klaar',
+    rollupReady: '{{count}} op voorraad',
     rollupIncoming: '{{count}} verwacht ±{{date}}',
     rollupIncomingNoEta: '{{count}} verwacht',
     rollupShipped: '{{count}} verzonden',
     rollupPartial: '{{count}} gedeeltelijk',
+    rollupHandled: '{{count}} afgehandeld',
+    rollupCancelled: '{{count}} geannuleerd',
     rollupToShip: '{{count}} te verzenden',
     // Per-item state badges
     stateShipped: 'Verzonden',
     statePartial: 'Gedeeltelijk verzonden',
-    stateInWarehouse: 'Ligt bij ons klaar',
+    // Neutral fallback: true whatever happens next, used when we don't know
+    // the order's delivery method (POS/in-store orders carry no shipping line).
+    stateInWarehouse: 'Op voorraad bij ons',
+    stateInWarehousePickup: 'Klaar om op te halen',
+    stateInWarehouseShipping: 'Op voorraad – wordt verzonden',
+    // Unpaid draft line: the stock is held for the customer, not "ready".
+    stateReserved: 'Gereserveerd',
     stateIncoming: 'Verwacht ±{{date}}',
     stateIncomingNoEta: 'Verwacht',
     stateUnknown: 'Nog te verzenden',
+    // Finished orders. "Afgehandeld" deliberately says nothing about HOW it
+    // left us: these were handed over at the counter or shipped under a
+    // merged order, neither of which Shopify records as a fulfillment.
+    // Still far better than promising "Ligt bij ons klaar" months later.
+    stateCancelled: 'Geannuleerd',
+    stateHandled: 'Afgehandeld',
+    noteCancelled: 'Deze bestelling is geannuleerd. Betaalde je iets dat je niet hebt gekregen? Laat het ons weten.',
+    noteMergedInto: 'Samengevoegd met {{order}} — bekijk die bestelling voor de status van deze bieren.',
     // Unpaid draft orders
     draftsTitle: 'Nog te betalen',
     payNow: 'Betaal nu',

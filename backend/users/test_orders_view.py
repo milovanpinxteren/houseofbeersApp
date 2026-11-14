@@ -11,7 +11,14 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APITestCase
 
-from users.services.order_state import derive_line_state, display_title
+from users.services.order_state import (
+    derive_delivery_method,
+    derive_line_state,
+    derive_order_outcome,
+    display_title,
+    merged_into_order_name,
+    shipping_method_title,
+)
 from users.services.shopify import ShopifyService
 
 User = get_user_model()
@@ -25,7 +32,7 @@ class StateDerivationTests(TestCase):
     def _state(self, **kwargs):
         defaults = dict(
             product_id='987', raw_eta=None, unresolved_ids=set(),
-            today=TODAY, fulfillment_status=None,
+            today=TODAY, fulfillment_status=None, order_outcome=None,
         )
         defaults.update(kwargs)
         return derive_line_state(**defaults)
@@ -102,6 +109,53 @@ class StateDerivationTests(TestCase):
             self._state(product_id=None), ('in_warehouse', None),
         )
 
+    def test_cancelled_order_outranks_everything(self):
+        # Nothing is owed, so not the ETA logic, not even a line that was
+        # fulfilled before the cancellation put the stock back.
+        self.assertEqual(self._state(order_outcome='cancelled'),
+                         ('cancelled', None))
+        self.assertEqual(
+            self._state(order_outcome='cancelled', raw_eta='2026-11-15'),
+            ('cancelled', None),
+        )
+        self.assertEqual(
+            self._state(order_outcome='cancelled',
+                        fulfillment_status='fulfilled'),
+            ('cancelled', None),
+        )
+        self.assertEqual(
+            self._state(order_outcome='cancelled', unresolved_ids={'987'}),
+            ('cancelled', None),
+        )
+
+    def test_archived_unfulfilled_line_is_handled(self):
+        self.assertEqual(self._state(order_outcome='handled'),
+                         ('handled', None))
+
+    def test_handled_beats_eta_and_unresolved_but_not_fulfilment(self):
+        # An ETA means nothing once the order is closed...
+        self.assertEqual(
+            self._state(order_outcome='handled', raw_eta='2026-11-15'),
+            ('handled', None),
+        )
+        # ...and 'handled' is a better answer than 'unknown'.
+        self.assertEqual(
+            self._state(order_outcome='handled', unresolved_ids={'987'}),
+            ('handled', None),
+        )
+        # But a line Shopify actually shipped stays shipped: archiving an
+        # order must not downgrade "Verzonden" to the vaguer wording.
+        self.assertEqual(
+            self._state(order_outcome='handled',
+                        fulfillment_status='fulfilled'),
+            ('shipped', None),
+        )
+        self.assertEqual(
+            self._state(order_outcome='handled',
+                        fulfillment_status='partial'),
+            ('partial', None),
+        )
+
     def test_display_title_prefers_app_title(self):
         self.assertEqual(
             display_title('24-10 - K - Beer', {'app_title': 'Clean Beer'}),
@@ -110,6 +164,139 @@ class StateDerivationTests(TestCase):
         self.assertEqual(display_title('Raw Title', {}), 'Raw Title')
         self.assertEqual(display_title('Raw Title', {'app_title': '  '}),
                          'Raw Title')
+
+
+class DeliveryMethodTests(TestCase):
+    """
+    Pickup vs shipping. The expensive mistake is a FALSE pickup: a customer
+    who paid €9,50 for shipping being told to come and collect. So every
+    unrecognised and every missing title must land on shipping/unknown.
+    """
+
+    def test_our_pickup_rate_is_pickup(self):
+        self.assertEqual(derive_delivery_method('House of Beers'), 'pickup')
+
+    def test_pickup_keywords_are_pickup(self):
+        self.assertEqual(derive_delivery_method('Ophalen in de winkel'), 'pickup')
+        self.assertEqual(derive_delivery_method('Afhalen'), 'pickup')
+
+    def test_unexpected_casing_still_matches(self):
+        self.assertEqual(derive_delivery_method('HOUSE OF BEERS'), 'pickup')
+        self.assertEqual(derive_delivery_method('  house of beers  '), 'pickup')
+        self.assertEqual(derive_delivery_method('AFHALEN IN UDEN'), 'pickup')
+
+    def test_weight_band_is_shipping(self):
+        self.assertEqual(derive_delivery_method('0-20 KG'), 'shipping')
+        self.assertEqual(derive_delivery_method('Verzending NL'), 'shipping')
+
+    def test_empty_is_unknown_not_pickup(self):
+        # ~1,000 orders since 01-09-2026 have no shipping line (POS/in-store).
+        self.assertEqual(derive_delivery_method(''), 'unknown')
+        self.assertEqual(derive_delivery_method('   '), 'unknown')
+        self.assertEqual(derive_delivery_method(None), 'unknown')
+
+    def test_title_from_shipping_lines(self):
+        self.assertEqual(
+            shipping_method_title({'shipping_lines': [{'title': '0-20 KG'}]}),
+            '0-20 KG',
+        )
+
+    def test_missing_shipping_lines_key_entirely(self):
+        self.assertEqual(shipping_method_title({}), '')
+        self.assertEqual(shipping_method_title({'shipping_lines': None}), '')
+        self.assertEqual(shipping_method_title({'shipping_lines': []}), '')
+        self.assertEqual(shipping_method_title(None), '')
+
+    def test_blank_or_null_title_is_skipped(self):
+        self.assertEqual(
+            shipping_method_title({'shipping_lines': [
+                {'title': None}, {'title': '  '}, {'title': 'House of Beers'},
+            ]}),
+            'House of Beers',
+        )
+
+    def test_end_to_end_missing_line_never_promises_pickup(self):
+        order = {'id': 1}
+        self.assertEqual(
+            derive_delivery_method(shipping_method_title(order)), 'unknown',
+        )
+
+
+class OrderOutcomeTests(TestCase):
+    """
+    Is this order finished? Shopify never fulfils a merged-away or
+    counter-handover order, so without these signals every such line falls
+    through to in_warehouse and the app promises beer that is long gone.
+    """
+
+    # The order that triggered this: merged into HoB8556, then cancelled and
+    # restocked. 13 lines, all with fulfillment_status null.
+    HOB9027 = {
+        'id': 7185536876882, 'name': 'HoB9027',
+        'created_at': '2025-12-03T18:07:33+01:00',
+        'closed_at': '2025-12-09T11:14:03+01:00',
+        'cancelled_at': '2025-12-09T14:20:00+01:00',
+        'financial_status': 'paid', 'fulfillment_status': 'restocked',
+        'tags': 'merged, merged-into-HoB8556',
+    }
+
+    def test_the_reported_order_is_cancelled(self):
+        self.assertEqual(derive_order_outcome(self.HOB9027), 'cancelled')
+        self.assertEqual(merged_into_order_name(self.HOB9027), 'HoB8556')
+
+    def test_restocked_without_cancelled_at_is_still_cancelled(self):
+        self.assertEqual(
+            derive_order_outcome({'fulfillment_status': 'restocked'}),
+            'cancelled',
+        )
+
+    def test_archived_is_handled(self):
+        self.assertEqual(
+            derive_order_outcome({'closed_at': '2026-09-29T10:00:00+02:00'}),
+            'handled',
+        )
+
+    def test_cancelled_wins_over_archived(self):
+        # Cancellations archive the order too; "geannuleerd" is the truth.
+        self.assertEqual(
+            derive_order_outcome({
+                'closed_at': '2025-12-09T11:14:03+01:00',
+                'cancelled_at': '2025-12-09T14:20:00+01:00',
+            }),
+            'cancelled',
+        )
+
+    def test_live_order_has_no_outcome(self):
+        self.assertIsNone(derive_order_outcome({
+            'closed_at': None, 'cancelled_at': None,
+            'fulfillment_status': None,
+        }))
+        self.assertIsNone(derive_order_outcome({}))
+        self.assertIsNone(derive_order_outcome(None))
+
+    def test_fulfilled_order_is_not_an_outcome_by_itself(self):
+        # Fulfilment is a LINE fact; a fulfilled-but-open order keeps its
+        # per-line states.
+        self.assertIsNone(derive_order_outcome({
+            'fulfillment_status': 'fulfilled',
+        }))
+
+    def test_merged_tag_parsing(self):
+        self.assertEqual(merged_into_order_name(
+            {'tags': 'merged-into-HoB8556'}), 'HoB8556')
+        # Prefix matched case-insensitively, the name's own casing kept.
+        self.assertEqual(merged_into_order_name(
+            {'tags': 'chicago, MERGED-INTO-HoB123, vip'}), 'HoB123')
+        self.assertEqual(merged_into_order_name(
+            {'tags': ' merged , merged-into-HoB8556 '}), 'HoB8556')
+
+    def test_no_merge_tag(self):
+        self.assertEqual(merged_into_order_name({'tags': 'merged'}), '')
+        self.assertEqual(merged_into_order_name({'tags': 'merged-into-'}), '')
+        self.assertEqual(merged_into_order_name({'tags': ''}), '')
+        self.assertEqual(merged_into_order_name({'tags': None}), '')
+        self.assertEqual(merged_into_order_name({}), '')
+        self.assertEqual(merged_into_order_name(None), '')
 
 
 class BulkMetafieldTests(TestCase):
@@ -208,6 +395,7 @@ class UserOrdersViewTests(APITestCase):
             'created_at': '2026-10-20T10:00:00+02:00',
             'financial_status': 'paid', 'fulfillment_status': None,
             'total_price': '86.40', 'currency': 'EUR',
+            'shipping_lines': [{'title': '0-20 KG'}],
             'line_items': [
                 {'id': 1, 'title': 'Shipped Beer', 'variant_title': 'Sale',
                  'quantity': 2, 'price': '12.95', 'sku': None,
@@ -280,6 +468,10 @@ class UserOrdersViewTests(APITestCase):
         data = response.json()
         self.assertEqual(set(data), {'orders', 'drafts', 'missed'})
 
+        # Orders: delivery method rides on the order, not the line.
+        self.assertEqual(data['orders'][0]['shipping_method'], '0-20 KG')
+        self.assertEqual(data['orders'][0]['delivery_method'], 'shipping')
+
         # Orders: states + display_title + normalized ETA.
         items = data['orders'][0]['line_items']
         self.assertEqual(items[0]['state'], 'shipped')
@@ -339,6 +531,64 @@ class UserOrdersViewTests(APITestCase):
         record = MissedItemsRecord.objects.get(dedupe_key='hob:missed:113:555')
         self.assertEqual(record.status, 'attached')
         self.assertEqual(record.user, self.user)
+
+    def test_pickup_order_reports_pickup(self):
+        self.orders[0]['shipping_lines'] = [{'title': 'House of Beers'}]
+        response, _ = self._get()
+        order = response.json()['orders'][0]
+        self.assertEqual(order['shipping_method'], 'House of Beers')
+        self.assertEqual(order['delivery_method'], 'pickup')
+
+    def test_order_without_shipping_lines_is_unknown(self):
+        # The POS/in-store case: say nothing rather than promise pickup.
+        del self.orders[0]['shipping_lines']
+        response, _ = self._get()
+        order = response.json()['orders'][0]
+        self.assertEqual(order['shipping_method'], '')
+        self.assertEqual(order['delivery_method'], 'unknown')
+
+    def test_live_order_carries_no_outcome_fields(self):
+        order = self._get()[0].json()['orders'][0]
+        self.assertIsNone(order['cancelled_at'])
+        self.assertEqual(order['merged_into'], '')
+
+    def test_cancelled_merged_order_stops_promising_beer(self):
+        """
+        The HoB9027 regression: merged into another order, cancelled and
+        restocked, 13 lines Shopify never fulfilled. Every line used to read
+        "Ligt bij ons klaar" a year later.
+        """
+        self.orders[0].update({
+            'cancelled_at': '2025-12-09T14:20:00+01:00',
+            'closed_at': '2025-12-09T11:14:03+01:00',
+            'fulfillment_status': 'restocked',
+            'tags': 'merged, merged-into-HoB8556',
+        })
+        order = self._get()[0].json()['orders'][0]
+
+        self.assertEqual(
+            [item['state'] for item in order['line_items']],
+            ['cancelled', 'cancelled', 'cancelled'],
+        )
+        # Nothing is pending, so no ETA is forwarded either.
+        self.assertEqual(
+            [item['estimated_delivery_date'] for item in order['line_items']],
+            [None, None, None],
+        )
+        # ...and the card can say WHY instead of going quiet.
+        self.assertEqual(order['cancelled_at'], '2025-12-09T14:20:00+01:00')
+        self.assertEqual(order['merged_into'], 'HoB8556')
+
+    def test_archived_order_reports_handled_but_keeps_shipped_lines(self):
+        self.orders[0]['closed_at'] = '2026-10-16T10:22:25+02:00'
+        order = self._get()[0].json()['orders'][0]
+        self.assertEqual(
+            [item['state'] for item in order['line_items']],
+            # line 0 was fulfilled; lines 1-2 (incoming ETA / bare shelf
+            # item) are finished business we cannot route any more precisely.
+            ['shipped', 'handled', 'handled'],
+        )
+        self.assertIsNone(order['cancelled_at'])
 
     def test_unresolved_products_become_unknown(self):
         self.metafields = ({}, {'2', '3'})

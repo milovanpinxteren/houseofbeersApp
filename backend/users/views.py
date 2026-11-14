@@ -359,18 +359,32 @@ class UserOrdersView(APIView):
     WhatsApp-sale invoices waiting for payment), and recent missed-items
     records hob pushed ("you ordered 3, got 1").
 
-    Every line item carries a derived `state` (shipped / partial /
-    in_warehouse / incoming / unknown — see users/services/order_state.py)
-    and a `display_title` (custom.app_title when present: WhatsApp-sale
-    products are titled "24-10 - K - Beer" for pipeline idempotency, the
-    clean name lives in the metafield).
+    Every line item carries a derived `state` (cancelled / shipped / partial
+    / handled / in_warehouse / incoming / unknown — see
+    users/services/order_state.py) and a `display_title` (custom.app_title
+    when present: WhatsApp-sale products are titled "24-10 - K - Beer" for
+    pipeline idempotency, the clean name lives in the metafield).
+
+    Each ORDER additionally carries `shipping_method` (the Shopify
+    shipping-line title, '' when there is none) and `delivery_method`
+    (pickup / shipping / unknown). The item state only says where the beer
+    is; the delivery method is what decides whether the app may say "come
+    and collect it". `cancelled_at` and `merged_into` let the card explain a
+    finished order rather than silently dropping its items to `cancelled`.
     """
     permission_classes = [IsAuthenticated]
 
     MISSED_WINDOW_DAYS = 30
 
     def get(self, request):
-        from .services.order_state import derive_line_state, display_title
+        from .services.order_state import (
+            derive_delivery_method,
+            derive_line_state,
+            derive_order_outcome,
+            display_title,
+            merged_into_order_name,
+            shipping_method_title,
+        )
 
         user = request.user
 
@@ -418,7 +432,7 @@ class UserOrdersView(APIView):
             # (TIME_ZONE = Europe/Amsterdam), not the customer's phone.
             today = timezone.localdate()
 
-            def _line_fields(item, fulfillment_status=None):
+            def _line_fields(item, fulfillment_status=None, order_outcome=None):
                 """state / display_title / normalized ETA for one line."""
                 product_id = item.get('product_id')
                 product_metafields = metafields.get(
@@ -430,6 +444,7 @@ class UserOrdersView(APIView):
                     unresolved_ids=unresolved_ids,
                     today=today,
                     fulfillment_status=fulfillment_status,
+                    order_outcome=order_outcome,
                 )
                 return {
                     'display_title': display_title(
@@ -441,6 +456,8 @@ class UserOrdersView(APIView):
 
             formatted_orders = []
             for order in orders:
+                shipping_method = shipping_method_title(order)
+                order_outcome = derive_order_outcome(order)
                 formatted_orders.append({
                     'id': order.get('id'),
                     'order_number': order.get('order_number'),
@@ -450,6 +467,14 @@ class UserOrdersView(APIView):
                     'fulfillment_status': order.get('fulfillment_status'),
                     'total_price': order.get('total_price'),
                     'currency': order.get('currency'),
+                    # Pickup vs shipping: the item state says where the beer
+                    # is, this says who moves it (see order_state.py).
+                    'shipping_method': shipping_method,
+                    'delivery_method': derive_delivery_method(shipping_method),
+                    # The line states already carry the outcome; these two let
+                    # the card EXPLAIN it instead of just going quiet.
+                    'cancelled_at': order.get('cancelled_at'),
+                    'merged_into': merged_into_order_name(order),
                     'line_items': [
                         {
                             'id': item.get('id'),
@@ -463,6 +488,7 @@ class UserOrdersView(APIView):
                             **_line_fields(
                                 item,
                                 fulfillment_status=item.get('fulfillment_status'),
+                                order_outcome=order_outcome,
                             ),
                         }
                         for item in order.get('line_items', [])

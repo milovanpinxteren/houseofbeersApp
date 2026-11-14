@@ -6,7 +6,9 @@
  * - two drafts (one with an embedded missed-items block, one with a custom
  *   no-variant line), a standalone missed card (rejected-only customer),
  * - orders covering all item states, the roll-up variants, every missed
- *   reason, the stale "alsnog geleverd ✓" case, and the period filter.
+ *   reason, the stale "alsnog geleverd ✓" case, and the period filter,
+ * - the two finished-order shapes: merged-away + cancelled (HoB9027) and
+ *   archived-while-unfulfilled (the counter handover).
  */
 import { OrdersResponse } from './orders';
 
@@ -226,6 +228,8 @@ export const MOCK_ORDERS_RESPONSE: OrdersResponse = {
       fulfillment_status: 'partial',
       total_price: '86.40',
       currency: 'EUR',
+      shipping_method: '0-20 KG',
+      delivery_method: 'shipping',
       line_items: [
         {
           id: 1,
@@ -291,6 +295,8 @@ export const MOCK_ORDERS_RESPONSE: OrdersResponse = {
       fulfillment_status: 'fulfilled',
       total_price: '31.90',
       currency: 'EUR',
+      shipping_method: '0-20 KG',
+      delivery_method: 'shipping',
       line_items: [
         {
           id: 5,
@@ -317,6 +323,8 @@ export const MOCK_ORDERS_RESPONSE: OrdersResponse = {
       fulfillment_status: null,
       total_price: '27.85',
       currency: 'EUR',
+      shipping_method: 'House of Beers',
+      delivery_method: 'pickup',
       line_items: [
         {
           id: 6,
@@ -356,6 +364,9 @@ export const MOCK_ORDERS_RESPONSE: OrdersResponse = {
       fulfillment_status: 'partial',
       total_price: '55.40',
       currency: 'EUR',
+      // POS/in-store sale: no shipping line at all → neutral wording.
+      shipping_method: '',
+      delivery_method: 'unknown',
       line_items: [
         {
           id: 8,
@@ -385,6 +396,94 @@ export const MOCK_ORDERS_RESPONSE: OrdersResponse = {
         },
       ],
     },
+    // Merged away and cancelled (the real HoB9027 shape): every line
+    // finished, the note names the order it went out under.
+    {
+      id: 80006,
+      order_number: 9027,
+      name: '#HoB9027',
+      created_at: daysAgoIso(60),
+      financial_status: 'paid',
+      fulfillment_status: 'restocked',
+      total_price: '471.85',
+      currency: 'EUR',
+      shipping_method: '0-20 KG',
+      delivery_method: 'shipping',
+      cancelled_at: daysAgoIso(54),
+      merged_into: 'HoB8556',
+      line_items: [
+        {
+          id: 11,
+          title: 'Goose Island — Bourbon County Brand Rare Stout (2024)',
+          display_title: 'Goose Island — Bourbon County Brand Rare Stout (2024)',
+          variant_title: null,
+          quantity: 1,
+          price: '89.95',
+          sku: null,
+          product_id: 9701,
+          fulfillment_status: null,
+          state: 'cancelled',
+          estimated_delivery_date: null,
+        },
+        {
+          id: 12,
+          title: 'Half Acre Beer Company - Benthic (2025)',
+          display_title: 'Half Acre Beer Company – Benthic (2025)',
+          variant_title: null,
+          quantity: 1,
+          price: '21.50',
+          sku: null,
+          product_id: 9702,
+          fulfillment_status: null,
+          state: 'cancelled',
+          estimated_delivery_date: null,
+        },
+      ],
+    },
+    // Archived while unfulfilled: collected at the counter, never fulfilled
+    // in Shopify. Mixed with a shipped line, so the roll-up stays segmented.
+    {
+      id: 80007,
+      order_number: 20918,
+      name: '#HoB20918',
+      created_at: daysAgoIso(72),
+      financial_status: 'paid',
+      fulfillment_status: null,
+      total_price: '38.45',
+      currency: 'EUR',
+      shipping_method: 'House of Beers',
+      delivery_method: 'pickup',
+      cancelled_at: null,
+      merged_into: '',
+      line_items: [
+        {
+          id: 13,
+          title: 'Berging – Vanilla Macaron',
+          display_title: 'Berging – Vanilla Macaron',
+          variant_title: null,
+          quantity: 2,
+          price: '11.95',
+          sku: null,
+          product_id: 9801,
+          fulfillment_status: null,
+          state: 'handled',
+          estimated_delivery_date: null,
+        },
+        {
+          id: 14,
+          title: 'Dope – Lazy Sunday',
+          display_title: 'Dope – Lazy Sunday',
+          variant_title: null,
+          quantity: 1,
+          price: '14.55',
+          sku: null,
+          product_id: 9802,
+          fulfillment_status: 'fulfilled',
+          state: 'shipped',
+          estimated_delivery_date: null,
+        },
+      ],
+    },
     // Last year → the period group grows year chips.
     {
       id: 80005,
@@ -395,6 +494,8 @@ export const MOCK_ORDERS_RESPONSE: OrdersResponse = {
       fulfillment_status: 'fulfilled',
       total_price: '64.00',
       currency: 'EUR',
+      shipping_method: 'House of Beers',
+      delivery_method: 'pickup',
       line_items: [
         {
           id: 10,

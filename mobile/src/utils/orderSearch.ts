@@ -118,6 +118,10 @@ export const ITEM_STATE_FILTERS: Exclude<StateFilter, 'all' | 'unknown'>[] = [
   'incoming',
   'shipped',
   'partial',
+  // Finished states last: most members have none, and a chip only appears
+  // when its count is non-zero.
+  'handled',
+  'cancelled',
 ];
 
 /**
@@ -150,10 +154,17 @@ export function countItemsByState(matches: OrderMatch[]): Record<ItemState, numb
     partial: 0,
     in_warehouse: 0,
     incoming: 0,
+    cancelled: 0,
+    handled: 0,
     unknown: 0,
   };
   for (const match of matches) {
-    for (const item of match.matchedItems) counts[item.state] += 1;
+    for (const item of match.matchedItems) {
+      // A state this build doesn't know (newer backend, PWA not redeployed
+      // yet) counts as unknown rather than poisoning a chip label with NaN.
+      if (item.state in counts) counts[item.state] += 1;
+      else counts.unknown += 1;
+    }
   }
   return counts;
 }
@@ -163,6 +174,8 @@ export interface OrderStateSummary {
   incoming: number;
   shipped: number;
   partial: number;
+  cancelled: number;
+  handled: number;
   unknown: number;
   /** MAX estimated_delivery_date among incoming items — the box is complete
    *  at the last arrival. Null when no incoming item carries a date. */
@@ -178,6 +191,8 @@ export function orderStateSummary(
     incoming: 0,
     shipped: 0,
     partial: 0,
+    cancelled: 0,
+    handled: 0,
     unknown: 0,
     latestEta: null,
   };
@@ -201,11 +216,35 @@ export function orderStateSummary(
       case 'partial':
         summary.partial += 1;
         break;
+      case 'cancelled':
+        summary.cancelled += 1;
+        break;
+      case 'handled':
+        summary.handled += 1;
+        break;
       default:
         summary.unknown += 1;
     }
   }
   return summary;
+}
+
+/**
+ * The one terminal state every line shares, or null when they differ.
+ *
+ * Lets the collapsed card say "Verzonden" / "Geannuleerd" / "Afgehandeld"
+ * once instead of "13 geannuleerd" — a finished order should take as little
+ * attention as possible.
+ */
+export function uniformTerminalState(
+  summary: OrderStateSummary,
+  total: number
+): 'shipped' | 'cancelled' | 'handled' | null {
+  if (total === 0) return null;
+  if (summary.shipped === total) return 'shipped';
+  if (summary.cancelled === total) return 'cancelled';
+  if (summary.handled === total) return 'handled';
+  return null;
 }
 
 /**

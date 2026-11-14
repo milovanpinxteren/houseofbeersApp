@@ -38,6 +38,7 @@ import {
   countItemsByState,
   filterMatchesByPeriod,
   orderStateSummary,
+  uniformTerminalState,
   orderYears,
   threeMonthsBefore,
   periodForYear,
@@ -394,6 +395,10 @@ export default function OrdersScreen() {
         return t('orders.filterIncoming');
       case 'shipped':
         return t('orders.filterShipped');
+      case 'cancelled':
+        return t('orders.filterCancelled');
+      case 'handled':
+        return t('orders.filterHandled');
       default:
         return t('orders.filterPartial');
     }
@@ -430,15 +435,26 @@ export default function OrdersScreen() {
   }
 
   /**
-   * Collapsed-card status line: all shipped collapses to one calm success
-   * line; anything else becomes compact per-state segments.
+   * Collapsed-card status line: an order that is entirely done collapses to
+   * one calm line; anything else becomes compact per-state segments.
    */
   function renderRollup(order: Order) {
     const summary = orderStateSummary(order.line_items);
     const total = order.line_items.length;
 
-    if (total > 0 && summary.shipped === total) {
+    const terminal = uniformTerminalState(summary, total);
+    if (terminal === 'shipped') {
       return <RollupSegment color={colors.success} text={t('orders.delivered')} />;
+    }
+    if (terminal === 'cancelled') {
+      return (
+        <RollupSegment color={colors.textMuted} text={t('orders.stateCancelled')} />
+      );
+    }
+    if (terminal === 'handled') {
+      return (
+        <RollupSegment color={colors.textMuted} text={t('orders.stateHandled')} />
+      );
     }
 
     const segments: { color: string; text: string }[] = [];
@@ -471,6 +487,18 @@ export default function OrdersScreen() {
         text: t('orders.rollupShipped', { count: summary.shipped }),
       });
     }
+    if (summary.handled > 0) {
+      segments.push({
+        color: colors.textMuted,
+        text: t('orders.rollupHandled', { count: summary.handled }),
+      });
+    }
+    if (summary.cancelled > 0) {
+      segments.push({
+        color: colors.textMuted,
+        text: t('orders.rollupCancelled', { count: summary.cancelled }),
+      });
+    }
     if (summary.unknown > 0) {
       segments.push({
         color: colors.textMuted,
@@ -484,6 +512,32 @@ export default function OrdersScreen() {
         <RollupSegment color={segment.color} text={segment.text} />
       </View>
     ));
+  }
+
+  /**
+   * One muted line explaining a finished order, so "Geannuleerd" doesn't
+   * read as "we lost your beer". The merged note wins when both apply: a
+   * cancelled merge invites "but I paid for that!", and naming the order it
+   * actually went out under is the answer to the real question.
+   */
+  function renderOrderNote(order: Order) {
+    const note = order.merged_into
+      ? t('orders.noteMergedInto', { order: order.merged_into })
+      : order.cancelled_at
+      ? t('orders.noteCancelled')
+      : '';
+    if (!note) return null;
+
+    return (
+      <View style={styles.orderNote}>
+        <Ionicons
+          name="information-circle-outline"
+          size={13}
+          color={colors.textMuted}
+        />
+        <Text style={styles.orderNoteText}>{note}</Text>
+      </View>
+    );
   }
 
   const pickupSection = (
@@ -801,6 +855,8 @@ export default function OrdersScreen() {
                 </Text>
               </View>
 
+              {renderOrderNote(order)}
+
               {isExpanded && (
                 <View style={styles.lineItemsContainer}>
                   <View style={styles.divider} />
@@ -830,6 +886,7 @@ export default function OrdersScreen() {
                           state={item.state}
                           eta={item.estimated_delivery_date}
                           language={language}
+                          deliveryMethod={order.delivery_method}
                         />
                       </View>
                       <View style={styles.lineItemRight}>
@@ -1115,6 +1172,20 @@ const styles = StyleSheet.create({
   },
   itemCount: {
     fontSize: 13,
+    color: colors.textMuted,
+  },
+
+  // "Samengevoegd met HoB8556 …" under the roll-up
+  orderNote: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 5,
+    marginTop: spacing.xs,
+  },
+  orderNoteText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 16,
     color: colors.textMuted,
   },
 

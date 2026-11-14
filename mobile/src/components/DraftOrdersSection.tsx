@@ -115,10 +115,14 @@ export function DraftOrdersSection({
                     {item.quantity > 1 ? `${item.quantity}× ` : ''}
                     {item.display_title}
                   </Text>
+                  {/* Unpaid: the beer is held, not "ready" — and we don't
+                      know yet whether this invoice will be collected or
+                      shipped, so no delivery method is passed. */}
                   <ItemStateBadge
                     state={item.state}
                     eta={item.estimated_delivery_date}
                     language={language}
+                    unpaid
                   />
                 </View>
                 <View style={styles.lineItemRight}>

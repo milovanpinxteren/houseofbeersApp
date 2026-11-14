@@ -175,7 +175,7 @@ export default {
     learnMore: 'Learn more',
     forYou: 'For you',
     ordersHint: 'View your orders and payments',
-    ordersSummary: '{{ready}} ready · {{incoming}} on the way',
+    ordersSummary: '{{ready}} in stock · {{incoming}} expected',
     yourPoints: 'Your points',
     pointsHint: 'View rewards and your history',
     communityHint: 'Chat with fellow beerhunters',
@@ -274,10 +274,12 @@ export default {
     filterAll: 'All',
     filterGroupStatus: 'Status',
     filterGroupPeriod: 'Period',
-    filterInWarehouse: 'Ready',
+    filterInWarehouse: 'In stock',
     filterIncoming: 'Arriving',
     filterShipped: 'Shipped',
     filterPartial: 'Partial',
+    filterHandled: 'Completed',
+    filterCancelled: 'Cancelled',
     filterPeriod3m: 'Last 3 months',
     filterPeriodThisYear: 'This year',
     filterClearAll: 'Clear filters',
@@ -290,19 +292,35 @@ export default {
     statusPartiallyRefunded: 'Partially refunded',
     statusVoided: 'Cancelled',
     // Roll-up segments on the collapsed order card
-    rollupReady: '{{count}} ready',
+    rollupReady: '{{count}} in stock',
     rollupIncoming: '{{count}} arriving ±{{date}}',
     rollupIncomingNoEta: '{{count}} arriving',
     rollupShipped: '{{count}} shipped',
     rollupPartial: '{{count}} partial',
+    rollupHandled: '{{count}} completed',
+    rollupCancelled: '{{count}} cancelled',
     rollupToShip: '{{count}} to ship',
     // Per-item state badges
     stateShipped: 'Shipped',
     statePartial: 'Partially shipped',
-    stateInWarehouse: 'Ready at the shop',
+    // Neutral fallback: true whatever happens next, used when we don't know
+    // the order's delivery method (POS/in-store orders carry no shipping line).
+    stateInWarehouse: 'In stock with us',
+    stateInWarehousePickup: 'Ready to collect',
+    stateInWarehouseShipping: 'In stock – will be shipped',
+    // Unpaid draft line: the stock is held for the customer, not "ready".
+    stateReserved: 'Reserved',
     stateIncoming: 'Expected ±{{date}}',
     stateIncomingNoEta: 'Expected',
     stateUnknown: 'To be shipped',
+    // Finished orders. "Completed" deliberately says nothing about HOW it
+    // left us: these were handed over at the counter or shipped under a
+    // merged order, neither of which Shopify records as a fulfillment.
+    // Still far better than promising "Ready at the shop" months later.
+    stateCancelled: 'Cancelled',
+    stateHandled: 'Completed',
+    noteCancelled: 'This order was cancelled. Paid for something you never received? Let us know.',
+    noteMergedInto: 'Merged into {{order}} — check that order for the status of these beers.',
     // Unpaid draft orders
     draftsTitle: 'Awaiting payment',
     payNow: 'Pay now',
