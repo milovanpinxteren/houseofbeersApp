@@ -342,6 +342,12 @@ export interface AppShopProduct {
   // before the brewery shipment arrives. Absent/null = in stock. Optional so
   // a response from an older backend keeps rendering as a normal product.
   estimated_delivery_date?: string | null;
+  // True for a presale product (ShopifyService._parse_presale_product always
+  // sets this). Absent/false = a normal app-only leftover. Optional so a
+  // response from an older backend (no presale merge yet) keeps rendering
+  // as a normal product — `tags.includes('presale')` is the fallback signal
+  // used by `isPresaleProduct()` below for that case.
+  is_presale?: boolean;
   cart_url: string | null;
 }
 
@@ -361,6 +367,38 @@ export function isAppShopMissed(product: AppShopProduct): boolean {
 export function appShopEta(product: AppShopProduct): string | null {
   if (isAppShopMissed(product)) return null;
   return product.estimated_delivery_date || null;
+}
+
+// Prefix of the per-run Shopify tag hob stamps on a presale listing
+// (`presale-run-<run_id>`, see apps/products/presale.py:presale_run_tag in
+// houseofbeers_whatsapp). Exact-tag membership, not a Shopify `tag:` search —
+// hob's own admin-API search tokenizes on hyphens, so `tag:'presale'` can
+// also match an unrelated campaign tag like `chicago-2025-presale`. Reading
+// the real `tags` array here (rather than trusting a search filter) is the
+// robust check. The backend's `get_presale_products()` GraphQL query still
+// uses the loose `tag:'presale' AND status:active` clause, but only as a
+// coarse prefilter — `_parse_presale_product` now enforces exact `presale`
+// membership plus a `presale-run-` tag, so stale campaigns no longer reach
+// the app. This client-side check is the second line of defence.
+const PRESALE_RUN_TAG_PREFIX = 'presale-run-';
+
+// True for a presale product: prefer the exact tag (robust against any
+// quirks in how the backend set `is_presale`), fall back to the flag for a
+// product whose tags array came back empty for some reason.
+export function isPresaleProduct(product: AppShopProduct): boolean {
+  return (product.tags || []).includes('presale') || product.is_presale === true;
+}
+
+// The presale run id behind a product (`presale-run-113` -> `'113'`), or
+// null when the product carries no per-run tag (e.g. a hand-tagged product,
+// or an older backend that didn't add it yet).
+export function presaleRunId(product: AppShopProduct): string | null {
+  for (const tag of product.tags || []) {
+    if (tag.startsWith(PRESALE_RUN_TAG_PREFIX)) {
+      return tag.slice(PRESALE_RUN_TAG_PREFIX.length);
+    }
+  }
+  return null;
 }
 
 // Lightweight prefetch of the style filter chips — no beer is picked.

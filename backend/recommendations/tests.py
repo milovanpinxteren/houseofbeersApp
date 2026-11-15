@@ -529,6 +529,50 @@ class ParsePresaleProductTests(APITestCase):
         self.assertIsNone(parsed['estimated_delivery_date'])
 
 
+class ParsePresaleProductTagFilterTests(APITestCase):
+    """
+    `_parse_presale_product`'s exact-tag filter, added after discovering
+    (live data, 2026-11-15) that the GraphQL `tag:'presale'` search clause
+    in get_presale_products() is only a coarse prefilter: Shopify tokenizes
+    `tag:` on hyphens, so that search also returns products merely tagged
+    e.g. `chicago-2025-presale` or `21-02-presale` that have never carried
+    the real `presale` tag. 351 products matched the loose search; only 26
+    carried the exact `presale` tag together with a `presale-run-<id>` tag.
+    Two of the other 325 were still ACTIVE 2025-campaign leftovers with no
+    `estimated_delivery_date` at all — exactly the shape that would have
+    been served to the app as a "current" pre-order. Hence: require EXACT
+    membership of `presale` in the node's tags AND at least one
+    `presale-run-` prefixed tag, not just a substring/search match.
+    """
+
+    def test_node_without_exact_presale_tag_is_dropped(self):
+        # Simulates a node the loose `tag:'presale'` search would return via
+        # hyphen tokenization (e.g. `chicago-2025-presale`) without ever
+        # carrying the real, exact `presale` tag.
+        node = _presale_node(tags=['chicago-2025-presale', 'whatsapp-import'])
+        self.assertIsNone(ShopifyService._parse_presale_product(node))
+
+    def test_exact_presale_tag_without_run_tag_is_dropped(self):
+        # Simulates the 143 stale WhatsApp-import products found live: the
+        # exact `presale` tag IS present, but with no `presale-run-<id>`
+        # tag there is no current run to attribute the listing to.
+        node = _presale_node(tags=['presale', 'whatsapp-import', 'chicago'])
+        self.assertIsNone(ShopifyService._parse_presale_product(node))
+
+    def test_exact_presale_tag_with_run_tag_is_kept(self):
+        node = _presale_node(tags=['presale', 'presale-run-113', 'awaiting-delivery'])
+        parsed = ShopifyService._parse_presale_product(node)
+        self.assertIsNotNone(parsed)
+        self.assertTrue(parsed['is_presale'])
+
+    def test_run_tag_without_exact_presale_tag_is_dropped(self):
+        # A `presale-run-` tag alone (no exact `presale` tag) should never
+        # happen from the hob pipeline, but the filter requires BOTH, not
+        # either — belt and suspenders.
+        node = _presale_node(tags=['presale-run-113', 'chicago'])
+        self.assertIsNone(ShopifyService._parse_presale_product(node))
+
+
 class PresaleMergeTests(APITestCase):
     """
     ShopifyService.get_app_only_products() — merging in presale leftovers

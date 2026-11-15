@@ -7,7 +7,14 @@ import { useLanguage } from '../../../src/context/LanguageContext';
 import { t } from '../../../src/i18n';
 import { colors, spacing, borderRadius, fonts } from '../../../src/theme/colors';
 import { EmptyState, Screen, SkeletonCard } from '../../../src/components/ui';
-import { AppShopProduct, appShopEta, getAppShop, isAppShopMissed } from '../../../src/api/recommendations';
+import {
+  AppShopProduct,
+  appShopEta,
+  getAppShop,
+  isAppShopMissed,
+  isPresaleProduct,
+  presaleRunId,
+} from '../../../src/api/recommendations';
 import { trackEvent } from '../../../src/api/analytics';
 import { AppShopDetailSheet, formatEtaDate } from '../../../src/components/AppShopSection';
 
@@ -15,31 +22,126 @@ const SHOP_BASE_URL = 'https://houseofbeers.nl';
 const CHECKOUT_BAR_HEIGHT = 72;
 
 interface SaleGroup {
+  // Stable identity for the React key and the collapse-override map —
+  // distinct from `label` (display text) so two presale runs that both fall
+  // back to the generic "Presale" title (e.g. one has no run tag) still
+  // don't collide into a single collapsible section.
+  key: string;
   label: string;
   newest: string; // ISO created_at used for group ordering
   products: AppShopProduct[];
+  // Presale campaign group (one per `presale-run-<id>` tag) rather than a
+  // WhatsApp-sale group. Drives the pre-order styling on the group header.
+  isPresale: boolean;
+  // Soonest estimated_delivery_date across the group's products, or null.
+  // Only meaningful when isPresale.
+  eta: string | null;
+  // Whether this group starts collapsed. Decided here (not from the group's
+  // position in the final, mixed list) so a presale group is always open
+  // regardless of how many sale groups sit after it, while the normal
+  // app-only sale groups keep their exact existing behaviour: newest open,
+  // the rest collapsed.
+  defaultCollapsed: boolean;
 }
 
 /**
- * Group products per sale. The sale name is the first ` - ` segment of the
- * Shopify title ("SaleName - Letter - BeerName"); products without that shape
- * fall back to a per-day group labelled with the created_at date.
+ * Group products for the App-exclusief page.
+ *
+ * Presale products (tag `presale`, one Shopify product per beer — see
+ * ShopifyService.get_presale_products in the hob backend) carry no shared
+ * "sale" the way normal app-only leftovers do, so grouping them with
+ * `saleLabel()` below puts every single beer in its own group of one (the
+ * bug this fixes). Instead, all presale products are bucketed by their
+ * `presale-run-<id>` tag — the one per-campaign signal the app backend
+ * actually has — producing ONE group per active presale run, expanded by
+ * default so the user never has to tap to see the beers. A second,
+ * concurrently running presale run gets its own group rather than being
+ * merged into the first.
+ *
+ * Normal app-only leftovers are grouped exactly as before: the sale name is
+ * the first ` - ` segment of the Shopify title ("SaleName - Letter -
+ * BeerName"); products without that shape fall back to a per-day group
+ * labelled with the created_at date.
  */
 function groupBySale(products: AppShopProduct[], locale: string): SaleGroup[] {
-  const groups = new Map<string, SaleGroup>();
+  interface PresaleBucket {
+    runId: string | null;
+    newest: string;
+    eta: string | null;
+    products: AppShopProduct[];
+  }
+
+  const presaleBuckets = new Map<string, PresaleBucket>();
+  const saleGroups = new Map<string, SaleGroup>();
+
   for (const product of products) {
+    if (isPresaleProduct(product)) {
+      const runId = presaleRunId(product);
+      const key = runId ?? '__presale_unknown_run__';
+      let bucket = presaleBuckets.get(key);
+      if (!bucket) {
+        bucket = { runId, newest: '', eta: null, products: [] };
+        presaleBuckets.set(key, bucket);
+      }
+      bucket.products.push(product);
+      if ((product.created_at || '') > bucket.newest) {
+        bucket.newest = product.created_at || '';
+      }
+      const eta = appShopEta(product);
+      if (eta && (!bucket.eta || eta < bucket.eta)) {
+        bucket.eta = eta;
+      }
+      continue;
+    }
+
     const label = saleLabel(product, locale);
-    let group = groups.get(label);
+    let group = saleGroups.get(label);
     if (!group) {
-      group = { label, newest: product.created_at || '', products: [] };
-      groups.set(label, group);
+      group = {
+        key: `sale:${label}`,
+        label,
+        newest: product.created_at || '',
+        products: [],
+        isPresale: false,
+        eta: null,
+        defaultCollapsed: false,
+      };
+      saleGroups.set(label, group);
     }
     group.products.push(product);
     if ((product.created_at || '') > group.newest) {
       group.newest = product.created_at || '';
     }
   }
-  return [...groups.values()].sort((a, b) => b.newest.localeCompare(a.newest));
+
+  const presaleBucketList = [...presaleBuckets.values()].sort((a, b) =>
+    b.newest.localeCompare(a.newest)
+  );
+  // Only disambiguate with the run id when two presale runs are genuinely
+  // live at once — the number means nothing to a customer otherwise.
+  const multiplePresaleGroups = presaleBucketList.length > 1;
+  const presaleGroups: SaleGroup[] = presaleBucketList.map((bucket) => ({
+    key: `presale:${bucket.runId ?? 'unknown'}`,
+    label:
+      multiplePresaleGroups && bucket.runId
+        ? t('discover.appShopPresaleRunTitle', { runId: bucket.runId })
+        : t('discover.appShopPresaleTitle'),
+    newest: bucket.newest,
+    products: bucket.products,
+    isPresale: true,
+    eta: bucket.eta,
+    // The whole point of this fix: no tap required to see the beers.
+    defaultCollapsed: false,
+  }));
+
+  const saleGroupList = [...saleGroups.values()]
+    .sort((a, b) => b.newest.localeCompare(a.newest))
+    // Unchanged from before this fix: newest sale group open, the rest
+    // collapsed — now based on each group's own position among sale
+    // groups, not its position in the final (presale-first) list.
+    .map((group, index) => ({ ...group, defaultCollapsed: index > 0 }));
+
+  return [...presaleGroups, ...saleGroupList];
 }
 
 function saleLabel(product: AppShopProduct, locale: string): string {
@@ -75,8 +177,10 @@ export default function AppShopScreen() {
   // Client-side cart: product id → quantity. Deliberately screen-local (v1):
   // leaving the page may reset it.
   const [cart, setCart] = useState<Record<string, number>>({});
-  // Collapse overrides per sale group. Absent = default: newest sale
-  // (index 0) expanded, older sales collapsed.
+  // Collapse overrides per group (keyed by SaleGroup.key, not the display
+  // label). Absent = each group's own `defaultCollapsed` (see groupBySale):
+  // every presale group starts open, the newest sale group starts open,
+  // older sales start collapsed.
   const [groupOverrides, setGroupOverrides] = useState<Record<string, boolean>>({});
 
   const loadData = useCallback(async () => {
@@ -194,18 +298,33 @@ export default function AppShopScreen() {
           />
         )}
 
-        {groups.map((group, groupIndex) => {
-          const isCollapsed = groupOverrides[group.label] ?? groupIndex > 0;
+        {groups.map((group) => {
+          const isCollapsed = groupOverrides[group.key] ?? group.defaultCollapsed;
           return (
-          <View key={group.label} style={styles.saleGroup}>
+          <View key={group.key} style={styles.saleGroup}>
             <Pressable
               onPress={() =>
-                setGroupOverrides((prev) => ({ ...prev, [group.label]: !isCollapsed }))
+                setGroupOverrides((prev) => ({ ...prev, [group.key]: !isCollapsed }))
               }
               style={({ pressed }) => [styles.saleHeader, pressed && { opacity: 0.85 }]}
             >
               <Text style={styles.saleTitle}>{group.label}</Text>
               <View style={styles.saleHeaderRight}>
+                {group.isPresale && (
+                  // Pre-order badge/ETA, reusing the same chip style and
+                  // copy as the per-card ETA chip below — a presale group
+                  // is a pre-order even before any single card is expanded.
+                  <View style={styles.etaChip}>
+                    <Ionicons name="time-outline" size={9} color={colors.primary} />
+                    <Text style={styles.etaChipText}>
+                      {group.eta
+                        ? t('discover.appShopEtaShort', {
+                            date: formatEtaDate(group.eta, language),
+                          })
+                        : t('discover.appShopPreorderBadge')}
+                    </Text>
+                  </View>
+                )}
                 {group.products.every(isAppShopMissed) && (
                   <Text style={styles.saleMissed}>{t('discover.appShopMissed')}</Text>
                 )}

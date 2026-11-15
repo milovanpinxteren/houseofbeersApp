@@ -144,6 +144,9 @@ export default {
     appShopViewAll: 'View all',
     appShopSaleFallback: 'Sale of {{date}}',
     appShopGroupCount: '{{count}} beers',
+    // Presale group title — see nl.ts for why this stays generic.
+    appShopPresaleTitle: 'Presale',
+    appShopPresaleRunTitle: 'Presale #{{runId}}',
     appShopCheckout: 'Checkout ({{count}}) · €{{total}}',
     appShopQtyPlus: 'One more',
     appShopQtyMinus: 'One less',

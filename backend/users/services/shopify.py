@@ -520,11 +520,11 @@ class ShopifyService:
         """
         Fetch presale leftover products: after a WhatsApp presale, leftover
         beer becomes ONE new ACTIVE product tagged `presale` (plus
-        `presale-run-<id>`, not used here), carrying
-        `custom.estimated_delivery_date` and generous inventory. Normally
-        single-variant — use variants[0] — but `_parse_presale_product`
-        guards against a product that was hand-tagged `presale` while still
-        carrying an `Editie` option (see its docstring).
+        `presale-run-<id>`), carrying `custom.estimated_delivery_date` and
+        generous inventory. Normally single-variant — use variants[0] — but
+        `_parse_presale_product` guards against a product that was
+        hand-tagged `presale` while still carrying an `Editie` option (see
+        its docstring).
 
         `status:active` is explicit and load-bearing: the Admin API's
         product search does NOT implicitly filter by status (see
@@ -532,6 +532,23 @@ class ShopifyService:
         gets stopped — the management system flips it to DRAFT — must be
         excluded here or it would keep appearing in the app after being
         pulled.
+
+        The `tag:'presale'` clause in the query below is a COARSE prefilter
+        ONLY — Shopify's Admin Search tokenizes `tag:` on hyphens, so it also
+        matches any tag merely containing the word, e.g. last year's
+        `chicago-2025-presale` campaign tag or a WhatsApp import tag like
+        `21-02-presale`. Verified against live prod data (2026-11-15): the
+        loose search returns 351 products, only 26 of which carry the real,
+        exact `presale` tag together with a `presale-run-<id>` tag (today's
+        run 113); the other 325 are stale — including 2 still ACTIVE
+        products from the 2025 campaign that would otherwise be served to the
+        app as "current" pre-orders with no delivery date at all. So
+        `_parse_presale_product` enforces the real filter itself: EXACT
+        membership of `presale` in the node's own `tags` list, AND at least
+        one tag starting with `presale-run-` (the run id is read dynamically
+        from that tag, never hardcoded — the next presale run must pass this
+        filter without a code change). Do not rely on the GraphQL query
+        clause alone for correctness.
 
         Returns None (never []) when the first page request itself fails,
         so callers can tell "fetch failed, unknown" apart from "fetched
@@ -604,10 +621,44 @@ class ShopifyService:
 
         return products
 
-    @staticmethod
-    def _parse_presale_product(node: dict) -> Optional[dict]:
+    #: Exact Shopify tag every real presale listing carries. The GraphQL
+    #: search in get_presale_products() uses this as `tag:'presale'`, which
+    #: Shopify tokenizes on hyphens and so ALSO matches unrelated tags like
+    #: `chicago-2025-presale` — this constant is for the real, exact check
+    #: below, not the search clause.
+    PRESALE_TAG = 'presale'
+    #: Prefix of the per-run tag (`presale-run-<run_id>`) a real presale
+    #: listing also carries. The run id is read from the tag at parse time —
+    #: never hardcode a specific run here.
+    PRESALE_RUN_TAG_PREFIX = 'presale-run-'
+
+    @classmethod
+    def _parse_presale_product(cls, node: dict) -> Optional[dict]:
         """Parse one GraphQL presale product node into the app-shop dict shape."""
         import json as _json
+
+        # The real filter: get_presale_products()'s `tag:'presale'` search
+        # clause is a coarse prefilter that also matches e.g.
+        # `chicago-2025-presale` (hyphen tokenization) or an old WhatsApp
+        # import tag with "presale" in it. A real, current presale listing
+        # carries the EXACT `presale` tag AND a `presale-run-<id>` tag (see
+        # graduate_presale_product / _create_webshop_product in the hob repo,
+        # apps/integrations/shopify/products.py). Requiring both here —
+        # checked against the node's own tags, not the search result —
+        # dropped exactly the 325 stale/unrelated products out of 351 when
+        # verified against live prod data on 2026-11-15, including 2 ACTIVE
+        # leftovers from the 2025 campaign that would otherwise have been
+        # served to the app as "current" pre-orders with no delivery date.
+        tags = node.get('tags') or []
+        if cls.PRESALE_TAG not in tags:
+            return None
+        if not any(tag.startswith(cls.PRESALE_RUN_TAG_PREFIX) for tag in tags):
+            logger.warning(
+                f"Product {node.get('legacyResourceId')} carries the exact "
+                f"`presale` tag but no `presale-run-<id>` tag; skipping — "
+                f"it cannot be attributed to a current presale run"
+            )
+            return None
 
         variant_edges = (node.get('variants') or {}).get('edges') or []
         if not variant_edges:

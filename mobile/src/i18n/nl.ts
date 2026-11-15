@@ -133,6 +133,15 @@ export default {
     appShopViewAll: 'Bekijk alles',
     appShopSaleFallback: 'Sale van {{date}}',
     appShopGroupCount: '{{count}} bieren',
+    // Presale group title. Only the run id is reliably known to the app
+    // backend (the Shopify tag `presale-run-<id>`) — hob doesn't expose the
+    // campaign's human name (e.g. "Chicago") through the Shopify API, so the
+    // title stays generic. Falls back to this even when a run id IS known
+    // and there's only one presale running (the common case) — the run
+    // number means nothing to a customer, so a bare id is not shown unless
+    // two presales are live at once and need telling apart.
+    appShopPresaleTitle: 'Presale',
+    appShopPresaleRunTitle: 'Presale #{{runId}}',
     appShopCheckout: 'Afrekenen ({{count}}) · €{{total}}',
     appShopQtyPlus: 'Eén meer',
     appShopQtyMinus: 'Eén minder',
